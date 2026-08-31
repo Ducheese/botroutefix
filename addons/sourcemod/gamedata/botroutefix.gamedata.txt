@@ -1,0 +1,34 @@
+"Games"
+{
+	"cstrike"
+	{
+		"Signatures"
+		{
+			"IdleState_GuardBombsiteChance"
+			{
+				"library"	"server"
+				"windows"	"\x84\xC0\x75\x0F\x8B\xCF\xE8\x2A\x2A\x2A\x2A\x84\xC0\x0F\x84\x2A\x2A\x2A\x2A\xD9\x05\x2A\x2A\x2A\x2A\x83\xEC\x08\x8B\x87\x08\x1A\x00\x00"
+				"windows64"	"\x66\x0F\x6E\xB7\x50\x1E\x00\x00\x41\x0F\x28\xC8\x0F\x5B\xF6\x0F\x28\xC7\xF3\x0F\x59\x35\x2A\x2A\x2A\x2A\xFF\x15\x2A\x2A\x2A\x2A\x0F\x2F\xC6\x0F\x83\x2A\x2A\x2A\x2A\x8B\x87"
+			}
+		}
+		"Addresses"
+		{
+			"IdleState_GuardBombsiteChance"
+			{
+				"signature"	"IdleState_GuardBombsiteChance"
+			}
+		}
+		"Offsets"
+		{
+			"GuardBombsite_PatchOffset"
+			{
+				"windows"	"68"
+				"windows64"	"35"
+			}
+			"IsWin64"
+			{
+				"windows64"	"1"
+			}
+		}
+	}
+}
