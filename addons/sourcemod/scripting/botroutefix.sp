@@ -41,7 +41,7 @@
 //
 // [模块 8：CT 首席拆包员与交叉火力架枪体系 (CT Designated Defuser & Crossfire Guard)]
 //  10. 解决官方 CT 在按住 E 读条前全员判定 DEFUSE_BOMB 一起往雷包上撞无掩护的缺陷。
-//      实时竞选单人「首席拆包员」直扑 C4 拆包，其余赶到包点的 CT 提前转入 GUARD_BOMB_DEFUSER，
+//      实时竞选单人「首席拆包员」直扑 C4 拆包，其余赶到包点 1500 码内的 CT 提前转入 GUARD_BOMB_DEFUSER，
 //      调用原生 CCSBot::Hide 在包点掩体后散开架枪蹲点，形成立体交叉火力掩护；首席倒地秒级接力。
 //
 // 支持架构：
@@ -156,6 +156,17 @@ public void OnPluginStart()
 	StartDefuseCoordTimer();
 	HookGameEvents();
 
+	// Mid-round hot-reload synchronization: check if bomb is already planted on map
+	int bomb = FindEntityByClassname(-1, "planted_c4");
+	if (bomb != -1 && IsValidEntity(bomb))
+	{
+		g_bBombPlanted = true;
+		GetEntPropVector(bomb, Prop_Data, "m_vecAbsOrigin", g_fBombPlantedPos);
+		UpdateDesignatedDefuser();
+		LogMessage("[BotRouteFix] [Hot-Reload] Synchronized active planted C4 at (%.1f, %.1f, %.1f)",
+			g_fBombPlantedPos[0], g_fBombPlantedPos[1], g_fBombPlantedPos[2]);
+	}
+
 	LogMessage("[BotRouteFix] ========== Initialization Complete on %s ==========", g_bIsWin64 ? "64-bit (Steam x64)" : "32-bit (non-Steam)");
 }
 
@@ -248,11 +259,11 @@ void PrepDefensePatch()
 	int firstByte = LoadFromAddress(g_pDefensePatchAddress, NumberType_Int8);
 	int secondByte = LoadFromAddress(g_pDefensePatchAddress + view_as<Address>(1), NumberType_Int8);
 
-	// Check if already patched (0x90 = NOP)
+	// Check if already patched (0x90 = NOP) -> safely skip and avoid zero-overwrite on unload
 	if (firstByte == 0x90 && secondByte == 0x90)
 	{
 		LogMessage("[BotRouteFix] [Patch 1] Already patched (NOPs present @ %X), skipping", g_pDefensePatchAddress);
-		g_bDefensePatched = true;
+		g_bDefensePatched = false;
 		delete gc;
 		return;
 	}
@@ -341,11 +352,11 @@ void PrepDefenseRushPatch()
 	int firstByte = LoadFromAddress(g_pDefenseRushPatchAddress, NumberType_Int8);
 	int secondByte = LoadFromAddress(g_pDefenseRushPatchAddress + view_as<Address>(1), NumberType_Int8);
 
-	// Check if already patched (0x90 = NOP)
+	// Check if already patched (0x90 = NOP) -> safely skip and avoid zero-overwrite on unload
 	if (firstByte == 0x90 && secondByte == 0x90)
 	{
 		LogMessage("[BotRouteFix] [Patch 2] Already patched (NOPs present @ %X), skipping", g_pDefenseRushPatchAddress);
-		g_bDefenseRushPatched = true;
+		g_bDefenseRushPatched = false;
 		delete gc;
 		return;
 	}
@@ -421,11 +432,11 @@ void PrepC4PlantDelayPatch()
 	int firstByte = LoadFromAddress(g_pC4PlantDelayPatchAddress, NumberType_Int8);
 	int secondByte = LoadFromAddress(g_pC4PlantDelayPatchAddress + view_as<Address>(1), NumberType_Int8);
 
-	// Check if already patched (0x90 = NOP)
+	// Check if already patched (0x90 = NOP) -> safely skip and avoid zero-overwrite on unload
 	if (firstByte == 0x90 && secondByte == 0x90)
 	{
 		LogMessage("[BotRouteFix] [Patch 3] Already patched (NOPs present @ %X), skipping", g_pC4PlantDelayPatchAddress);
-		g_bC4PlantDelayPatched = true;
+		g_bC4PlantDelayPatched = false;
 		delete gc;
 		return;
 	}
@@ -509,6 +520,14 @@ void PrepC4RandomZonePatch()
 		return;
 	}
 
+	Address pGetRandomZone = GameConfGetAddress(gc, "CCSBotManager_GetRandomZone");
+	if (pGetRandomZone == Address_Null)
+	{
+		delete gc;
+		SetFailState("[BotRouteFix] [Patch 4] Failed to locate signature for CCSBotManager_GetRandomZone in gamedata!");
+		return;
+	}
+
 	g_pC4RandomZonePatchAddress = sigAddr + view_as<Address>(patchOffset);
 
 	int firstByte = LoadFromAddress(g_pC4RandomZonePatchAddress, NumberType_Int8);
@@ -522,7 +541,7 @@ void PrepC4RandomZonePatch()
 		if (firstByte == 0x48 && secondByte == 0x8B)
 		{
 			LogMessage("[BotRouteFix] [Patch 4] Already patched @ %X, skipping", g_pC4RandomZonePatchAddress);
-			g_bC4RandomZonePatched = true;
+			g_bC4RandomZonePatched = false;
 			delete gc;
 			return;
 		}
@@ -542,12 +561,19 @@ void PrepC4RandomZonePatch()
 			g_iOriginalC4RandomZoneBytes[i] = LoadFromAddress(g_pC4RandomZonePatchAddress + view_as<Address>(i), NumberType_Int8);
 		}
 
-		// Replacement x64 bytes: mov rcx, rbx; call GetRandomZone (sub_180362B90); 8x NOPs
+		// Dynamic relative 32-bit call offset: target - (call_addr + 5)
+		// On x64, call is at patch_addr + 3, so next instruction is at patch_addr + 8
+		int relOffset = view_as<int>(pGetRandomZone) - view_as<int>(g_pC4RandomZonePatchAddress + view_as<Address>(8));
+
 		int patchBytes[16] = {
 			0x48, 0x8B, 0xCB,             // mov rcx, rbx (TheCSBots)
-			0xE8, 0x34, 0xED, 0xFF, 0xFF, // call sub_180362B90 (GetRandomZone)
-			0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90 // 8x NOPs (pad out unused PathCost parameter prep)
+			0xE8, 0x00, 0x00, 0x00, 0x00, // call placeholder
+			0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90 // 8x NOPs
 		};
+		patchBytes[4] = (relOffset & 0xFF);
+		patchBytes[5] = ((relOffset >> 8) & 0xFF);
+		patchBytes[6] = ((relOffset >> 16) & 0xFF);
+		patchBytes[7] = ((relOffset >> 24) & 0xFF);
 
 		for (int i = 0; i < 16; i++)
 		{
@@ -562,7 +588,7 @@ void PrepC4RandomZonePatch()
 		if (firstByte == 0x8B && secondByte == 0xCE)
 		{
 			LogMessage("[BotRouteFix] [Patch 4] Already patched @ %X, skipping", g_pC4RandomZonePatchAddress);
-			g_bC4RandomZonePatched = true;
+			g_bC4RandomZonePatched = false;
 			delete gc;
 			return;
 		}
@@ -582,13 +608,20 @@ void PrepC4RandomZonePatch()
 			g_iOriginalC4RandomZoneBytes[i] = LoadFromAddress(g_pC4RandomZonePatchAddress + view_as<Address>(i), NumberType_Int8);
 		}
 
-		// Replacement x86 bytes: mov ecx, esi; call sub_10290E50 (GetRandomZone); 16x NOPs
+		// Dynamic relative 32-bit call offset: target - (call_addr + 5)
+		// On x86, call is at patch_addr + 2, so next instruction is at patch_addr + 7
+		int relOffset = view_as<int>(pGetRandomZone) - view_as<int>(g_pC4RandomZonePatchAddress + view_as<Address>(7));
+
 		int patchBytes[23] = {
 			0x8B, 0xCE,                   // mov ecx, esi (TheCSBots)
-			0xE8, 0xB5, 0x55, 0xFD, 0xFF, // call sub_10290E50 (GetRandomZone)
+			0xE8, 0x00, 0x00, 0x00, 0x00, // call placeholder
 			0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
-			0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90 // 16x NOPs (pad out unused PathCost parameter prep)
+			0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90 // 16x NOPs
 		};
+		patchBytes[3] = (relOffset & 0xFF);
+		patchBytes[4] = ((relOffset >> 8) & 0xFF);
+		patchBytes[5] = ((relOffset >> 16) & 0xFF);
+		patchBytes[6] = ((relOffset >> 24) & 0xFF);
 
 		for (int i = 0; i < 23; i++)
 		{
@@ -597,7 +630,8 @@ void PrepC4RandomZonePatch()
 	}
 
 	g_bC4RandomZonePatched = true;
-	LogMessage("[BotRouteFix] [Patch 4] Replaced GetClosestZone with GetRandomZone @ %X (C4 50/50 Bombsite Randomization Activated)", g_pC4RandomZonePatchAddress);
+	LogMessage("[BotRouteFix] [Patch 4] Replaced GetClosestZone with GetRandomZone (Dynamic RelOffset: %X) @ %X",
+		pGetRandomZone, g_pC4RandomZonePatchAddress);
 
 	delete gc;
 }
@@ -737,7 +771,7 @@ void StartQueueBreakerTimer()
 {
 	if (g_hQueueBreakerTimer == INVALID_HANDLE)
 	{
-		g_hQueueBreakerTimer = CreateTimer(0.1, Timer_CheckPoliteQueue, _, TIMER_REPEAT);
+		g_hQueueBreakerTimer = CreateTimer(0.1, Timer_CheckPoliteQueue, _, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
 		LogMessage("[BotRouteFix] [Module 4] 1.2s Queue Breaker Timer Started (Doorway Jam Prevention Activated)");
 	}
 }
@@ -1225,7 +1259,7 @@ void StartDefuseCoordTimer()
 {
 	if (g_hDefuseCoordTimer == INVALID_HANDLE)
 	{
-		g_hDefuseCoordTimer = CreateTimer(0.2, Timer_DefuseCoordination, _, TIMER_REPEAT);
+		g_hDefuseCoordTimer = CreateTimer(0.2, Timer_DefuseCoordination, _, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
 	}
 }
 
@@ -1299,7 +1333,8 @@ void UpdateDesignatedDefuser()
 
 	for (int i = 1; i <= MaxClients; i++)
 	{
-		if (IsClientInGame(i) && IsPlayerAlive(i) && GetClientTeam(i) == 3)
+		// Only evaluate Bots for the AI designated lead defuser slot to prevent AFK human deadlock
+		if (IsClientInGame(i) && IsPlayerAlive(i) && GetClientTeam(i) == 3 && IsFakeClient(i))
 		{
 			float pos[3];
 			GetClientAbsOrigin(i, pos);

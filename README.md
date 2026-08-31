@@ -108,6 +108,7 @@
 | **`IdleState_DefenseRush`** | `0x102BBDED` | `0x18036444C` | `IdleState::OnUpdate` 全队 33.3% 前冲跳转拦截点 (已使用) |
 | **`IdleState_C4PlantDelay`** | `0x102BB882` | `0x180363E0D` | `IdleState::OnUpdate` 包匪 10~30s 延迟与选点拦截点 (已使用) |
 | **`CCSBot_ComputePath`** | `0x102A2000` | `0x180343550` | `bool CCSBot::ComputePath(const Vector &goal, int route)` (A* 核心寻路) (已使用) |
+| **`CCSBotManager_GetRandomZone`** | `0x10290E50` | `0x180362B90` | `const Zone* CCSBotManager::GetRandomZone()` (50% 随机包点) (已使用) |
 | **`CCSBot_Follow`** | `0x102A6B60` | `0x1803496E0` | `void CCSBot::Follow(CCSPlayer *leader)` (保镖跟随) (已使用) |
 | **`CCSBot_StopFollowing`** | `0x102A73C0` | `0x18034A1A0` | `void CCSBot::StopFollowing()` (解除跟随) (已使用) |
 | **`HuntState_OnUpdate`** | `0x102BA430` | `0x180362350` | `void HuntState::OnUpdate(CCSBot *me)` (搜敌目标选择) (已使用) |
@@ -131,7 +132,7 @@
 | **`HuntState::m_huntArea`** | `+0x04` | `+0x08` | 选定的搜敌目标 `CNavArea*` (已使用) |
 | **`CNavArea::m_clearedTimestamp`** | `+0xB4` (`180`) | `+0xF8` (`248`) | `float[2]`，最后被 T/CT 清理的时间戳 (已使用) |
 | **`CNavArea::m_center`** | `+0x2C` | `+0x30` | 区域三维几何中心 `Vector` (12B) |
-| **`CNavArea::m_danger`** | `+0xC8` (`200`) | `+0x100` (`256`) | `float[2]`，阵营动态危险惩罚值 (已使用) |
-| **`CNavArea::m_dangerTimestamp`** | `+0xD0` (`208`) | `+0x108` (`264`) | `float[2]`，Danger 最后更新时间戳 (已使用) |
+| **`CNavArea::m_danger`** | `+0xBC` (`188`) | `+0x100` (`256`) | `float[2]`，阵营动态危险惩罚值 (已使用) |
+| **`CNavArea::m_dangerTimestamp`** | `+0xC4` (`196`) | `+0x108` (`264`) | `float[2]`，Danger 最后更新时间戳 (已使用) |
 | **`CCSBot::m_lastKnownArea`** | `+0x1C14` | `+0x20F0` | Bot 当前所在的 `CNavArea*` |
 | **`CNavArea::m_earliestOccupyTime`** | `+0xD4` | `+0x120` | `float[2]`，双方最早到达该区时间 |
