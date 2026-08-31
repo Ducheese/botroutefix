@@ -6,18 +6,17 @@
 
 ## 模块列表 (Modules)
 
-### [v0.1] 模块 1：CT 守包点防前冲修复 (CT Bombsite Defense Fix)
+### 模块 1：CT 守包点与防发疯前冲修复 (CT Bombsite Defense & Anti-Rush Fix)
 * **状态**：**已实装并在实机验证成功**
 * **逆向根因**：
-  在官方源码 `cs_bot_idle.cpp` 的 `IdleState::OnUpdate()` 中，CT 判定是否守包点的公式为：
-  $$\text{guardBombsiteChance} = -34.0f \times \text{Morale}$$
-  开局默认 $\text{Morale} = 0$，导致守包点概率恒为 **`0.0%`**。底层的条件跳转指令（64位 `jnb` / 32位 `jbe`）开局 100% 必定触发跳过，导致全队 CT 直接掉入保底的 `Hunt()`，全图搜寻距离最远的区域（匪家 T Spawn），全员冲匪家送人头。
+  1. 在官方源码 `cs_bot_idle.cpp` 的 `IdleState::OnUpdate()` 中，CT 判定是否守包点的公式为：
+     $$\text{guardBombsiteChance} = -34.0f \times \text{Morale}$$
+     开局默认 $\text{Morale} = 0$，导致守包点概率恒为 **`0.0%`**。底层的条件跳转指令（64位 `jnb` / 32位 `jbe`）开局 100% 必定触发跳过，导致全队 CT 直接掉入保底的 `Hunt()` 冲向匪家送人头；
+  2. 在进入守点前，引擎先检查 `TheCSBots()->IsDefenseRushing()`（每回合有 **33.3%** 的纯随机几率判定全队前冲）。一旦触发，直接在顶层执行 `me->Hunt()` 绕过守点逻辑。
 * **修复机制**：
-  在跳转指令位置打入 **6 字节 NOP (`90 90 90 90 90 90`)** 就地补丁，彻底抹平恶意跳过分支，激活引擎原汁原味的原生守点体系：
-  1. `TheCSBots()->GetRandomZone()`：自动将 CT 对半均分至 **A 包点** 与 **B 包点**；
-  2. `TheCSBots()->GetRandomAreaInZone()`：自动寻找包点内合法、贴地的 NavArea 地砖；
-  3. `me->Hide(area, -1.0, guardRange)`：**自动跑入包点掩体（箱子/死角），并切换至 `HideState` 蹲点架枪**；
-  4. `me->GetChatter()->GuardingBombsite()`：自动发送守点无线电语音。
+  1. 对 `guardBombsiteChance` 跳转打入 **6 字节 NOP (`90 90 90 90 90 90`)** 就地补丁，彻底激活官方原生守包点与掩体架枪体系；
+  2. 对 `IsDefenseRushing` 跳转打入 **6 字节 NOP (`90 90 90 90 90 90`)** 就地补丁，彻底消除官方 33.3% 的全员无脑冲锋暴毙局；
+  3. 保留个别独狼 Bot（`IsRogue`）的单兵自主性，兼顾战术纪律与战场多样性。
 
 ---
 
@@ -36,7 +35,8 @@
 
 | 标识符 | 32-bit 地址 | 64-bit 地址 | 对应 C++ 原型与说明 |
 | :--- | :--- | :--- | :--- |
-| **`IdleState_GuardBombsiteChance`** | `0x102BBE15` | `0x18036448C` | `IdleState::OnUpdate` 守包点概率跳转拦截点 (v0.1 已使用) |
+| **`IdleState_GuardBombsiteChance`** | `0x102BBE15` | `0x18036448C` | `IdleState::OnUpdate` 守包点概率跳转拦截点 (已使用) |
+| **`IdleState_DefenseRush`** | `0x102BBDED` | `0x18036444C` | `IdleState::OnUpdate` 全队 33.3% 前冲跳转拦截点 (已使用) |
 | **`CCSBot_ComputePath`** | `0x102A2000` | `0x180343550` | `bool CCSBot::ComputePath(const Vector &goal, int route)` (A* 核心寻路) |
 | **`HuntState_OnUpdate`** | `0x102BA430` | `0x180362350` | `void HuntState::OnUpdate(CCSBot *me)` (搜敌目标选择) |
 | **`CCSBot_MoveToInitialEncounter`** | `0x102A6FF0` | `0x180349CF0` | `bool CCSBot::MoveToInitialEncounter()` (开局交火线推进) |

@@ -4,26 +4,18 @@
 // CS:S Bot 寻路与战术决策底层修复插件 (Bot AI Route & Decision Fix)
 //
 // ---------------------------------------------------------------------------------------
-// [模块 1：CT 守包点防前冲修复 (CT Bombsite Defense Fix - v0.1)]
+// [模块 1：CT 守包点与防发疯前冲修复 (CT Bombsite Defense & Anti-Rush Fix)]
 //
 // 逆向根因：
-//   在 CS:S 官方源码 (cs_bot_idle.cpp) 的 IdleState::OnUpdate() 中，CT Bot 在开局
-//   判定是否前往包点防守的公式为：
-//       float guardBombsiteChance = -34.0f * me->GetMorale();
-//   由于 Bot 开局初始士气 Morale = 0（连赢时 Morale > 0），计算出的守点概率恒为 0.0f 或负数！
-//   对应汇编中的概率分支指令：
-//       64-bit: 0x1803644AF  0F 83 A7 00 00 00  (jnb loc_18036455C)
-//       32-bit: 0x102BBE59   0F 86 A3 00 00 00  (jbe loc_102BBF02)
-//   导致该跳转在开局 100% 必定触发，直接跳过了引擎原生的守包点逻辑，掉入保底的 me->Hunt()，
-//   在全图搜寻最老区域（即距离 CT 出生点最远的匪家 T Spawn），造成全员冲匪家白给。
+//   1. 在 IdleState::OnUpdate() 中，guardBombsiteChance = -34.0f * Morale。
+//      开局默认 Morale = 0，算得守点概率恒为 0.0%，条件跳转指令跳过守点，导致 CT 开局不守包。
+//   2. 在进入守点前，引擎先检查 TheCSBots()->IsDefenseRushing()（每回合有 33.3% 几率判定全队前冲）。
+//      一旦触发，直接执行 me->Hunt() 导致全队 CT 无脑冲向匪家送人头。
 //
 // 修复原理：
-//   在 IdleState::OnUpdate() 概率跳转点打入 6 字节 NOP (0x90) 就地补丁，抹平恶意跳过分支，
-//   彻底释放引擎原生的完整守点体系：
-//     1. TheCSBots()->GetRandomZone()        -> 自动在 A 包点与 B 包点之间对半均匀分流；
-//     2. TheCSBots()->GetRandomAreaInZone()  -> 自动在包点地面选取合法、贴地的 NavArea；
-//     3. me->Hide(area, -1.0, guardRange)    -> 自动进入 HideState 并在包点掩体后蹲点架枪；
-//     4. me->GetChatter()->GuardingBombsite()-> 自动发送原汁原味的守点无线电语音。
+//   1. 对 guardBombsiteChance 跳转打入 6 字节 NOP 补丁，彻底激活官方原生守包点与掩体架枪体系；
+//   2. 对 IsDefenseRushing 跳转打入 6 字节 NOP 补丁，彻底消除官方 33.3% 的全员无脑冲锋局；
+//   3. 保留个别独狼 Bot（IsRogue）的自主单兵行动，兼顾战术纪律与战场多样性。
 //
 // 支持架构：
 //   - 32-bit: Windows non-Steam (v91/v92) server.dll
@@ -37,7 +29,7 @@
 #include <sdktools>
 
 #define GAMEDATA "botroutefix.gamedata"
-#define PLUGIN_VERSION "0.1.0"
+#define PLUGIN_VERSION "0.2.0"
 
 //========================================================================================
 // HANDLES & VARIABLES
@@ -45,10 +37,15 @@
 
 bool g_bIsWin64 = false;
 
-// Module 1: CT Bombsite Defense Patch
+// Patch 1: CT Bombsite Defense Unlock (guardBombsiteChance)
 Address g_pDefensePatchAddress;
 int g_iOriginalDefenseBytes[6];
 bool g_bDefensePatched = false;
+
+// Patch 2: CT Anti-Defense-Rush (IsDefenseRushing)
+Address g_pDefenseRushPatchAddress;
+int g_iOriginalDefenseRushBytes[6];
+bool g_bDefenseRushPatched = false;
 
 //========================================================================================
 // PLUGIN INFO
@@ -58,7 +55,7 @@ public Plugin myinfo =
 {
 	name        = "Bot Route Fix",
 	author      = "Ducheese",
-	description = "CS:S Bot 寻路与战术决策底层修复 (v0.1: CT 原生守包点与掩体架枪)",
+	description = "CS:S Bot 寻路与战术决策底层修复 (CT 原生守包点与全队防发疯前冲)",
 	version     = PLUGIN_VERSION,
 	url         = "https://github.com/Ducheese"
 };
@@ -73,6 +70,7 @@ public void OnPluginStart()
 
 	PrepOffsets();
 	PrepDefensePatch();
+	PrepDefenseRushPatch();
 
 	LogMessage("[BotRouteFix] ========== Initialization Complete on %s ==========", g_bIsWin64 ? "64-bit (Steam x64)" : "32-bit (non-Steam)");
 }
@@ -80,6 +78,7 @@ public void OnPluginStart()
 public void OnPluginEnd()
 {
 	RestoreDefensePatch();
+	RestoreDefenseRushPatch();
 }
 
 //========================================================================================
@@ -100,7 +99,7 @@ void PrepOffsets()
 }
 
 //========================================================================================
-// MODULE 1: CT BOMBSITE DEFENSE PATCH
+// PATCH 1: CT BOMBSITE DEFENSE (guardBombsiteChance)
 //========================================================================================
 
 void PrepDefensePatch()
@@ -127,14 +126,13 @@ void PrepDefensePatch()
 
 	g_pDefensePatchAddress = sigAddr + view_as<Address>(patchOffset);
 
-	// Read and verify original bytes before patching
 	int firstByte = LoadFromAddress(g_pDefensePatchAddress, NumberType_Int8);
 	int secondByte = LoadFromAddress(g_pDefensePatchAddress + view_as<Address>(1), NumberType_Int8);
 
 	// Check if already patched (0x90 = NOP)
 	if (firstByte == 0x90 && secondByte == 0x90)
 	{
-		LogMessage("[BotRouteFix] [Patch] Already patched (NOPs present @ %X), skipping", g_pDefensePatchAddress);
+		LogMessage("[BotRouteFix] [Patch 1] Already patched (NOPs present @ %X), skipping", g_pDefensePatchAddress);
 		g_bDefensePatched = true;
 		delete gc;
 		return;
@@ -146,7 +144,7 @@ void PrepDefensePatch()
 		if (firstByte != 0x0F || secondByte != 0x83)
 		{
 			delete gc;
-			SetFailState("[BotRouteFix] [Patch] Byte mismatch at %X (expected 0F 83, got %02X %02X), patch aborted!",
+			SetFailState("[BotRouteFix] [Patch 1] Byte mismatch at %X (expected 0F 83, got %02X %02X), patch aborted!",
 				g_pDefensePatchAddress, firstByte, secondByte);
 			return;
 		}
@@ -156,28 +154,24 @@ void PrepDefensePatch()
 		if (firstByte != 0x0F || secondByte != 0x86)
 		{
 			delete gc;
-			SetFailState("[BotRouteFix] [Patch] Byte mismatch at %X (expected 0F 86, got %02X %02X), patch aborted!",
+			SetFailState("[BotRouteFix] [Patch 1] Byte mismatch at %X (expected 0F 86, got %02X %02X), patch aborted!",
 				g_pDefensePatchAddress, firstByte, secondByte);
 			return;
 		}
 	}
 
-	// Backup original 6 bytes
 	for (int i = 0; i < 6; i++)
 	{
 		g_iOriginalDefenseBytes[i] = LoadFromAddress(g_pDefensePatchAddress + view_as<Address>(i), NumberType_Int8);
 	}
 
-	// Apply 6-byte NOP patch (0x90)
 	for (int i = 0; i < 6; i++)
 	{
 		StoreToAddress(g_pDefensePatchAddress + view_as<Address>(i), 0x90, NumberType_Int8, true);
 	}
 
 	g_bDefensePatched = true;
-	LogMessage("[BotRouteFix] [Patch] Successfully replaced jump with 6x NOPs @ %X (Architecture: %s)",
-		g_pDefensePatchAddress, g_bIsWin64 ? "x64" : "x86");
-	LogMessage("[BotRouteFix] [Patch] CT Bombsite Defense logic is now permanently unlocked for all rounds!");
+	LogMessage("[BotRouteFix] [Patch 1] Replaced guardBombsite jump with 6x NOPs @ %X (CT Defense Unlocked)", g_pDefensePatchAddress);
 
 	delete gc;
 }
@@ -190,7 +184,85 @@ void RestoreDefensePatch()
 		{
 			StoreToAddress(g_pDefensePatchAddress + view_as<Address>(i), g_iOriginalDefenseBytes[i], NumberType_Int8, true);
 		}
-		LogMessage("[BotRouteFix] [Patch] Restored original jump bytes @ %X", g_pDefensePatchAddress);
+		LogMessage("[BotRouteFix] [Patch 1] Restored original guardBombsite jump @ %X", g_pDefensePatchAddress);
 		g_bDefensePatched = false;
+	}
+}
+
+//========================================================================================
+// PATCH 2: CT ANTI-DEFENSE-RUSH (IsDefenseRushing)
+//========================================================================================
+
+void PrepDefenseRushPatch()
+{
+	Handle gc = LoadGameConfigFile(GAMEDATA);
+	if (gc == null)
+		return;
+
+	Address sigAddr = GameConfGetAddress(gc, "IdleState_DefenseRush");
+	if (sigAddr == Address_Null)
+	{
+		delete gc;
+		SetFailState("[BotRouteFix] Failed to locate signature for IdleState_DefenseRush!");
+		return;
+	}
+
+	int patchOffset = GameConfGetOffset(gc, "DefenseRush_PatchOffset");
+	if (patchOffset == -1)
+	{
+		delete gc;
+		SetFailState("[BotRouteFix] Failed to read DefenseRush_PatchOffset!");
+		return;
+	}
+
+	g_pDefenseRushPatchAddress = sigAddr + view_as<Address>(patchOffset);
+
+	int firstByte = LoadFromAddress(g_pDefenseRushPatchAddress, NumberType_Int8);
+	int secondByte = LoadFromAddress(g_pDefenseRushPatchAddress + view_as<Address>(1), NumberType_Int8);
+
+	// Check if already patched (0x90 = NOP)
+	if (firstByte == 0x90 && secondByte == 0x90)
+	{
+		LogMessage("[BotRouteFix] [Patch 2] Already patched (NOPs present @ %X), skipping", g_pDefenseRushPatchAddress);
+		g_bDefenseRushPatched = true;
+		delete gc;
+		return;
+	}
+
+	// Verify expected jump opcode (both 32-bit and 64-bit are 0x0F 0x85)
+	if (firstByte != 0x0F || secondByte != 0x85)
+	{
+		delete gc;
+		SetFailState("[BotRouteFix] [Patch 2] Byte mismatch at %X (expected 0F 85, got %02X %02X), patch aborted!",
+			g_pDefenseRushPatchAddress, firstByte, secondByte);
+		return;
+	}
+
+	for (int i = 0; i < 6; i++)
+	{
+		g_iOriginalDefenseRushBytes[i] = LoadFromAddress(g_pDefenseRushPatchAddress + view_as<Address>(i), NumberType_Int8);
+	}
+
+	for (int i = 0; i < 6; i++)
+	{
+		StoreToAddress(g_pDefenseRushPatchAddress + view_as<Address>(i), 0x90, NumberType_Int8, true);
+	}
+
+	g_bDefenseRushPatched = true;
+	LogMessage("[BotRouteFix] [Patch 2] Replaced IsDefenseRushing jump with 6x NOPs @ %X (Anti-Rush Activated)", g_pDefenseRushPatchAddress);
+
+	delete gc;
+}
+
+void RestoreDefenseRushPatch()
+{
+	if (g_bDefenseRushPatched && g_pDefenseRushPatchAddress != Address_Null)
+	{
+		for (int i = 0; i < 6; i++)
+		{
+			StoreToAddress(g_pDefenseRushPatchAddress + view_as<Address>(i), g_iOriginalDefenseRushBytes[i], NumberType_Int8, true);
+		}
+		LogMessage("[BotRouteFix] [Patch 2] Restored original IsDefenseRushing jump @ %X", g_pDefenseRushPatchAddress);
+		g_bDefenseRushPatched = false;
 	}
 }
