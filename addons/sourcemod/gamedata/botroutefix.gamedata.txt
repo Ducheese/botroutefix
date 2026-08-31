@@ -16,6 +16,12 @@
 				"windows"	"\xA1\x2A\x2A\x2A\x2A\x80\xB8\x20\x1B\x00\x00\x00\x0F\x85\x2A\x2A\x2A\x2A\x8B\xCB"
 				"windows64"	"\x48\x8B\x05\x2A\x2A\x2A\x2A\x80\xB8\x68\x1C\x00\x00\x00\x0F\x85\x2A\x2A\x2A\x2A\x48\x8B"
 			}
+			"IdleState_C4PlantDelay"
+			{
+				"library"	"server"
+				"windows"	"\xF3\x0F\x10\x40\x0C\x0F\x2F\x86\x38\x1A\x00\x00\x0F\x82"
+				"windows64"	"\x48\x8B\x1D\x2A\x2A\x2A\x2A\x48\x8B\x05\x2A\x2A\x2A\x2A\xF3\x0F\x10\x83\x6C\x1B\x00\x00\x0F\x2F\x40\x0C\x0F\x87"
+			}
 		}
 		"Addresses"
 		{
@@ -26,6 +32,10 @@
 			"IdleState_DefenseRush"
 			{
 				"signature"	"IdleState_DefenseRush"
+			}
+			"IdleState_C4PlantDelay"
+			{
+				"signature"	"IdleState_C4PlantDelay"
 			}
 		}
 		"Offsets"
@@ -39,6 +49,16 @@
 			{
 				"windows"	"12"
 				"windows64"	"14"
+			}
+			"C4PlantDelay_PatchOffset"
+			{
+				"windows"	"12"
+				"windows64"	"26"
+			}
+			"C4RandomZone_PatchOffset"
+			{
+				"windows"	"18"
+				"windows64"	"71"
 			}
 			"IsWin64"
 			{

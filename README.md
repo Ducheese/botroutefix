@@ -20,6 +20,19 @@
 
 ---
 
+### 模块 2：T 包匪开局即刻运包与 50% 随机包点修复 (T C4 Carrier Instant Plant & 50/50 Bombsite Fix)
+* **状态**：**已实装**
+* **逆向根因**：
+  1. 在官方源码 `cs_bot_manager.cpp` 中，每回合开局设定了下包延迟时间戳：
+     $$m\_earliestBombPlantTimestamp = \text{curtime} + \text{RandomFloat}(10.0f, 30.0f)$$
+     导致开局前 10~30 秒内，`IsTimeToPlantBomb()` 恒为 `false`。带包的 T 队员被禁止前往包点运包，顺流跌落到了最底部的 `me->Hunt()`，带着 C4 跟随大部队冲向 CT 出生点送人头白给；
+  2. 运包时官方源码直接调用 `TheCSBots()->GetClosestZone(...)`，导致包匪每一局都死板地前往物理距离最近的包点（例如 `de_dust2` 永远只去 B 包点）。
+* **修复机制**：
+  1. 对 `IdleState::OnUpdate()` 中检测 `IsTimeToPlantBomb` 的条件跳转（64位 `ja` / 32位 `jb`）打入 **6 字节 NOP (`90 90 90 90 90 90`)** 就地补丁。开局冻结结束，包匪 **0 延迟** 立即启程前往包点运包安包；
+  2. 对调用 `GetClosestZone` 处打入机器码补丁重定向为 `GetRandomZone`，使包匪在开局时真正以 **50% / 50%** 的概率在 A 包点与 B 包点之间随机轮换进攻。
+
+---
+
 ## 支持架构 (Supported Architectures)
 
 - **32-bit**：Windows non-Steam (v91/v92) `server.dll`
@@ -37,6 +50,7 @@
 | :--- | :--- | :--- | :--- |
 | **`IdleState_GuardBombsiteChance`** | `0x102BBE15` | `0x18036448C` | `IdleState::OnUpdate` 守包点概率跳转拦截点 (已使用) |
 | **`IdleState_DefenseRush`** | `0x102BBDED` | `0x18036444C` | `IdleState::OnUpdate` 全队 33.3% 前冲跳转拦截点 (已使用) |
+| **`IdleState_C4PlantDelay`** | `0x102BB882` | `0x180363E0D` | `IdleState::OnUpdate` 包匪 10~30s 延迟与选点拦截点 (已使用) |
 | **`CCSBot_ComputePath`** | `0x102A2000` | `0x180343550` | `bool CCSBot::ComputePath(const Vector &goal, int route)` (A* 核心寻路) |
 | **`HuntState_OnUpdate`** | `0x102BA430` | `0x180362350` | `void HuntState::OnUpdate(CCSBot *me)` (搜敌目标选择) |
 | **`CCSBot_MoveToInitialEncounter`** | `0x102A6FF0` | `0x180349CF0` | `bool CCSBot::MoveToInitialEncounter()` (开局交火线推进) |
@@ -51,7 +65,7 @@
 | **`CCSBot::m_path`** | `+0x1C28` (**步长 24B**) | `+0x2108` (**步长 32B**) | 寻路节点数组 `ConnectInfo[256]` |
 | **`CCSBot::m_pathLength`** | `+0x3428` | `+0x4108` | 当前路径总节点数 (int32) |
 | **`CCSBot::m_lastKnownArea`** | `+0x1C14` | `+0x20F0` | Bot 当前所在的 `CNavArea*` |
-| **`CCSBot::m_task`** | `+0x1BF8` | `+0x20D0` | 当前任务枚举 `BotTaskType` (7 = GUARD_BOMB_ZONE) |
+| **`CCSBot::m_task`** | `+0x1BF8` | `+0x20D0` | 当前任务枚举 `BotTaskType` (1 = PLANT_BOMB, 7 = GUARD_BOMB_ZONE) |
 | **`CCSBot::m_isWaitingBehindFriend`** | `+0x345C` | `+0x4150` | 遇到队友挡路的礼貌等待标志位 (bool/int8) |
 | **`CCSBot::m_politeTimer`** | `+0x3450` | `+0x4140` | 礼貌等待计时器 `IntervalTimer` |
 | **`HuntState::m_huntArea`** | `+0x04` | `+0x08` | 选定的搜敌目标 `CNavArea*` |
