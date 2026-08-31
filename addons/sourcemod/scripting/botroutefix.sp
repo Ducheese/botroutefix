@@ -24,6 +24,11 @@
 //      官方原版等待高达 3.5~5.0 秒导致开火车堵死，模块 4 在等待超过 1.2 秒（人类犹豫极限）
 //      时立即强制清空路径并打碎排队，配合模块 3 的走廊 Danger 阻力，驱使 Bot 立即掉头绕道。
 //
+// [模块 5：T 阵营 C4 包匪专属护卫与保镖协同 (T C4 Carrier Escort & Bodyguard System)]
+//   7. 解决不带包的 T 队员与包匪完全脱节、各自为战的致命缺陷。
+//      开局及捡包时，按存活比例挑选距离包匪最近的 1~2 名 T 队友调用原生 CCSBot::Follow
+//      贴身护送包匪，负责探路、掩护补枪与秒捡掉落 C4；下包后由引擎底层自动解除跟随并就地守包。
+//
 // 支持架构：
 //   - 32-bit: Windows non-Steam (v91/v92) server.dll
 //   - 64-bit: Windows Steam x64 server.dll
@@ -37,7 +42,7 @@
 #include <dhooks>
 
 #define GAMEDATA "botroutefix.gamedata"
-#define PLUGIN_VERSION "0.6.0"
+#define PLUGIN_VERSION "0.7.0"
 
 //========================================================================================
 // HANDLES & VARIABLES
@@ -81,6 +86,10 @@ int g_iOffset_IsStopping = 0;
 int g_iOffset_PathLadder = 0;
 Handle g_hQueueBreakerTimer = INVALID_HANDLE;
 
+// Module 5: T Carrier Escort (Follow & StopFollowing SDKCalls)
+Handle g_hFollowSDKCall = INVALID_HANDLE;
+Handle g_hStopFollowingSDKCall = INVALID_HANDLE;
+
 //========================================================================================
 // PLUGIN INFO
 //========================================================================================
@@ -89,7 +98,7 @@ public Plugin myinfo =
 {
 	name        = "Bot Route Fix",
 	author      = "Ducheese",
-	description = "CS:S Bot 寻路与战术决策底层修复 (CT 守包/防冲 + T 运包/50%选点 + 走廊分流 + 1.2s排队打碎)",
+	description = "CS:S Bot 寻路与战术决策底层修复 (CT 守包/防冲 + T 运包/50%选点 + 走廊分流 + 1.2s排队打碎 + C4保镖护送)",
 	version     = PLUGIN_VERSION,
 	url         = "https://github.com/Ducheese"
 };
@@ -109,6 +118,8 @@ public void OnPluginStart()
 	PrepC4RandomZonePatch();
 	PrepComputePathHook();
 	StartQueueBreakerTimer();
+	PrepFollowSDKCalls();
+	HookGameEvents();
 
 	LogMessage("[BotRouteFix] ========== Initialization Complete on %s ==========", g_bIsWin64 ? "64-bit (Steam x64)" : "32-bit (non-Steam)");
 }
@@ -741,4 +752,160 @@ public Action Timer_CheckPoliteQueue(Handle timer)
 	}
 
 	return Plugin_Continue;
+}
+
+//========================================================================================
+// MODULE 5: T C4 CARRIER ESCORT & BODYGUARD SYSTEM
+//========================================================================================
+
+void PrepFollowSDKCalls()
+{
+	Handle gc = LoadGameConfigFile(GAMEDATA);
+	if (gc == null)
+		return;
+
+	StartPrepSDKCall(SDKCall_Entity);
+	PrepSDKCall_SetFromConf(gc, SDKConf_Signature, "CCSBot_Follow");
+	PrepSDKCall_AddParameter(SDKType_CBaseEntity, SDKPass_Pointer);
+	g_hFollowSDKCall = EndPrepSDKCall();
+	if (g_hFollowSDKCall == null)
+	{
+		delete gc;
+		SetFailState("[BotRouteFix] [Module 5] Failed to create SDKCall for CCSBot_Follow!");
+		return;
+	}
+
+	StartPrepSDKCall(SDKCall_Entity);
+	PrepSDKCall_SetFromConf(gc, SDKConf_Signature, "CCSBot_StopFollowing");
+	g_hStopFollowingSDKCall = EndPrepSDKCall();
+	if (g_hStopFollowingSDKCall == null)
+	{
+		delete gc;
+		SetFailState("[BotRouteFix] [Module 5] Failed to create SDKCall for CCSBot_StopFollowing!");
+		return;
+	}
+
+	LogMessage("[BotRouteFix] [Module 5] Follow & StopFollowing SDKCalls Prepared (Carrier Escort Activated)");
+	delete gc;
+}
+
+void HookGameEvents()
+{
+	HookEvent("round_freeze_end", Event_RoundFreezeEnd, EventHookMode_Post);
+	HookEvent("item_pickup", Event_ItemPickup, EventHookMode_Post);
+	HookEvent("bomb_dropped", Event_BombDropped, EventHookMode_Post);
+}
+
+public void Event_RoundFreezeEnd(Event event, const char[] name, bool dontBroadcast)
+{
+	AssignCarrierBodyguards();
+}
+
+public void Event_ItemPickup(Event event, const char[] name, bool dontBroadcast)
+{
+	char item[32];
+	event.GetString("item", item, sizeof(item));
+
+	if (StrEqual(item, "c4") || StrEqual(item, "weapon_c4"))
+	{
+		RequestFrame(Frame_AssignCarrierBodyguards);
+	}
+}
+
+public void Frame_AssignCarrierBodyguards(any data)
+{
+	AssignCarrierBodyguards();
+}
+
+public void Event_BombDropped(Event event, const char[] name, bool dontBroadcast)
+{
+	// When C4 is dropped on the floor, release bodyguards so they can react and cover
+	for (int i = 1; i <= MaxClients; i++)
+	{
+		if (IsClientInGame(i) && IsPlayerAlive(i) && GetClientTeam(i) == 2 && IsFakeClient(i))
+		{
+			if (g_hStopFollowingSDKCall != null)
+			{
+				SDKCall(g_hStopFollowingSDKCall, i);
+			}
+		}
+	}
+}
+
+void AssignCarrierBodyguards()
+{
+	int carrier = GetC4Carrier();
+	if (carrier <= 0 || !IsPlayerAlive(carrier))
+		return;
+
+	// Collect alive T teammates (excluding the carrier)
+	int teammates[MAXPLAYERS + 1];
+	int teammateCount = 0;
+	float carrierOrigin[3];
+	GetClientAbsOrigin(carrier, carrierOrigin);
+
+	for (int i = 1; i <= MaxClients; i++)
+	{
+		if (i == carrier)
+			continue;
+
+		if (IsClientInGame(i) && IsPlayerAlive(i) && GetClientTeam(i) == 2 && IsFakeClient(i))
+		{
+			teammates[teammateCount++] = i;
+		}
+	}
+
+	if (teammateCount <= 0)
+		return;
+
+	// Determine bodyguard count based on alive teammates ratio:
+	// - 1 teammate left: 1 follows
+	// - 2 teammates left: 1 follows, 1 free
+	// - >= 3 teammates left: 2 follow, remaining free
+	int bodyguardsToAssign = 1;
+	if (teammateCount >= 3)
+		bodyguardsToAssign = 2;
+
+	// Sort teammates by distance to carrier (ascending)
+	for (int i = 0; i < teammateCount - 1; i++)
+	{
+		for (int j = i + 1; j < teammateCount; j++)
+		{
+			float posI[3], posJ[3];
+			GetClientAbsOrigin(teammates[i], posI);
+			GetClientAbsOrigin(teammates[j], posJ);
+
+			if (GetVectorDistance(carrierOrigin, posJ) < GetVectorDistance(carrierOrigin, posI))
+			{
+				int temp = teammates[i];
+				teammates[i] = teammates[j];
+				teammates[j] = temp;
+			}
+		}
+	}
+
+	// Assign the closest bodyguards
+	for (int i = 0; i < bodyguardsToAssign && i < teammateCount; i++)
+	{
+		int bot = teammates[i];
+		if (g_hFollowSDKCall != null)
+		{
+			SDKCall(g_hFollowSDKCall, bot, carrier);
+			LogMessage("[BotRouteFix] [Module 5] Assigned %N to escort C4 carrier %N", bot, carrier);
+		}
+	}
+}
+
+int GetC4Carrier()
+{
+	for (int i = 1; i <= MaxClients; i++)
+	{
+		if (IsClientInGame(i) && IsPlayerAlive(i) && GetClientTeam(i) == 2)
+		{
+			int c4 = GetPlayerWeaponSlot(i, 4);
+			if (c4 != -1 && IsValidEntity(c4))
+				return i;
+		}
+	}
+	return 0;
 }

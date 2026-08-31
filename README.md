@@ -43,13 +43,22 @@
 ---
 
 ### 模块 4：礼貌排队 1.2 秒超时打碎与门口掉头 (1.2s Queue Breaker & Anti-Jam Turnaround)
-* **状态**：**已实装 (v0.6.0)**
+* **状态**：**已实装**
 * **逆向根因**：
   在 `cs_bot_pathfind.cpp` 的 `CCSBot::UpdatePathMovement()` 中，当 Bot 在狭窄门口（如 A 门、B 洞狭缝）被队友挡住时，进入 `m_isWaitingBehindFriend = true`，其礼貌等待时长计算公式为：
   $$\text{politeDuration} = 5.0f - 3.0f \times \text{Aggression}$$
   标准 Bot 原地发呆等待高达 **3.5 ~ 5.0 秒**，导致后排队友依次卡死在门后排成一串开火车。
 * **修复机制**：
   高频定时器实时监控 `m_isWaitingBehindFriend` 与 `m_politeTimer`。一旦 Bot 在原地等待超过 **1.2 秒**（人类犹豫极限），插件立即清零 `m_isWaitingBehindFriend` 并执行 `DestroyPath()`（清空路径）。在下一帧 Bot 重新寻路时，结合模块 3 堵门走廊已有的 Danger 阻力，**Bot 会果断掉头绕道走另一侧**，彻底解决门框堵死与排队开火车。
+
+---
+
+### 模块 5：T 阵营 C4 包匪专属护卫与保镖协同 (T C4 Carrier Escort & Bodyguard System)
+* **状态**：**已实装 (v0.7.0)**
+* **逆向根因**：
+  在官方源码 `cs_bot_update.cpp` 中，自动跟随（AutoFollow）仅对人类玩家生效（`GetClosestVisibleHumanFriend`），对带包的 Bot 队友完全无视；且不带包的 T 队员在下包前只有冲 CT 家（`Hunt`）或冲交火线的逻辑，导致包匪永远单刀赴会、队友全部脱节送命。
+* **修复机制**：
+  在回合开局冻结结束及 C4 被捡起时，按队伍存活比例挑选距离包匪最近的 **1~2 名 T 队友** 调用原生 `CCSBot::Follow` 成为专属贴身保镖，走在包匪身前身侧负责拉枪线、架枪探点与防丢包；下包后由引擎底层 `OnBombPlanted` 自动调用 `StopFollowing()` 解除跟随，无缝切换为 `GUARD_TICKING_BOMB` 掩体守包。
 
 ---
 
@@ -72,6 +81,8 @@
 | **`IdleState_DefenseRush`** | `0x102BBDED` | `0x18036444C` | `IdleState::OnUpdate` 全队 33.3% 前冲跳转拦截点 (已使用) |
 | **`IdleState_C4PlantDelay`** | `0x102BB882` | `0x180363E0D` | `IdleState::OnUpdate` 包匪 10~30s 延迟与选点拦截点 (已使用) |
 | **`CCSBot_ComputePath`** | `0x102A2000` | `0x180343550` | `bool CCSBot::ComputePath(const Vector &goal, int route)` (A* 核心寻路) (已使用) |
+| **`CCSBot_Follow`** | `0x102A6B60` | `0x1803496E0` | `void CCSBot::Follow(CCSPlayer *leader)` (保镖跟随) (已使用) |
+| **`CCSBot_StopFollowing`** | `0x102A73C0` | `0x18034A1A0` | `void CCSBot::StopFollowing()` (解除跟随) (已使用) |
 | **`HuntState_OnUpdate`** | `0x102BA430` | `0x180362350` | `void HuntState::OnUpdate(CCSBot *me)` (搜敌目标选择) |
 | **`CCSBot_MoveToInitialEncounter`** | `0x102A6FF0` | `0x180349CF0` | `bool CCSBot::MoveToInitialEncounter()` (开局交火线推进) |
 | **`PathCost_FriendDensity`** | `0x10292CB0` | `0x18032D2B0` | `PathCost::operator()` (50000.0f 队友密度代价读取点) |
