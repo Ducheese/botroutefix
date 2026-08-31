@@ -39,6 +39,11 @@
 //      Detour CCSBot::NoticeLooseBomb Post 阶段，仅对物理距离最近的 1 名 T 队员返回 true 前去捡包，
 //      其余队友保持 false 维持 HuntState 状态，就地架枪、反打敌人并提供火力掩护。
 //
+// [模块 8：CT 首席拆包员与交叉火力架枪体系 (CT Designated Defuser & Crossfire Guard)]
+//  10. 解决官方 CT 在按住 E 读条前全员判定 DEFUSE_BOMB 一起往雷包上撞无掩护的缺陷。
+//      实时竞选单人「首席拆包员」直扑 C4 拆包，其余赶到包点的 CT 提前转入 GUARD_BOMB_DEFUSER，
+//      调用原生 CCSBot::Hide 在包点掩体后散开架枪蹲点，形成立体交叉火力掩护；首席倒地秒级接力。
+//
 // 支持架构：
 //   - 32-bit: Windows non-Steam (v91/v92) server.dll
 //   - 64-bit: Windows Steam x64 server.dll
@@ -52,7 +57,7 @@
 #include <dhooks>
 
 #define GAMEDATA "botroutefix.gamedata"
-#define PLUGIN_VERSION "0.9.0"
+#define PLUGIN_VERSION "1.0.0"
 
 //========================================================================================
 // HANDLES & VARIABLES
@@ -108,6 +113,14 @@ int g_iOffset_ClearedTimestamp = 0;
 // Module 7: Single Retriever & Tactical Cover (NoticeLooseBomb Post Detour)
 Handle g_hNoticeLooseBombDetour = INVALID_HANDLE;
 
+// Module 8: CT Designated Defuser & Crossfire Guard
+Handle g_hHideSDKCall = INVALID_HANDLE;
+int g_iOffset_Task = 0;
+bool g_bBombPlanted = false;
+float g_fBombPlantedPos[3];
+int g_iDesignatedDefuser = 0;
+Handle g_hDefuseCoordTimer = INVALID_HANDLE;
+
 //========================================================================================
 // PLUGIN INFO
 //========================================================================================
@@ -116,7 +129,7 @@ public Plugin myinfo =
 {
 	name        = "Bot Route Fix",
 	author      = "Ducheese",
-	description = "CS:S Bot 寻路与战术决策底层修复 (CT 守包/防冲 + T 运包/50%选点 + 走廊分流 + 1.2s排队打碎 + C4保镖护送 + 搜点抢占 + 单人捡包掩护)",
+	description = "CS:S Bot 寻路与战术决策底层修复 (CT 守包/防冲 + T 运包/50%选点 + 走廊分流 + 1.2s排队打碎 + C4保镖护送 + 搜点抢占 + 单人捡包掩护 + CT首席拆包架枪)",
 	version     = PLUGIN_VERSION,
 	url         = "https://github.com/Ducheese"
 };
@@ -139,6 +152,8 @@ public void OnPluginStart()
 	PrepFollowSDKCalls();
 	PrepHuntStateHook();
 	PrepNoticeLooseBombHook();
+	PrepDefuseSDKCalls();
+	StartDefuseCoordTimer();
 	HookGameEvents();
 
 	LogMessage("[BotRouteFix] ========== Initialization Complete on %s ==========", g_bIsWin64 ? "64-bit (Steam x64)" : "32-bit (non-Steam)");
@@ -147,6 +162,7 @@ public void OnPluginStart()
 public void OnPluginEnd()
 {
 	StopQueueBreakerTimer();
+	StopDefuseCoordTimer();
 	RestoreDefensePatch();
 	RestoreDefenseRushPatch();
 	RestoreC4PlantDelayPatch();
@@ -181,6 +197,7 @@ void PrepOffsets()
 	g_iOffset_PoliteTimer = GameConfGetOffset(gc, "CCSBot_PoliteTimer_Offset");
 	g_iOffset_IsStopping = GameConfGetOffset(gc, "CCSBot_IsStopping_Offset");
 	g_iOffset_PathLadder = GameConfGetOffset(gc, "CCSBot_PathLadder_Offset");
+	g_iOffset_Task = GameConfGetOffset(gc, "CCSBot_Task_Offset");
 
 	g_iOffset_HuntArea = GameConfGetOffset(gc, "HuntState_HuntArea_Offset");
 	g_iOffset_ClearedTimestamp = GameConfGetOffset(gc, "NavArea_ClearedTimestamp_Offset");
@@ -189,6 +206,7 @@ void PrepOffsets()
 		g_iOffset_Danger == -1 || g_iOffset_DangerTimestamp == -1 ||
 		g_iOffset_IsWaitingBehindFriend == -1 || g_iOffset_PoliteTimer == -1 ||
 		g_iOffset_IsStopping == -1 || g_iOffset_PathLadder == -1 ||
+		g_iOffset_Task == -1 ||
 		g_iOffset_HuntArea == -1 || g_iOffset_ClearedTimestamp == -1)
 	{
 		delete gc;
@@ -820,6 +838,17 @@ void HookGameEvents()
 	HookEvent("round_freeze_end", Event_RoundFreezeEnd, EventHookMode_Post);
 	HookEvent("item_pickup", Event_ItemPickup, EventHookMode_Post);
 	HookEvent("bomb_dropped", Event_BombDropped, EventHookMode_Post);
+	HookEvent("bomb_planted", Event_BombPlanted, EventHookMode_Post);
+	HookEvent("bomb_defused", Event_BombEnded, EventHookMode_Post);
+	HookEvent("bomb_exploded", Event_BombEnded, EventHookMode_Post);
+	HookEvent("round_start", Event_RoundStart, EventHookMode_Post);
+	HookEvent("player_death", Event_PlayerDeath, EventHookMode_Post);
+}
+
+public void Event_RoundStart(Event event, const char[] name, bool dontBroadcast)
+{
+	g_bBombPlanted = false;
+	g_iDesignatedDefuser = 0;
 }
 
 public void Event_RoundFreezeEnd(Event event, const char[] name, bool dontBroadcast)
@@ -855,6 +884,34 @@ public void Event_BombDropped(Event event, const char[] name, bool dontBroadcast
 				SDKCall(g_hStopFollowingSDKCall, i);
 			}
 		}
+	}
+}
+
+public void Event_BombPlanted(Event event, const char[] name, bool dontBroadcast)
+{
+	g_bBombPlanted = true;
+
+	int bomb = FindEntityByClassname(-1, "planted_c4");
+	if (bomb != -1 && IsValidEntity(bomb))
+	{
+		GetEntPropVector(bomb, Prop_Data, "m_vecAbsOrigin", g_fBombPlantedPos);
+	}
+
+	UpdateDesignatedDefuser();
+}
+
+public void Event_BombEnded(Event event, const char[] name, bool dontBroadcast)
+{
+	g_bBombPlanted = false;
+	g_iDesignatedDefuser = 0;
+}
+
+public void Event_PlayerDeath(Event event, const char[] name, bool dontBroadcast)
+{
+	int victim = GetClientOfUserId(event.GetInt("userid"));
+	if (victim > 0 && victim == g_iDesignatedDefuser)
+	{
+		UpdateDesignatedDefuser();
 	}
 }
 
@@ -1134,4 +1191,135 @@ int GetLooseBombEntity()
 		}
 	}
 	return -1;
+}
+
+//========================================================================================
+// MODULE 8: CT DESIGNATED DEFUSER & CROSSFIRE GUARD
+//========================================================================================
+
+void PrepDefuseSDKCalls()
+{
+	Handle gc = LoadGameConfigFile(GAMEDATA);
+	if (gc == null)
+		return;
+
+	StartPrepSDKCall(SDKCall_Entity);
+	PrepSDKCall_SetFromConf(gc, SDKConf_Signature, "CCSBot_Hide");
+	PrepSDKCall_AddParameter(SDKType_PlainOldData, SDKPass_Plain); // CNavArea *area
+	PrepSDKCall_AddParameter(SDKType_Float, SDKPass_Plain);        // float duration
+	PrepSDKCall_AddParameter(SDKType_Float, SDKPass_Plain);        // float holdPositionTime
+	PrepSDKCall_AddParameter(SDKType_Bool, SDKPass_Plain);         // bool isStealth
+	g_hHideSDKCall = EndPrepSDKCall();
+	if (g_hHideSDKCall == null)
+	{
+		delete gc;
+		SetFailState("[BotRouteFix] [Module 8] Failed to create SDKCall for CCSBot_Hide!");
+		return;
+	}
+
+	LogMessage("[BotRouteFix] [Module 8] Hide SDKCall Prepared (CT Defuse & Crossfire Guard Activated)");
+	delete gc;
+}
+
+void StartDefuseCoordTimer()
+{
+	if (g_hDefuseCoordTimer == INVALID_HANDLE)
+	{
+		g_hDefuseCoordTimer = CreateTimer(0.2, Timer_DefuseCoordination, _, TIMER_REPEAT);
+	}
+}
+
+void StopDefuseCoordTimer()
+{
+	if (g_hDefuseCoordTimer != INVALID_HANDLE)
+	{
+		KillTimer(g_hDefuseCoordTimer);
+		g_hDefuseCoordTimer = INVALID_HANDLE;
+	}
+}
+
+public Action Timer_DefuseCoordination(Handle timer)
+{
+	if (!g_bBombPlanted)
+		return Plugin_Continue;
+
+	UpdateDesignatedDefuser();
+	if (g_iDesignatedDefuser <= 0)
+		return Plugin_Continue;
+
+	for (int i = 1; i <= MaxClients; i++)
+	{
+		if (!IsClientInGame(i) || !IsPlayerAlive(i) || GetClientTeam(i) != 3 || !IsFakeClient(i))
+			continue;
+
+		if (i == g_iDesignatedDefuser)
+			continue;
+
+		float ctPos[3];
+		GetClientAbsOrigin(i, ctPos);
+		float distToBomb = GetVectorDistance(ctPos, g_fBombPlantedPos);
+
+		// Distance Gating: Only switch to Hide/Guard when CT enters the bombsite perimeter (<= 1500 units)
+		// If farther away, let them continue sprinting to the bombsite via MoveTo!
+		if (distToBomb > 1500.0)
+			continue;
+
+		Address pBot = GetEntityAddress(i);
+		if (pBot == Address_Null)
+			continue;
+
+		int task = LoadFromAddress(pBot + view_as<Address>(g_iOffset_Task), NumberType_Int32);
+		// If a non-defuser CT bot is attempting task 3 (DEFUSE_BOMB):
+		if (task == 3) // DEFUSE_BOMB
+		{
+			// Switch task to GUARD_BOMB_DEFUSER (task 5) and take cover to set up crossfire
+			StoreToAddress(pBot + view_as<Address>(g_iOffset_Task), 5, NumberType_Int32);
+			if (g_hHideSDKCall != null)
+			{
+				SDKCall(g_hHideSDKCall, i, Address_Null, -1.0, 0.0, false);
+				LogMessage("[BotRouteFix] [Module 8] CT %N reached site perimeter (%.0f units) -> assigned crossfire guard (Lead defuser is %N)",
+					i, distToBomb, g_iDesignatedDefuser);
+			}
+		}
+	}
+
+	return Plugin_Continue;
+}
+
+void UpdateDesignatedDefuser()
+{
+	if (!g_bBombPlanted)
+	{
+		g_iDesignatedDefuser = 0;
+		return;
+	}
+
+	int bestCT = 0;
+	float bestScore = 99999999.0;
+
+	for (int i = 1; i <= MaxClients; i++)
+	{
+		if (IsClientInGame(i) && IsPlayerAlive(i) && GetClientTeam(i) == 3)
+		{
+			float pos[3];
+			GetClientAbsOrigin(i, pos);
+			float dist = GetVectorDistance(pos, g_fBombPlantedPos);
+
+			// Bonus if CT has defusal kit (-500 units priority)
+			bool hasKit = (GetEntProp(i, Prop_Send, "m_bHasDefuser") == 1);
+			float score = hasKit ? (dist - 500.0) : dist;
+
+			if (score < bestScore)
+			{
+				bestScore = score;
+				bestCT = i;
+			}
+		}
+	}
+
+	if (bestCT != g_iDesignatedDefuser && bestCT > 0)
+	{
+		g_iDesignatedDefuser = bestCT;
+		LogMessage("[BotRouteFix] [Module 8] Designated %N as lead defuser", g_iDesignatedDefuser);
+	}
 }
