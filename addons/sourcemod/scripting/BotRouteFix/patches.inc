@@ -1,0 +1,270 @@
+#if defined _botroutefix_patches_included
+ #endinput
+#endif
+#define _botroutefix_patches_included
+
+//========================================================================================
+// PATCH 1: CT BOMBSITE DEFENSE (guardBombsiteChance)
+//========================================================================================
+
+void PrepDefensePatch()
+{
+	Handle gc = LoadGameConfigFile(GAMEDATA);
+	if (gc == null)
+		return;
+
+	Address sigAddr = GameConfGetAddress(gc, "IdleState_GuardBombsiteChance");
+	if (sigAddr == Address_Null)
+	{
+		delete gc;
+		SetFailState("[BotRouteFix] Failed to locate signature for IdleState_GuardBombsiteChance!");
+		return;
+	}
+
+	int patchOffset = GameConfGetOffset(gc, "GuardBombsite_PatchOffset");
+	if (patchOffset == -1)
+	{
+		delete gc;
+		SetFailState("[BotRouteFix] Failed to read GuardBombsite_PatchOffset!");
+		return;
+	}
+
+	g_pDefensePatchAddress = sigAddr + view_as<Address>(patchOffset);
+
+	int firstByte = LoadFromAddress(g_pDefensePatchAddress, NumberType_Int8);
+	int secondByte = LoadFromAddress(g_pDefensePatchAddress + view_as<Address>(1), NumberType_Int8);
+
+	// Check if already patched (0x90 = NOP) -> safely skip and avoid zero-overwrite on unload
+	if (firstByte == 0x90 && secondByte == 0x90)
+	{
+		LogMessage("[BotRouteFix] [Patch 1] Already patched (NOPs present @ %X), skipping", g_pDefensePatchAddress);
+		g_bDefensePatched = false;
+		delete gc;
+		return;
+	}
+
+	// Verify expected jump opcode (32-bit: 0x0F 0x86, 64-bit: 0x0F 0x83)
+	if (g_bIsWin64)
+	{
+		if (firstByte != 0x0F || secondByte != 0x83)
+		{
+			delete gc;
+			SetFailState("[BotRouteFix] [Patch 1] Byte mismatch at %X (expected 0F 83, got %02X %02X), patch aborted!",
+				g_pDefensePatchAddress, firstByte, secondByte);
+			return;
+		}
+	}
+	else
+	{
+		if (firstByte != 0x0F || secondByte != 0x86)
+		{
+			delete gc;
+			SetFailState("[BotRouteFix] [Patch 1] Byte mismatch at %X (expected 0F 86, got %02X %02X), patch aborted!",
+				g_pDefensePatchAddress, firstByte, secondByte);
+			return;
+		}
+	}
+
+	// Backup original 6 bytes
+	for (int i = 0; i < 6; i++)
+	{
+		g_iOriginalDefenseBytes[i] = LoadFromAddress(g_pDefensePatchAddress + view_as<Address>(i), NumberType_Int8);
+	}
+
+	// Apply 6x NOPs
+	for (int i = 0; i < 6; i++)
+	{
+		StoreToAddress(g_pDefensePatchAddress + view_as<Address>(i), 0x90, NumberType_Int8, true);
+	}
+
+	g_bDefensePatched = true;
+	LogMessage("[BotRouteFix] [Patch 1] Replaced guardBombsite jump with 6x NOPs @ %X (CT Defense Unlocked)", g_pDefensePatchAddress);
+
+	delete gc;
+}
+
+void RestoreDefensePatch()
+{
+	if (g_bDefensePatched && g_pDefensePatchAddress != Address_Null)
+	{
+		for (int i = 0; i < 6; i++)
+		{
+			StoreToAddress(g_pDefensePatchAddress + view_as<Address>(i), g_iOriginalDefenseBytes[i], NumberType_Int8, true);
+		}
+		LogMessage("[BotRouteFix] [Patch 1] Restored original guardBombsite jump @ %X", g_pDefensePatchAddress);
+		g_bDefensePatched = false;
+	}
+}
+
+//========================================================================================
+// PATCH 2: CT ANTI-DEFENSE-RUSH (IsDefenseRushing)
+//========================================================================================
+
+void PrepDefenseRushPatch()
+{
+	Handle gc = LoadGameConfigFile(GAMEDATA);
+	if (gc == null)
+		return;
+
+	Address sigAddr = GameConfGetAddress(gc, "IdleState_DefenseRush");
+	if (sigAddr == Address_Null)
+	{
+		delete gc;
+		SetFailState("[BotRouteFix] Failed to locate signature for IdleState_DefenseRush!");
+		return;
+	}
+
+	int patchOffset = GameConfGetOffset(gc, "DefenseRush_PatchOffset");
+	if (patchOffset == -1)
+	{
+		delete gc;
+		SetFailState("[BotRouteFix] Failed to read DefenseRush_PatchOffset!");
+		return;
+	}
+
+	g_pDefenseRushPatchAddress = sigAddr + view_as<Address>(patchOffset);
+
+	int firstByte = LoadFromAddress(g_pDefenseRushPatchAddress, NumberType_Int8);
+	int secondByte = LoadFromAddress(g_pDefenseRushPatchAddress + view_as<Address>(1), NumberType_Int8);
+
+	// Check if already patched (0x90 = NOP) -> safely skip and avoid zero-overwrite on unload
+	if (firstByte == 0x90 && secondByte == 0x90)
+	{
+		LogMessage("[BotRouteFix] [Patch 2] Already patched (NOPs present @ %X), skipping", g_pDefenseRushPatchAddress);
+		g_bDefenseRushPatched = false;
+		delete gc;
+		return;
+	}
+
+	// Verify expected jump opcode (both 32-bit and 64-bit are 0x0F 0x85)
+	if (firstByte != 0x0F || secondByte != 0x85)
+	{
+		delete gc;
+		SetFailState("[BotRouteFix] [Patch 2] Byte mismatch at %X (expected 0F 85, got %02X %02X), patch aborted!",
+			g_pDefenseRushPatchAddress, firstByte, secondByte);
+		return;
+	}
+
+	// Backup original 6 bytes
+	for (int i = 0; i < 6; i++)
+	{
+		g_iOriginalDefenseRushBytes[i] = LoadFromAddress(g_pDefenseRushPatchAddress + view_as<Address>(i), NumberType_Int8);
+	}
+
+	// Apply 6x NOPs
+	for (int i = 0; i < 6; i++)
+	{
+		StoreToAddress(g_pDefenseRushPatchAddress + view_as<Address>(i), 0x90, NumberType_Int8, true);
+	}
+
+	g_bDefenseRushPatched = true;
+	LogMessage("[BotRouteFix] [Patch 2] Replaced IsDefenseRushing jump with 6x NOPs @ %X (Anti-Rush Activated)", g_pDefenseRushPatchAddress);
+
+	delete gc;
+}
+
+void RestoreDefenseRushPatch()
+{
+	if (g_bDefenseRushPatched && g_pDefenseRushPatchAddress != Address_Null)
+	{
+		for (int i = 0; i < 6; i++)
+		{
+			StoreToAddress(g_pDefenseRushPatchAddress + view_as<Address>(i), g_iOriginalDefenseRushBytes[i], NumberType_Int8, true);
+		}
+		LogMessage("[BotRouteFix] [Patch 2] Restored original IsDefenseRushing jump @ %X", g_pDefenseRushPatchAddress);
+		g_bDefenseRushPatched = false;
+	}
+}
+
+//========================================================================================
+// PATCH 3: T C4 CARRIER INSTANT PLANT (IsTimeToPlantBomb delay removal)
+//========================================================================================
+
+void PrepC4PlantDelayPatch()
+{
+	Handle gc = LoadGameConfigFile(GAMEDATA);
+	if (gc == null)
+		return;
+
+	Address sigAddr = GameConfGetAddress(gc, "IdleState_C4PlantDelay");
+	if (sigAddr == Address_Null)
+	{
+		delete gc;
+		SetFailState("[BotRouteFix] Failed to locate signature for IdleState_C4PlantDelay!");
+		return;
+	}
+
+	int patchOffset = GameConfGetOffset(gc, "C4PlantDelay_PatchOffset");
+	if (patchOffset == -1)
+	{
+		delete gc;
+		SetFailState("[BotRouteFix] Failed to read C4PlantDelay_PatchOffset!");
+		return;
+	}
+
+	g_pC4PlantDelayPatchAddress = sigAddr + view_as<Address>(patchOffset);
+
+	int firstByte = LoadFromAddress(g_pC4PlantDelayPatchAddress, NumberType_Int8);
+	int secondByte = LoadFromAddress(g_pC4PlantDelayPatchAddress + view_as<Address>(1), NumberType_Int8);
+
+	// Check if already patched (0x90 = NOP) -> safely skip and avoid zero-overwrite on unload
+	if (firstByte == 0x90 && secondByte == 0x90)
+	{
+		LogMessage("[BotRouteFix] [Patch 3] Already patched (NOPs present @ %X), skipping", g_pC4PlantDelayPatchAddress);
+		g_bC4PlantDelayPatched = false;
+		delete gc;
+		return;
+	}
+
+	// Verify expected jump opcode (32-bit: 0x0F 0x82, 64-bit: 0x0F 0x87)
+	if (g_bIsWin64)
+	{
+		if (firstByte != 0x0F || secondByte != 0x87)
+		{
+			delete gc;
+			SetFailState("[BotRouteFix] [Patch 3] Byte mismatch at %X (expected 0F 87, got %02X %02X), patch aborted!",
+				g_pC4PlantDelayPatchAddress, firstByte, secondByte);
+			return;
+		}
+	}
+	else
+	{
+		if (firstByte != 0x0F || secondByte != 0x82)
+		{
+			delete gc;
+			SetFailState("[BotRouteFix] [Patch 3] Byte mismatch at %X (expected 0F 82, got %02X %02X), patch aborted!",
+				g_pC4PlantDelayPatchAddress, firstByte, secondByte);
+			return;
+		}
+	}
+
+	// Backup original 6 bytes
+	for (int i = 0; i < 6; i++)
+	{
+		g_iOriginalC4PlantDelayBytes[i] = LoadFromAddress(g_pC4PlantDelayPatchAddress + view_as<Address>(i), NumberType_Int8);
+	}
+
+	// Apply 6x NOPs
+	for (int i = 0; i < 6; i++)
+	{
+		StoreToAddress(g_pC4PlantDelayPatchAddress + view_as<Address>(i), 0x90, NumberType_Int8, true);
+	}
+
+	g_bC4PlantDelayPatched = true;
+	LogMessage("[BotRouteFix] [Patch 3] Replaced IsTimeToPlantBomb delay jump with 6x NOPs @ %X (C4 Carrier Instant Plant Activated)", g_pC4PlantDelayPatchAddress);
+
+	delete gc;
+}
+
+void RestoreC4PlantDelayPatch()
+{
+	if (g_bC4PlantDelayPatched && g_pC4PlantDelayPatchAddress != Address_Null)
+	{
+		for (int i = 0; i < 6; i++)
+		{
+			StoreToAddress(g_pC4PlantDelayPatchAddress + view_as<Address>(i), g_iOriginalC4PlantDelayBytes[i], NumberType_Int8, true);
+		}
+		LogMessage("[BotRouteFix] [Patch 3] Restored original C4 plant delay jump @ %X", g_pC4PlantDelayPatchAddress);
+		g_bC4PlantDelayPatched = false;
+	}
+}

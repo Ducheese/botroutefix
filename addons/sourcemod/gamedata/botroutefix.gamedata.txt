@@ -22,12 +22,6 @@
 				"windows"	"\xF3\x0F\x10\x40\x0C\x0F\x2F\x86\x38\x1A\x00\x00\x0F\x82"
 				"windows64"	"\x48\x8B\x1D\x2A\x2A\x2A\x2A\x48\x8B\x05\x2A\x2A\x2A\x2A\xF3\x0F\x10\x83\x6C\x1B\x00\x00\x0F\x2F\x40\x0C\x0F\x87"
 			}
-			"CCSBotManager_GetRandomZone"
-			{
-				"library"	"server"
-				"windows"	"\x55\x8B\xEC\x83\xEC\x20\x53\x8B\xD9\x33\xC0\x89\x5D\xFC\x8B\x8B\x2C\x1A\x00\x00\x85\xC9\x0F\x84\x2A\x2A\x2A\x2A\x56"
-				"windows64"	"\x41\x57\x48\x83\xEC\x40\x8B\x81\x60\x1B\x00\x00\x4C\x8B\xF9\x85\xC0\x75\x2A\x33\xC0\x48\x83\xC4\x40\x41\x5F\xC3"
-			}
 			"CCSBot_ComputePath"
 			{
 				"library"	"server"
@@ -79,10 +73,6 @@
 			{
 				"signature"	"IdleState_C4PlantDelay"
 			}
-			"CCSBotManager_GetRandomZone"
-			{
-				"signature"	"CCSBotManager_GetRandomZone"
-			}
 		}
 		"Offsets"
 		{
@@ -100,11 +90,6 @@
 			{
 				"windows"	"12"
 				"windows64"	"26"
-			}
-			"C4RandomZone_PatchOffset"
-			{
-				"windows"	"18"
-				"windows64"	"71"
 			}
 			"CCSBot_Path_Offset"
 			{
