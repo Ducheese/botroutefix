@@ -33,6 +33,15 @@
 
 ---
 
+### 模块 3：全动态走廊 Danger 预约与多路分流 (Dynamic Corridor Reservation & Route Splitting)
+* **状态**：**已实装 (v0.5.0)**
+* **逆向根因**：
+  官方 A* 寻路算法（`CCSBot::ComputePath`）在起点与终点相同时，为同一队伍计算出的路径 100% 重合（如全队走 A 门），且静态队友密度惩罚过弱，导致 Bot 队伍在狭窄走廊开火车拥堵。
+* **修复机制**：
+  Hook `CCSBot::ComputePath` Post 阶段。当前排 Bot 成功生成路径后，遍历其路径前沿 5 个 `CNavArea` 节点，动态注入 `+0.8f` 的 `m_danger` 占用阻力。后排队友在规划路线时，A* 算法检测到前沿走廊拥堵代价，自动分支转向副道/侧翼（如小道、中路），实现全图自然兵分多路与两翼包抄协同。
+
+---
+
 ## 支持架构 (Supported Architectures)
 
 - **32-bit**：Windows non-Steam (v91/v92) `server.dll`
@@ -42,7 +51,7 @@
 
 ## 逆向签名与结构体档案库 (Reverse Engineering Archive - Future Modules)
 
-以下所有签名与成员偏移量均已在 32 位与 64 位官方 `server.dll` 中通过 IDA Pro 实机逆向，并通过 `find_bytes` 验证为 **100% 唯一匹配**，供后续分流、寻路留痕与防卡死模块直接调用。
+以下所有签名与成员偏移量均已在 32 位与 64 位官方 `server.dll` 中通过 IDA Pro 实机逆向，并通过 `find_bytes` 验证为 **100% 唯一匹配**。
 
 ### 1. 核心函数唯一签名 (Signatures)
 
@@ -51,7 +60,7 @@
 | **`IdleState_GuardBombsiteChance`** | `0x102BBE15` | `0x18036448C` | `IdleState::OnUpdate` 守包点概率跳转拦截点 (已使用) |
 | **`IdleState_DefenseRush`** | `0x102BBDED` | `0x18036444C` | `IdleState::OnUpdate` 全队 33.3% 前冲跳转拦截点 (已使用) |
 | **`IdleState_C4PlantDelay`** | `0x102BB882` | `0x180363E0D` | `IdleState::OnUpdate` 包匪 10~30s 延迟与选点拦截点 (已使用) |
-| **`CCSBot_ComputePath`** | `0x102A2000` | `0x180343550` | `bool CCSBot::ComputePath(const Vector &goal, int route)` (A* 核心寻路) |
+| **`CCSBot_ComputePath`** | `0x102A2000` | `0x180343550` | `bool CCSBot::ComputePath(const Vector &goal, int route)` (A* 核心寻路) (已使用) |
 | **`HuntState_OnUpdate`** | `0x102BA430` | `0x180362350` | `void HuntState::OnUpdate(CCSBot *me)` (搜敌目标选择) |
 | **`CCSBot_MoveToInitialEncounter`** | `0x102A6FF0` | `0x180349CF0` | `bool CCSBot::MoveToInitialEncounter()` (开局交火线推进) |
 | **`PathCost_FriendDensity`** | `0x10292CB0` | `0x18032D2B0` | `PathCost::operator()` (50000.0f 队友密度代价读取点) |
@@ -62,8 +71,8 @@
 
 | 结构体与成员 | 32-bit (v91/v92) | 64-bit (Steam x64) | 数据类型与说明 |
 | :--- | :--- | :--- | :--- |
-| **`CCSBot::m_path`** | `+0x1C28` (**步长 24B**) | `+0x2108` (**步长 32B**) | 寻路节点数组 `ConnectInfo[256]` |
-| **`CCSBot::m_pathLength`** | `+0x3428` | `+0x4108` | 当前路径总节点数 (int32) |
+| **`CCSBot::m_path`** | `+0x1C28` (**步长 24B**) | `+0x2108` (**步长 32B**) | 寻路节点数组 `ConnectInfo[256]` (已使用) |
+| **`CCSBot::m_pathLength`** | `+0x3428` | `+0x4108` | 当前路径总节点数 (int32) (已使用) |
 | **`CCSBot::m_lastKnownArea`** | `+0x1C14` | `+0x20F0` | Bot 当前所在的 `CNavArea*` |
 | **`CCSBot::m_task`** | `+0x1BF8` | `+0x20D0` | 当前任务枚举 `BotTaskType` (1 = PLANT_BOMB, 7 = GUARD_BOMB_ZONE) |
 | **`CCSBot::m_isWaitingBehindFriend`** | `+0x345C` | `+0x4150` | 遇到队友挡路的礼貌等待标志位 (bool/int8) |
@@ -71,6 +80,6 @@
 | **`HuntState::m_huntArea`** | `+0x04` | `+0x08` | 选定的搜敌目标 `CNavArea*` |
 | **`CNavArea::m_center`** | `+0x2C` | `+0x30` | 区域三维几何中心 `Vector` (12B) |
 | **`CNavArea::m_clearedTimestamp`** | `+0xB4` | `+0xF8` | `float[2]`，最后被 T/CT 清理的时间戳 |
-| **`CNavArea::m_danger`** | `+0xC8` | `+0x100` | `float[2]`，阵营动态危险惩罚值 |
-| **`CNavArea::m_dangerTimestamp`** | `+0xD0` | `+0x108` | `float[2]`，Danger 最后更新时间戳 |
+| **`CNavArea::m_danger`** | `+0xC8` | `+0x100` | `float[2]`，阵营动态危险惩罚值 (已使用) |
+| **`CNavArea::m_dangerTimestamp`** | `+0xD0` | `+0x108` | `float[2]`，Danger 最后更新时间戳 (已使用) |
 | **`CNavArea::m_earliestOccupyTime`** | `+0xD4` | `+0x120` | `float[2]`，双方最早到达该区时间 |
