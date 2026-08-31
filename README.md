@@ -63,11 +63,20 @@
 ---
 
 ### 模块 6：搜敌目标即时抢占与全图打散 (Hunt Target Claim & Flush / Anti-Swarm Search)
-* **状态**：**已实装 (v0.8.0)**
+* **状态**：**已实装**
 * **逆向根因**：
   在 `cs_bot_hunt.cpp` 的 `HuntState::OnUpdate()` 中，Bot 在全图搜点时会计算最久未搜区域（`oldest cleared`），但挑中后官方源码未更新时间戳，导致全队 3~4 个存活 Bot 算出来的目标完全一模一样，残局时全队挤进同一个死胡同角落。
 * **修复机制**：
   Detour `HuntState::OnUpdate` Post 阶段。一旦 Bot 选定目标区域 `m_huntArea`，插件立即将该区域的 `m_clearedTimestamp` 刷新为当前时间戳。后排队友在下一帧算路时，该区域已不再是最老区域，算法强制队友去搜全图其他要道与走廊，瞬间实现全图 100% 互不重复的立体网状排查！
+
+---
+
+### 模块 7：C4 掉落单人拾取与团队火力掩护 (NoticeLooseBomb / Single Retriever & Tactical Cover)
+* **状态**：**已实装 (v0.9.0)**
+* **逆向根因**：
+  在 `cs_bot.cpp` 的 `CCSBot::NoticeLooseBomb()` 中，官方写死只要地图上有掉落 C4，对全队所有 T 队员恒返回 `true`，导致包匪倒地后全队所有存活队友全部切换为 `FetchBombState` 像踢足球一样蜂拥哄抢 C4，在狭窄路口被 CT 一颗手雷全部团灭。
+* **修复机制**：
+  Detour `CCSBot::NoticeLooseBomb` Post 阶段。检测全队存活 T 成员与地上 C4 的三维空间距离，**仅对物理距离最近的 1 名 T 队员返回 `true` 前去捡包**；对其余队友强制覆写为 `false`，使其继续维持在 `HuntState` 中就地反击、原地架枪掩护，形成完美的“单人捡包 + 全队火力掩护”专业战术协同。
 
 ---
 
@@ -93,6 +102,7 @@
 | **`CCSBot_Follow`** | `0x102A6B60` | `0x1803496E0` | `void CCSBot::Follow(CCSPlayer *leader)` (保镖跟随) (已使用) |
 | **`CCSBot_StopFollowing`** | `0x102A73C0` | `0x18034A1A0` | `void CCSBot::StopFollowing()` (解除跟随) (已使用) |
 | **`HuntState_OnUpdate`** | `0x102BA430` | `0x180362350` | `void HuntState::OnUpdate(CCSBot *me)` (搜敌目标选择) (已使用) |
+| **`CCSBot_NoticeLooseBomb`** | `0x102914F0` | `0x18032B600` | `bool CCSBot::NoticeLooseBomb()` (掉落 C4 感知) (已使用) |
 | **`CCSBot_MoveToInitialEncounter`** | `0x102A6FF0` | `0x180349CF0` | `bool CCSBot::MoveToInitialEncounter()` (开局交火线推进) |
 | **`PathCost_FriendDensity`** | `0x10292CB0` | `0x18032D2B0` | `PathCost::operator()` (50000.0f 队友密度代价读取点) |
 | **`CCSBot_Hide`** | `0x102A6D50` | `0x180349940` | `bool CCSBot::Hide(CNavArea *area, ...)` (掩体潜伏与架枪) |

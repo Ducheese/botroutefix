@@ -34,6 +34,11 @@
 //      Detour HuntState::OnUpdate Post 阶段，一旦 Bot 选定目标区域立即刷新其 m_clearedTimestamp，
 //      驱使后续队友必须选择全图其他不同要道与战区，实现全队兵力 100% 互不重复的立体多路排查。
 //
+// [模块 7：C4 掉落单人拾取与团队火力掩护 (NoticeLooseBomb / Single Retriever & Tactical Cover)]
+//   9. 解决官方 NoticeLooseBomb 只要有掉落 C4 便对全队所有 T 恒为 true 导致的“全员哄抢送死”缺陷。
+//      Detour CCSBot::NoticeLooseBomb Post 阶段，仅对物理距离最近的 1 名 T 队员返回 true 前去捡包，
+//      其余队友保持 false 维持 HuntState 状态，就地架枪、反打敌人并提供火力掩护。
+//
 // 支持架构：
 //   - 32-bit: Windows non-Steam (v91/v92) server.dll
 //   - 64-bit: Windows Steam x64 server.dll
@@ -47,7 +52,7 @@
 #include <dhooks>
 
 #define GAMEDATA "botroutefix.gamedata"
-#define PLUGIN_VERSION "0.8.0"
+#define PLUGIN_VERSION "0.9.0"
 
 //========================================================================================
 // HANDLES & VARIABLES
@@ -100,6 +105,9 @@ Handle g_hHuntStateDetour = INVALID_HANDLE;
 int g_iOffset_HuntArea = 0;
 int g_iOffset_ClearedTimestamp = 0;
 
+// Module 7: Single Retriever & Tactical Cover (NoticeLooseBomb Post Detour)
+Handle g_hNoticeLooseBombDetour = INVALID_HANDLE;
+
 //========================================================================================
 // PLUGIN INFO
 //========================================================================================
@@ -108,7 +116,7 @@ public Plugin myinfo =
 {
 	name        = "Bot Route Fix",
 	author      = "Ducheese",
-	description = "CS:S Bot 寻路与战术决策底层修复 (CT 守包/防冲 + T 运包/50%选点 + 走廊分流 + 1.2s排队打碎 + C4保镖护送 + 搜点抢占打散)",
+	description = "CS:S Bot 寻路与战术决策底层修复 (CT 守包/防冲 + T 运包/50%选点 + 走廊分流 + 1.2s排队打碎 + C4保镖护送 + 搜点抢占 + 单人捡包掩护)",
 	version     = PLUGIN_VERSION,
 	url         = "https://github.com/Ducheese"
 };
@@ -130,6 +138,7 @@ public void OnPluginStart()
 	StartQueueBreakerTimer();
 	PrepFollowSDKCalls();
 	PrepHuntStateHook();
+	PrepNoticeLooseBombHook();
 	HookGameEvents();
 
 	LogMessage("[BotRouteFix] ========== Initialization Complete on %s ==========", g_bIsWin64 ? "64-bit (Steam x64)" : "32-bit (non-Steam)");
@@ -144,6 +153,7 @@ public void OnPluginEnd()
 	RestoreC4RandomZonePatch();
 	RestoreComputePathHook();
 	RestoreHuntStateHook();
+	RestoreNoticeLooseBombHook();
 }
 
 //========================================================================================
@@ -854,6 +864,18 @@ void AssignCarrierBodyguards()
 	if (carrier <= 0 || !IsPlayerAlive(carrier))
 		return;
 
+	// Reset all active followers first to strictly enforce the bodyguard quota
+	for (int i = 1; i <= MaxClients; i++)
+	{
+		if (IsClientInGame(i) && IsPlayerAlive(i) && GetClientTeam(i) == 2 && IsFakeClient(i))
+		{
+			if (g_hStopFollowingSDKCall != null)
+			{
+				SDKCall(g_hStopFollowingSDKCall, i);
+			}
+		}
+	}
+
 	// Collect alive T teammates (excluding the carrier)
 	int teammates[MAXPLAYERS + 1];
 	int teammateCount = 0;
@@ -1000,4 +1022,116 @@ public MRESReturn Hook_HuntState_OnUpdate_Post(Address pThis, DHookParam hParams
 	StoreToAddress(pClearedTimestampAddr, view_as<int>(curtime), NumberType_Int32);
 
 	return MRES_Ignored;
+}
+
+//========================================================================================
+// MODULE 7: SINGLE RETRIEVER & TACTICAL COVER (CCSBot::NoticeLooseBomb Post Detour)
+//========================================================================================
+
+void PrepNoticeLooseBombHook()
+{
+	Handle gc = LoadGameConfigFile(GAMEDATA);
+	if (gc == null)
+		return;
+
+	g_hNoticeLooseBombDetour = DHookCreateDetour(Address_Null, CallConv_THISCALL, ReturnType_Bool, ThisPointer_CBaseEntity);
+	if (g_hNoticeLooseBombDetour == null)
+	{
+		delete gc;
+		SetFailState("[BotRouteFix] [Module 7] Failed to create DHook detour for CCSBot_NoticeLooseBomb!");
+		return;
+	}
+
+	if (!DHookSetFromConf(g_hNoticeLooseBombDetour, gc, SDKConf_Signature, "CCSBot_NoticeLooseBomb"))
+	{
+		delete gc;
+		SetFailState("[BotRouteFix] [Module 7] Failed to find signature for CCSBot_NoticeLooseBomb in gamedata!");
+		return;
+	}
+
+	if (!DHookEnableDetour(g_hNoticeLooseBombDetour, true, Hook_NoticeLooseBomb_Post))
+	{
+		delete gc;
+		SetFailState("[BotRouteFix] [Module 7] Failed to enable post detour for CCSBot_NoticeLooseBomb!");
+		return;
+	}
+
+	LogMessage("[BotRouteFix] [Module 7] Hooked CCSBot::NoticeLooseBomb Post (Single Retriever & Tactical Cover Activated)");
+	delete gc;
+}
+
+void RestoreNoticeLooseBombHook()
+{
+	if (g_hNoticeLooseBombDetour != null)
+	{
+		DHookDisableDetour(g_hNoticeLooseBombDetour, true, Hook_NoticeLooseBomb_Post);
+		delete g_hNoticeLooseBombDetour;
+		g_hNoticeLooseBombDetour = null;
+	}
+}
+
+public MRESReturn Hook_NoticeLooseBomb_Post(int client, Handle hReturn)
+{
+	if (client <= 0 || client > MaxClients || !IsClientInGame(client) || !IsPlayerAlive(client))
+		return MRES_Ignored;
+
+	if (GetClientTeam(client) != 2) // Terrorists only
+		return MRES_Ignored;
+
+	// Only intercept if the official logic returned true (meaning loose C4 exists)
+	if (!DHookGetReturn(hReturn))
+		return MRES_Ignored;
+
+	int looseBomb = GetLooseBombEntity();
+	if (looseBomb == -1)
+		return MRES_Ignored;
+
+	float bombPos[3];
+	GetEntPropVector(looseBomb, Prop_Data, "m_vecAbsOrigin", bombPos);
+
+	int closestT = 0;
+	float closestDist = 99999999.0;
+
+	for (int i = 1; i <= MaxClients; i++)
+	{
+		if (IsClientInGame(i) && IsPlayerAlive(i) && GetClientTeam(i) == 2)
+		{
+			float pos[3];
+			GetClientAbsOrigin(i, pos);
+			float dist = GetVectorDistance(pos, bombPos);
+			if (dist < closestDist)
+			{
+				closestDist = dist;
+				closestT = i;
+			}
+		}
+	}
+
+	// Only the single closest T retrieves the bomb; all other Ts maintain HuntState to provide cover!
+	if (client == closestT)
+	{
+		return MRES_Ignored;
+	}
+	else
+	{
+		DHookSetReturn(hReturn, false);
+		return MRES_Override;
+	}
+}
+
+int GetLooseBombEntity()
+{
+	int ent = -1;
+	while ((ent = FindEntityByClassname(ent, "weapon_c4")) != -1)
+	{
+		if (IsValidEntity(ent))
+		{
+			int owner = GetEntPropEnt(ent, Prop_Data, "m_hOwnerEntity");
+			if (owner <= 0 || owner > MaxClients)
+			{
+				return ent;
+			}
+		}
+	}
+	return -1;
 }
