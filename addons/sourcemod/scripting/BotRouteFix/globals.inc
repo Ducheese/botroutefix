@@ -45,8 +45,9 @@ Handle g_hHuntStateDetour = INVALID_HANDLE;
 int g_iOffset_HuntArea = 0;
 int g_iOffset_ClearedTimestamp = 0;
 
-// Module 7: Single Retriever & Tactical Cover (NoticeLooseBomb Post Detour)
-Handle g_hNoticeLooseBombDetour = INVALID_HANDLE;
+// Module 7: C4 Loose Bomb Top 3 Tactical Retriever (NavMesh Path Walk Distance)
+int g_iOffset_Path = 0;
+int g_iPathStride = 0;
 
 // Module 8: CT Designated Defuser & Crossfire Guard
 Handle g_hHideSDKCall = INVALID_HANDLE;
@@ -74,6 +75,8 @@ void PrepOffsets()
 	g_iOffset_Danger = GameConfGetOffset(gc, "NavArea_Danger_Offset");
 	g_iOffset_DangerTimestamp = GameConfGetOffset(gc, "NavArea_DangerTimestamp_Offset");
 
+	g_iOffset_Path = GameConfGetOffset(gc, "CCSBot_Path_Offset");
+	g_iPathStride = GameConfGetOffset(gc, "CCSBot_PathStride");
 	g_iOffset_PathLength = GameConfGetOffset(gc, "CCSBot_PathLength_Offset");
 	g_iOffset_IsWaitingBehindFriend = GameConfGetOffset(gc, "CCSBot_IsWaitingBehindFriend_Offset");
 	g_iOffset_PoliteTimer = GameConfGetOffset(gc, "CCSBot_PoliteTimer_Offset");
@@ -85,7 +88,7 @@ void PrepOffsets()
 	g_iOffset_ClearedTimestamp = GameConfGetOffset(gc, "NavArea_ClearedTimestamp_Offset");
 
 	if (g_iOffset_Danger == -1 || g_iOffset_DangerTimestamp == -1 ||
-		g_iOffset_PathLength == -1 ||
+		g_iOffset_Path == -1 || g_iPathStride == -1 || g_iOffset_PathLength == -1 ||
 		g_iOffset_IsWaitingBehindFriend == -1 || g_iOffset_PoliteTimer == -1 ||
 		g_iOffset_IsStopping == -1 || g_iOffset_PathLadder == -1 ||
 		g_iOffset_Task == -1 ||
