@@ -54,11 +54,20 @@
 ---
 
 ### 模块 5：T 阵营 C4 包匪专属护卫与保镖协同 (T C4 Carrier Escort & Bodyguard System)
-* **状态**：**已实装 (v0.7.0)**
+* **状态**：**已实装**
 * **逆向根因**：
   在官方源码 `cs_bot_update.cpp` 中，自动跟随（AutoFollow）仅对人类玩家生效（`GetClosestVisibleHumanFriend`），对带包的 Bot 队友完全无视；且不带包的 T 队员在下包前只有冲 CT 家（`Hunt`）或冲交火线的逻辑，导致包匪永远单刀赴会、队友全部脱节送命。
 * **修复机制**：
   在回合开局冻结结束及 C4 被捡起时，按队伍存活比例挑选距离包匪最近的 **1~2 名 T 队友** 调用原生 `CCSBot::Follow` 成为专属贴身保镖，走在包匪身前身侧负责拉枪线、架枪探点与防丢包；下包后由引擎底层 `OnBombPlanted` 自动调用 `StopFollowing()` 解除跟随，无缝切换为 `GUARD_TICKING_BOMB` 掩体守包。
+
+---
+
+### 模块 6：搜敌目标即时抢占与全图打散 (Hunt Target Claim & Flush / Anti-Swarm Search)
+* **状态**：**已实装 (v0.8.0)**
+* **逆向根因**：
+  在 `cs_bot_hunt.cpp` 的 `HuntState::OnUpdate()` 中，Bot 在全图搜点时会计算最久未搜区域（`oldest cleared`），但挑中后官方源码未更新时间戳，导致全队 3~4 个存活 Bot 算出来的目标完全一模一样，残局时全队挤进同一个死胡同角落。
+* **修复机制**：
+  Detour `HuntState::OnUpdate` Post 阶段。一旦 Bot 选定目标区域 `m_huntArea`，插件立即将该区域的 `m_clearedTimestamp` 刷新为当前时间戳。后排队友在下一帧算路时，该区域已不再是最老区域，算法强制队友去搜全图其他要道与走廊，瞬间实现全图 100% 互不重复的立体网状排查！
 
 ---
 
@@ -83,7 +92,7 @@
 | **`CCSBot_ComputePath`** | `0x102A2000` | `0x180343550` | `bool CCSBot::ComputePath(const Vector &goal, int route)` (A* 核心寻路) (已使用) |
 | **`CCSBot_Follow`** | `0x102A6B60` | `0x1803496E0` | `void CCSBot::Follow(CCSPlayer *leader)` (保镖跟随) (已使用) |
 | **`CCSBot_StopFollowing`** | `0x102A73C0` | `0x18034A1A0` | `void CCSBot::StopFollowing()` (解除跟随) (已使用) |
-| **`HuntState_OnUpdate`** | `0x102BA430` | `0x180362350` | `void HuntState::OnUpdate(CCSBot *me)` (搜敌目标选择) |
+| **`HuntState_OnUpdate`** | `0x102BA430` | `0x180362350` | `void HuntState::OnUpdate(CCSBot *me)` (搜敌目标选择) (已使用) |
 | **`CCSBot_MoveToInitialEncounter`** | `0x102A6FF0` | `0x180349CF0` | `bool CCSBot::MoveToInitialEncounter()` (开局交火线推进) |
 | **`PathCost_FriendDensity`** | `0x10292CB0` | `0x18032D2B0` | `PathCost::operator()` (50000.0f 队友密度代价读取点) |
 | **`CCSBot_Hide`** | `0x102A6D50` | `0x180349940` | `bool CCSBot::Hide(CNavArea *area, ...)` (掩体潜伏与架枪) |
@@ -99,11 +108,11 @@
 | **`CCSBot::m_politeTimer`** | `+0x3450` | `+0x4140` | 礼貌等待计时器 `CountdownTimer` (已使用) |
 | **`CCSBot::m_isStopping`** | `+0x1C20` | `+0x2100` | 减速停车标志位 (bool/int8) (已使用) |
 | **`CCSBot::m_pathLadder`** | `+0x3468` | `+0x4160` | 当前梯子指针 (pointer) (已使用) |
+| **`HuntState::m_huntArea`** | `+0x04` | `+0x08` | 选定的搜敌目标 `CNavArea*` (已使用) |
+| **`CNavArea::m_clearedTimestamp`** | `+0xB4` (`180`) | `+0xF8` (`248`) | `float[2]`，最后被 T/CT 清理的时间戳 (已使用) |
+| **`CNavArea::m_center`** | `+0x2C` | `+0x30` | 区域三维几何中心 `Vector` (12B) |
+| **`CNavArea::m_danger`** | `+0xC8` (`200`) | `+0x100` (`256`) | `float[2]`，阵营动态危险惩罚值 (已使用) |
+| **`CNavArea::m_dangerTimestamp`** | `+0xD0` (`208`) | `+0x108` (`264`) | `float[2]`，Danger 最后更新时间戳 (已使用) |
 | **`CCSBot::m_lastKnownArea`** | `+0x1C14` | `+0x20F0` | Bot 当前所在的 `CNavArea*` |
 | **`CCSBot::m_task`** | `+0x1BF8` | `+0x20D0` | 当前任务枚举 `BotTaskType` |
-| **`HuntState::m_huntArea`** | `+0x04` | `+0x08` | 选定的搜敌目标 `CNavArea*` |
-| **`CNavArea::m_center`** | `+0x2C` | `+0x30` | 区域三维几何中心 `Vector` (12B) |
-| **`CNavArea::m_clearedTimestamp`** | `+0xB4` | `+0xF8` | `float[2]`，最后被 T/CT 清理的时间戳 |
-| **`CNavArea::m_danger`** | `+0xC8` | `+0x100` | `float[2]`，阵营动态危险惩罚值 (已使用) |
-| **`CNavArea::m_dangerTimestamp`** | `+0xD0` | `+0x108` | `float[2]`，Danger 最后更新时间戳 (已使用) |
 | **`CNavArea::m_earliestOccupyTime`** | `+0xD4` | `+0x120` | `float[2]`，双方最早到达该区时间 |

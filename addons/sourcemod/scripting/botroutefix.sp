@@ -29,6 +29,11 @@
 //      开局及捡包时，按存活比例挑选距离包匪最近的 1~2 名 T 队友调用原生 CCSBot::Follow
 //      贴身护送包匪，负责探路、掩护补枪与秒捡掉落 C4；下包后由引擎底层自动解除跟随并就地守包。
 //
+// [模块 6：搜敌目标即时抢占与全图打散 (Hunt Target Claim & Flush / Anti-Swarm Search)]
+//   8. 解决官方 HuntState 选定全图最久未搜区域（oldest cleared）后不刷新时间戳的缺陷。
+//      Detour HuntState::OnUpdate Post 阶段，一旦 Bot 选定目标区域立即刷新其 m_clearedTimestamp，
+//      驱使后续队友必须选择全图其他不同要道与战区，实现全队兵力 100% 互不重复的立体多路排查。
+//
 // 支持架构：
 //   - 32-bit: Windows non-Steam (v91/v92) server.dll
 //   - 64-bit: Windows Steam x64 server.dll
@@ -42,7 +47,7 @@
 #include <dhooks>
 
 #define GAMEDATA "botroutefix.gamedata"
-#define PLUGIN_VERSION "0.7.0"
+#define PLUGIN_VERSION "0.8.0"
 
 //========================================================================================
 // HANDLES & VARIABLES
@@ -90,6 +95,11 @@ Handle g_hQueueBreakerTimer = INVALID_HANDLE;
 Handle g_hFollowSDKCall = INVALID_HANDLE;
 Handle g_hStopFollowingSDKCall = INVALID_HANDLE;
 
+// Module 6: Hunt Target Claim & Flush (HuntState::OnUpdate Post Detour)
+Handle g_hHuntStateDetour = INVALID_HANDLE;
+int g_iOffset_HuntArea = 0;
+int g_iOffset_ClearedTimestamp = 0;
+
 //========================================================================================
 // PLUGIN INFO
 //========================================================================================
@@ -98,7 +108,7 @@ public Plugin myinfo =
 {
 	name        = "Bot Route Fix",
 	author      = "Ducheese",
-	description = "CS:S Bot 寻路与战术决策底层修复 (CT 守包/防冲 + T 运包/50%选点 + 走廊分流 + 1.2s排队打碎 + C4保镖护送)",
+	description = "CS:S Bot 寻路与战术决策底层修复 (CT 守包/防冲 + T 运包/50%选点 + 走廊分流 + 1.2s排队打碎 + C4保镖护送 + 搜点抢占打散)",
 	version     = PLUGIN_VERSION,
 	url         = "https://github.com/Ducheese"
 };
@@ -119,6 +129,7 @@ public void OnPluginStart()
 	PrepComputePathHook();
 	StartQueueBreakerTimer();
 	PrepFollowSDKCalls();
+	PrepHuntStateHook();
 	HookGameEvents();
 
 	LogMessage("[BotRouteFix] ========== Initialization Complete on %s ==========", g_bIsWin64 ? "64-bit (Steam x64)" : "32-bit (non-Steam)");
@@ -132,6 +143,7 @@ public void OnPluginEnd()
 	RestoreC4PlantDelayPatch();
 	RestoreC4RandomZonePatch();
 	RestoreComputePathHook();
+	RestoreHuntStateHook();
 }
 
 //========================================================================================
@@ -160,10 +172,14 @@ void PrepOffsets()
 	g_iOffset_IsStopping = GameConfGetOffset(gc, "CCSBot_IsStopping_Offset");
 	g_iOffset_PathLadder = GameConfGetOffset(gc, "CCSBot_PathLadder_Offset");
 
+	g_iOffset_HuntArea = GameConfGetOffset(gc, "HuntState_HuntArea_Offset");
+	g_iOffset_ClearedTimestamp = GameConfGetOffset(gc, "NavArea_ClearedTimestamp_Offset");
+
 	if (g_iOffset_Path == -1 || g_iPathStride == -1 || g_iOffset_PathLength == -1 ||
 		g_iOffset_Danger == -1 || g_iOffset_DangerTimestamp == -1 ||
 		g_iOffset_IsWaitingBehindFriend == -1 || g_iOffset_PoliteTimer == -1 ||
-		g_iOffset_IsStopping == -1 || g_iOffset_PathLadder == -1)
+		g_iOffset_IsStopping == -1 || g_iOffset_PathLadder == -1 ||
+		g_iOffset_HuntArea == -1 || g_iOffset_ClearedTimestamp == -1)
 	{
 		delete gc;
 		SetFailState("[BotRouteFix] Failed to read one or more offsets from gamedata!");
@@ -908,4 +924,80 @@ int GetC4Carrier()
 		}
 	}
 	return 0;
+}
+
+//========================================================================================
+// MODULE 6: HUNT TARGET CLAIM & FLUSH (HuntState::OnUpdate Post Detour)
+//========================================================================================
+
+void PrepHuntStateHook()
+{
+	Handle gc = LoadGameConfigFile(GAMEDATA);
+	if (gc == null)
+		return;
+
+	g_hHuntStateDetour = DHookCreateDetour(Address_Null, CallConv_THISCALL, ReturnType_Void, ThisPointer_Address);
+	if (g_hHuntStateDetour == null)
+	{
+		delete gc;
+		SetFailState("[BotRouteFix] [Module 6] Failed to create DHook detour for HuntState_OnUpdate!");
+		return;
+	}
+
+	if (!DHookSetFromConf(g_hHuntStateDetour, gc, SDKConf_Signature, "HuntState_OnUpdate"))
+	{
+		delete gc;
+		SetFailState("[BotRouteFix] [Module 6] Failed to find signature for HuntState_OnUpdate in gamedata!");
+		return;
+	}
+
+	DHookAddParam(g_hHuntStateDetour, HookParamType_CBaseEntity);
+
+	if (!DHookEnableDetour(g_hHuntStateDetour, true, Hook_HuntState_OnUpdate_Post))
+	{
+		delete gc;
+		SetFailState("[BotRouteFix] [Module 6] Failed to enable post detour for HuntState_OnUpdate!");
+		return;
+	}
+
+	LogMessage("[BotRouteFix] [Module 6] Hooked HuntState::OnUpdate Post (Target Claim & Anti-Swarm Activated)");
+	delete gc;
+}
+
+void RestoreHuntStateHook()
+{
+	if (g_hHuntStateDetour != null)
+	{
+		DHookDisableDetour(g_hHuntStateDetour, true, Hook_HuntState_OnUpdate_Post);
+		delete g_hHuntStateDetour;
+		g_hHuntStateDetour = null;
+	}
+}
+
+public MRESReturn Hook_HuntState_OnUpdate_Post(Address pThis, DHookParam hParams)
+{
+	if (pThis == Address_Null)
+		return MRES_Ignored;
+
+	int client = hParams.Get(1);
+	if (client <= 0 || client > MaxClients || !IsClientInGame(client) || !IsPlayerAlive(client))
+		return MRES_Ignored;
+
+	int team = GetClientTeam(client);
+	if (team != 2 && team != 3) // 2=T, 3=CT
+		return MRES_Ignored;
+
+	int teamIdx = team - 2; // T=0, CT=1 (CS:S internal MAX_NAV_TEAMS index)
+
+	// Read m_huntArea from HuntState instance (+4 on 32-bit, +8 on 64-bit)
+	Address pArea = LoadAddressFromAddress(pThis + view_as<Address>(g_iOffset_HuntArea));
+	if (pArea == Address_Null)
+		return MRES_Ignored;
+
+	// Flush and claim this area immediately: set m_clearedTimestamp[teamIdx] = curtime
+	float curtime = GetGameTime();
+	Address pClearedTimestampAddr = pArea + view_as<Address>(g_iOffset_ClearedTimestamp + teamIdx * 4);
+	StoreToAddress(pClearedTimestampAddr, view_as<int>(curtime), NumberType_Int32);
+
+	return MRES_Ignored;
 }
