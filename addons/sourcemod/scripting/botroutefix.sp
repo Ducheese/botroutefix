@@ -19,6 +19,11 @@
 //      动态注入 +0.8f 的 m_danger 占用阻力，驱使后续队友的 A* 算法自动分支转向副道/侧翼，
 //      全图自然实现两翼包抄、兵分多路，彻底消除单一路线开火车拥堵。
 //
+// [模块 4：礼貌排队 1.2 秒超时打碎与门口掉头 (1.2s Queue Breaker & Anti-Jam Turnaround)]
+//   6. 监控 Bot 在狭窄门口/路口遇到队友挡路时的 m_isWaitingBehindFriend 礼貌等待状态。
+//      官方原版等待高达 3.5~5.0 秒导致开火车堵死，模块 4 在等待超过 1.2 秒（人类犹豫极限）
+//      时立即强制清空路径并打碎排队，配合模块 3 的走廊 Danger 阻力，驱使 Bot 立即掉头绕道。
+//
 // 支持架构：
 //   - 32-bit: Windows non-Steam (v91/v92) server.dll
 //   - 64-bit: Windows Steam x64 server.dll
@@ -32,7 +37,7 @@
 #include <dhooks>
 
 #define GAMEDATA "botroutefix.gamedata"
-#define PLUGIN_VERSION "0.5.0"
+#define PLUGIN_VERSION "0.6.0"
 
 //========================================================================================
 // HANDLES & VARIABLES
@@ -69,6 +74,13 @@ int g_iOffset_PathLength = 0;
 int g_iOffset_Danger = 0;
 int g_iOffset_DangerTimestamp = 0;
 
+// Module 4: 1.2s Queue Breaker & Doorway Turnaround
+int g_iOffset_IsWaitingBehindFriend = 0;
+int g_iOffset_PoliteTimer = 0;
+int g_iOffset_IsStopping = 0;
+int g_iOffset_PathLadder = 0;
+Handle g_hQueueBreakerTimer = INVALID_HANDLE;
+
 //========================================================================================
 // PLUGIN INFO
 //========================================================================================
@@ -77,7 +89,7 @@ public Plugin myinfo =
 {
 	name        = "Bot Route Fix",
 	author      = "Ducheese",
-	description = "CS:S Bot 寻路与战术决策底层修复 (CT 守包/防冲 + T 运包/50%选点 + 全动态分流)",
+	description = "CS:S Bot 寻路与战术决策底层修复 (CT 守包/防冲 + T 运包/50%选点 + 走廊分流 + 1.2s排队打碎)",
 	version     = PLUGIN_VERSION,
 	url         = "https://github.com/Ducheese"
 };
@@ -96,12 +108,14 @@ public void OnPluginStart()
 	PrepC4PlantDelayPatch();
 	PrepC4RandomZonePatch();
 	PrepComputePathHook();
+	StartQueueBreakerTimer();
 
 	LogMessage("[BotRouteFix] ========== Initialization Complete on %s ==========", g_bIsWin64 ? "64-bit (Steam x64)" : "32-bit (non-Steam)");
 }
 
 public void OnPluginEnd()
 {
+	StopQueueBreakerTimer();
 	RestoreDefensePatch();
 	RestoreDefenseRushPatch();
 	RestoreC4PlantDelayPatch();
@@ -130,11 +144,18 @@ void PrepOffsets()
 	g_iOffset_Danger = GameConfGetOffset(gc, "NavArea_Danger_Offset");
 	g_iOffset_DangerTimestamp = GameConfGetOffset(gc, "NavArea_DangerTimestamp_Offset");
 
+	g_iOffset_IsWaitingBehindFriend = GameConfGetOffset(gc, "CCSBot_IsWaitingBehindFriend_Offset");
+	g_iOffset_PoliteTimer = GameConfGetOffset(gc, "CCSBot_PoliteTimer_Offset");
+	g_iOffset_IsStopping = GameConfGetOffset(gc, "CCSBot_IsStopping_Offset");
+	g_iOffset_PathLadder = GameConfGetOffset(gc, "CCSBot_PathLadder_Offset");
+
 	if (g_iOffset_Path == -1 || g_iPathStride == -1 || g_iOffset_PathLength == -1 ||
-		g_iOffset_Danger == -1 || g_iOffset_DangerTimestamp == -1)
+		g_iOffset_Danger == -1 || g_iOffset_DangerTimestamp == -1 ||
+		g_iOffset_IsWaitingBehindFriend == -1 || g_iOffset_PoliteTimer == -1 ||
+		g_iOffset_IsStopping == -1 || g_iOffset_PathLadder == -1)
 	{
 		delete gc;
-		SetFailState("[BotRouteFix] Failed to read one or more offsets for Corridor Reservation from gamedata!");
+		SetFailState("[BotRouteFix] Failed to read one or more offsets from gamedata!");
 		return;
 	}
 
@@ -651,4 +672,73 @@ public MRESReturn Hook_ComputePath_Post(int client, Handle hReturn, Handle hPara
 	}
 
 	return MRES_Ignored;
+}
+
+//========================================================================================
+// MODULE 4: 1.2S QUEUE BREAKER & DOORWAY TURNAROUND
+//========================================================================================
+
+void StartQueueBreakerTimer()
+{
+	if (g_hQueueBreakerTimer == INVALID_HANDLE)
+	{
+		g_hQueueBreakerTimer = CreateTimer(0.1, Timer_CheckPoliteQueue, _, TIMER_REPEAT);
+		LogMessage("[BotRouteFix] [Module 4] 1.2s Queue Breaker Timer Started (Doorway Jam Prevention Activated)");
+	}
+}
+
+void StopQueueBreakerTimer()
+{
+	if (g_hQueueBreakerTimer != INVALID_HANDLE)
+	{
+		KillTimer(g_hQueueBreakerTimer);
+		g_hQueueBreakerTimer = INVALID_HANDLE;
+	}
+}
+
+public Action Timer_CheckPoliteQueue(Handle timer)
+{
+	float curtime = GetGameTime();
+
+	for (int i = 1; i <= MaxClients; i++)
+	{
+		if (!IsClientInGame(i) || !IsPlayerAlive(i) || !IsFakeClient(i))
+			continue;
+
+		Address pBot = GetEntityAddress(i);
+		if (pBot == Address_Null)
+			continue;
+
+		int isWaiting = LoadFromAddress(pBot + view_as<Address>(g_iOffset_IsWaitingBehindFriend), NumberType_Int8);
+		if (!isWaiting)
+			continue;
+
+		int pathLength = LoadFromAddress(pBot + view_as<Address>(g_iOffset_PathLength), NumberType_Int32);
+		if (pathLength <= 0)
+			continue;
+
+		// Read CountdownTimer m_duration and m_timestamp (offset: +8/+12 on x64, +4/+8 on x86)
+		int durationOffset = g_bIsWin64 ? (g_iOffset_PoliteTimer + 8) : (g_iOffset_PoliteTimer + 4);
+		int timestampOffset = g_bIsWin64 ? (g_iOffset_PoliteTimer + 12) : (g_iOffset_PoliteTimer + 8);
+
+		float duration = view_as<float>(LoadFromAddress(pBot + view_as<Address>(durationOffset), NumberType_Int32));
+		float timestamp = view_as<float>(LoadFromAddress(pBot + view_as<Address>(timestampOffset), NumberType_Int32));
+
+		float startTime = timestamp - duration;
+		float elapsedWait = curtime - startTime;
+
+		// If bot has been politely waiting behind a friend for >= 1.2s, break the queue
+		if (elapsedWait >= 1.2 && duration > 0.0)
+		{
+			// 1. Clear waiting behind friend flag
+			StoreToAddress(pBot + view_as<Address>(g_iOffset_IsWaitingBehindFriend), 0, NumberType_Int8);
+
+			// 2. DestroyPath: clear stopping, pathLength, and pathLadder to force immediate repath
+			StoreToAddress(pBot + view_as<Address>(g_iOffset_IsStopping), 0, NumberType_Int8);
+			StoreToAddress(pBot + view_as<Address>(g_iOffset_PathLength), 0, NumberType_Int32);
+			StoreAddressToAddress(pBot + view_as<Address>(g_iOffset_PathLadder), Address_Null);
+		}
+	}
+
+	return Plugin_Continue;
 }
