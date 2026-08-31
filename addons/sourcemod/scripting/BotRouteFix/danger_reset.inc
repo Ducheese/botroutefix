@@ -69,14 +69,27 @@ void ResetAllNavAreaDanger()
 		if (pArea == Address_Null)
 			continue;
 
-		// 1. Reset Terrorist (index 0) and CT (index 1) danger values to 0.0f
-		StoreToAddress(pArea + view_as<Address>(g_iOffset_Danger), 0, NumberType_Int32);
-		StoreToAddress(pArea + view_as<Address>(g_iOffset_Danger + 4), 0, NumberType_Int32);
+		// 1. Read existing Terrorist (index 0) and CT (index 1) danger values
+		float dangerT = view_as<float>(LoadFromAddress(pArea + view_as<Address>(g_iOffset_Danger), NumberType_Int32));
+		float dangerCT = view_as<float>(LoadFromAddress(pArea + view_as<Address>(g_iOffset_Danger + 4), NumberType_Int32));
 
-		// 2. Reset danger timestamps to curtime
+		// 2. Soft decay: reduce danger by 80% (retain 20% residual memory for dynamic path variance)
+		dangerT *= 0.2;
+		dangerCT *= 0.2;
+
+		if (dangerT < 0.05)
+			dangerT = 0.0;
+		if (dangerCT < 0.05)
+			dangerCT = 0.0;
+
+		// 3. Store decayed danger values
+		StoreToAddress(pArea + view_as<Address>(g_iOffset_Danger), view_as<int>(dangerT), NumberType_Int32);
+		StoreToAddress(pArea + view_as<Address>(g_iOffset_Danger + 4), view_as<int>(dangerCT), NumberType_Int32);
+
+		// 4. Reset danger timestamps to curtime
 		StoreToAddress(pArea + view_as<Address>(g_iOffset_DangerTimestamp), view_as<int>(curtime), NumberType_Int32);
 		StoreToAddress(pArea + view_as<Address>(g_iOffset_DangerTimestamp + 4), view_as<int>(curtime), NumberType_Int32);
 	}
 
-	LogMessage("[BotRouteFix] [Module 3] Reset danger on all %d NavAreas for round restart", count);
+	LogMessage("[BotRouteFix] [Module 3] Soft-decayed danger (80%% reduction) on all %d NavAreas for round restart", count);
 }

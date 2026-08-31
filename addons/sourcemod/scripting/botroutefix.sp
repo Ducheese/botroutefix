@@ -13,9 +13,9 @@
 //   4. 解决官方 GetClosestZone 导致 T 包匪 100% 局数只冲近点缺陷，在 IdleState 运包决策点进行汇编级 64位/32位 内存即时数注入 (mov rax, imm64 / mov eax, imm32)，
 //      每回合开局 50%/50% 随机预选并锁定目标包点，整回合恒定有效，既实现全图随机战略进攻，又彻底杜绝 180 度横跳折返跑。
 //
-// [模块 3：开局全图 Danger 彻底重置 (Round Danger Reset)]
+// [模块 3：开局全图 Danger 软衰减 (Round Danger Soft Decay)]
 //   5. 遍历全局 CUtlVector<CNavArea*> TheNavAreas，在 round_start 时将全图各区域的
-//      m_danger[0] (T) 与 m_danger[1] (CT) 彻底清零并重置时间戳，彻底消除上一回合残局死人留下的跨回合“幽灵恐惧”假象。
+//      m_danger 衰减 80%（保留 20% 微弱战场记忆），既防止跨回合永久封路死锁，又为 A* 寻路注入动态扰动以产生多变进攻路线。
 //
 // [模块 4：礼貌排队 1.2 秒超时打碎与门口掉头 (1.2s Queue Breaker & Anti-Jam Turnaround)]
 //   6. 监控 Bot 在狭窄门口/路口遇到队友挡路时的 m_isWaitingBehindFriend 礼貌等待状态。
