@@ -69,9 +69,10 @@ public Action Timer_DefuseCoordination(Handle timer)
 		GetClientAbsOrigin(i, ctPos);
 		float distToBomb = GetVectorDistance(ctPos, g_fBombPlantedPos);
 
-		// Distance Gating: Only switch to Hide/Guard when CT enters the bombsite perimeter (<= 1500 units)
+		// Bombsite Gating: Native func_bomb_target trigger check + near-site fallback
 		// If farther away, let them continue sprinting to the bombsite via MoveTo!
-		if (distToBomb > 1500.0)
+		bool isAtSite = (GetEntProp(i, Prop_Send, "m_bInBombZone") == 1);
+		if (!isAtSite && distToBomb > 600.0)
 			continue;
 
 		Address pBot = GetEntityAddress(i);
@@ -87,8 +88,6 @@ public Action Timer_DefuseCoordination(Handle timer)
 			if (g_hHideSDKCall != null)
 			{
 				SDKCall(g_hHideSDKCall, i, Address_Null, -1.0, 0.0, false);
-				LogMessage("[BotRouteFix] [Module 8] CT %N reached site perimeter (%.0f units) -> assigned crossfire guard (Lead defuser is %N)",
-					i, distToBomb, g_iDesignatedDefuser);
 			}
 		}
 	}

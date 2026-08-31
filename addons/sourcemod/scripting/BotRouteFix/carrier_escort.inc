@@ -56,9 +56,9 @@ void AssignCarrierBodyguards()
 		}
 	}
 
-	// Collect alive T teammates (excluding the carrier)
-	int teammates[MAXPLAYERS + 1];
-	int teammateCount = 0;
+	// Collect alive T teammates (excluding the carrier) and calculate NavMesh distance once
+	CandidateT candidates[MAXPLAYERS + 1];
+	int candidateCount = 0;
 	float carrierOrigin[3];
 	GetClientAbsOrigin(carrier, carrierOrigin);
 
@@ -69,11 +69,21 @@ void AssignCarrierBodyguards()
 
 		if (IsClientInGame(i) && IsPlayerAlive(i) && GetClientTeam(i) == 2 && IsFakeClient(i))
 		{
-			teammates[teammateCount++] = i;
+			float walkDist = GetNavMeshWalkDistance(i, carrierOrigin);
+			if (walkDist < 0.0)
+			{
+				float pos[3];
+				GetClientAbsOrigin(i, pos);
+				walkDist = GetVectorDistance(carrierOrigin, pos) * 2.0;
+			}
+
+			candidates[candidateCount].client = i;
+			candidates[candidateCount].dist = walkDist;
+			candidateCount++;
 		}
 	}
 
-	if (teammateCount <= 0)
+	if (candidateCount <= 0)
 		return;
 
 	// Determine bodyguard count based on alive teammates ratio:
@@ -81,31 +91,28 @@ void AssignCarrierBodyguards()
 	// - 2 teammates left: 1 follows, 1 free
 	// - >= 3 teammates left: 2 follow, remaining free
 	int bodyguardsToAssign = 1;
-	if (teammateCount >= 3)
+	if (candidateCount >= 3)
 		bodyguardsToAssign = 2;
 
-	// Sort teammates by distance to carrier (ascending)
-	for (int i = 0; i < teammateCount - 1; i++)
+	// Sort candidates ascending by pre-calculated distance (pure in-memory sort, 0 extra A* calls)
+	for (int i = 0; i < candidateCount - 1; i++)
 	{
-		for (int j = i + 1; j < teammateCount; j++)
+		for (int j = 0; j < candidateCount - i - 1; j++)
 		{
-			float posI[3], posJ[3];
-			GetClientAbsOrigin(teammates[i], posI);
-			GetClientAbsOrigin(teammates[j], posJ);
-
-			if (GetVectorDistance(carrierOrigin, posJ) < GetVectorDistance(carrierOrigin, posI))
+			if (candidates[j].dist > candidates[j + 1].dist)
 			{
-				int temp = teammates[i];
-				teammates[i] = teammates[j];
-				teammates[j] = temp;
+				CandidateT temp;
+				temp = candidates[j];
+				candidates[j] = candidates[j + 1];
+				candidates[j + 1] = temp;
 			}
 		}
 	}
 
 	// Assign the closest bodyguards
-	for (int i = 0; i < bodyguardsToAssign && i < teammateCount; i++)
+	for (int i = 0; i < bodyguardsToAssign && i < candidateCount; i++)
 	{
-		int bot = teammates[i];
+		int bot = candidates[i].client;
 		if (g_hFollowSDKCall != null)
 		{
 			SDKCall(g_hFollowSDKCall, bot, carrier);

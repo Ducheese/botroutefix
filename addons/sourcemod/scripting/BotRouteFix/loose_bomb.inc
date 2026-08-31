@@ -8,7 +8,6 @@
 //========================================================================================
 
 Handle g_hNoticeLooseBombDetour = INVALID_HANDLE;
-Handle g_hComputePathSDKCall = INVALID_HANDLE;
 
 void PrepNoticeLooseBombHook()
 {
@@ -27,14 +26,6 @@ void PrepNoticeLooseBombHook()
 		}
 	}
 
-	// SDKCall CCSBot::ComputePath (to calculate true ground path distance)
-	StartPrepSDKCall(SDKCall_Entity);
-	PrepSDKCall_SetFromConf(gc, SDKConf_Signature, "CCSBot_ComputePath");
-	PrepSDKCall_AddParameter(SDKType_Vector, SDKPass_ByRef);
-	PrepSDKCall_AddParameter(SDKType_PlainOldData, SDKPass_Plain); // RouteType (0 = FASTEST_ROUTE)
-	PrepSDKCall_SetReturnInfo(SDKType_Bool, SDKPass_Plain);
-	g_hComputePathSDKCall = EndPrepSDKCall();
-
 	delete gc;
 }
 
@@ -48,10 +39,18 @@ void RestoreNoticeLooseBombHook()
 	}
 }
 
-enum struct CandidateT
+float g_fLastLooseBombCalcTime = 0.0;
+int g_iTop3Retrievers[3];
+int g_iTop3RetrieverCount = 0;
+
+void ResetLooseBombCache()
 {
-	int client;
-	float dist;
+	g_fLastLooseBombCalcTime = 0.0;
+	g_iTop3RetrieverCount = 0;
+	for (int i = 0; i < 3; i++)
+	{
+		g_iTop3Retrievers[i] = 0;
+	}
 }
 
 public MRESReturn Hook_NoticeLooseBomb_Post(int client, Handle hReturn)
@@ -73,55 +72,82 @@ public MRESReturn Hook_NoticeLooseBomb_Post(int client, Handle hReturn)
 	float bombPos[3];
 	GetEntPropVector(looseBomb, Prop_Data, "m_vecAbsOrigin", bombPos);
 
-	// Gather all alive T bots and calculate NavMesh walkable distance
-	CandidateT candidates[MAXPLAYERS + 1];
-	int candidateCount = 0;
+	float curtime = GetGameTime();
 
-	for (int i = 1; i <= MaxClients; i++)
+	// Invalidate cache if 0.5s elapsed or any cached member died/disconnected
+	bool needRecalc = (curtime - g_fLastLooseBombCalcTime >= 0.5);
+	if (!needRecalc)
 	{
-		if (IsClientInGame(i) && IsPlayerAlive(i) && GetClientTeam(i) == 2 && IsFakeClient(i))
+		for (int i = 0; i < g_iTop3RetrieverCount; i++)
 		{
-			float walkDist = GetNavMeshWalkDistance(i, bombPos);
-			if (walkDist < 0.0)
+			int bot = g_iTop3Retrievers[i];
+			if (bot <= 0 || !IsClientInGame(bot) || !IsPlayerAlive(bot) || GetClientTeam(bot) != 2)
 			{
-				// Fallback to straight distance if pathfinding fails
-				float botPos[3];
-				GetClientAbsOrigin(i, botPos);
-				walkDist = GetVectorDistance(botPos, bombPos) * 2.0;
+				needRecalc = true;
+				break;
 			}
-
-			candidates[candidateCount].client = i;
-			candidates[candidateCount].dist = walkDist;
-			candidateCount++;
 		}
 	}
 
+	if (needRecalc)
+	{
+		// Gather all alive T bots and calculate NavMesh walkable distance (evaluated once per window: O(N))
+		CandidateT candidates[MAXPLAYERS + 1];
+		int candidateCount = 0;
+
+		for (int i = 1; i <= MaxClients; i++)
+		{
+			if (IsClientInGame(i) && IsPlayerAlive(i) && GetClientTeam(i) == 2 && IsFakeClient(i))
+			{
+				float walkDist = GetNavMeshWalkDistance(i, bombPos);
+				if (walkDist < 0.0)
+				{
+					float botPos[3];
+					GetClientAbsOrigin(i, botPos);
+					walkDist = GetVectorDistance(botPos, bombPos) * 2.0;
+				}
+
+				candidates[candidateCount].client = i;
+				candidates[candidateCount].dist = walkDist;
+				candidateCount++;
+			}
+		}
+
+		// Sort candidates ascending by distance
+		for (int i = 0; i < candidateCount - 1; i++)
+		{
+			for (int j = 0; j < candidateCount - i - 1; j++)
+			{
+				if (candidates[j].dist > candidates[j + 1].dist)
+				{
+					CandidateT temp;
+					temp = candidates[j];
+					candidates[j] = candidates[j + 1];
+					candidates[j + 1] = temp;
+				}
+			}
+		}
+
+		// Cache the closest Top 3
+		g_iTop3RetrieverCount = (candidateCount < 3) ? candidateCount : 3;
+		for (int k = 0; k < g_iTop3RetrieverCount; k++)
+		{
+			g_iTop3Retrievers[k] = candidates[k].client;
+		}
+		g_fLastLooseBombCalcTime = curtime;
+	}
+
 	// If total alive Ts <= 3, everyone is allowed to retrieve
-	if (candidateCount <= 3)
+	if (g_iTop3RetrieverCount < 3)
 	{
 		return MRES_Ignored;
 	}
 
-	// Sort candidates ascending by walkable distance
-	for (int i = 0; i < candidateCount - 1; i++)
-	{
-		for (int j = 0; j < candidateCount - i - 1; j++)
-		{
-			if (candidates[j].dist > candidates[j + 1].dist)
-			{
-				CandidateT temp;
-				temp = candidates[j];
-				candidates[j] = candidates[j + 1];
-				candidates[j + 1] = temp;
-			}
-		}
-	}
-
-	// Allow top 3 closest Ts to retrieve the bomb
+	// O(1) membership check in the Top 3 cache
 	bool isTop3 = false;
-	for (int k = 0; k < 3 && k < candidateCount; k++)
+	for (int k = 0; k < g_iTop3RetrieverCount; k++)
 	{
-		if (candidates[k].client == client)
+		if (g_iTop3Retrievers[k] == client)
 		{
 			isTop3 = true;
 			break;
@@ -137,46 +163,6 @@ public MRESReturn Hook_NoticeLooseBomb_Post(int client, Handle hReturn)
 		DHookSetReturn(hReturn, false);
 		return MRES_Override;
 	}
-}
-
-float GetNavMeshWalkDistance(int client, const float targetPos[3])
-{
-	if (g_hComputePathSDKCall == null)
-		return -1.0;
-
-	Address pBot = GetEntityAddress(client);
-	if (pBot == Address_Null)
-		return -1.0;
-
-	// Compute fastest path to the dropped bomb position (invokes NavAreaBuildPath under the hood)
-	bool hasPath = SDKCall(g_hComputePathSDKCall, client, targetPos, 0); // 0 = FASTEST_ROUTE
-	if (!hasPath)
-		return -1.0;
-
-	int pathLength = LoadFromAddress(pBot + view_as<Address>(g_iOffset_PathLength), NumberType_Int32);
-	if (pathLength <= 0)
-		return -1.0;
-
-	float totalDist = 0.0;
-	float prevPos[3];
-	GetClientAbsOrigin(client, prevPos);
-
-	int vecOffset = g_iOffset_ConnectInfoPos;
-
-	for (int i = 0; i < pathLength; i++)
-	{
-		Address pConnectInfo = pBot + view_as<Address>(g_iOffset_Path + i * g_iPathStride);
-		float nodePos[3];
-		nodePos[0] = view_as<float>(LoadFromAddress(pConnectInfo + view_as<Address>(vecOffset), NumberType_Int32));
-		nodePos[1] = view_as<float>(LoadFromAddress(pConnectInfo + view_as<Address>(vecOffset + 4), NumberType_Int32));
-		nodePos[2] = view_as<float>(LoadFromAddress(pConnectInfo + view_as<Address>(vecOffset + 8), NumberType_Int32));
-
-		totalDist += GetVectorDistance(prevPos, nodePos);
-		prevPos = nodePos;
-	}
-
-	totalDist += GetVectorDistance(prevPos, targetPos);
-	return totalDist;
 }
 
 int GetLooseBombEntity()

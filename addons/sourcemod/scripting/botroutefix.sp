@@ -39,7 +39,7 @@
 //
 // [模块 8：CT 首席拆包员与交叉火力架枪体系 (CT Designated Defuser & Crossfire Guard)]
 //  10. 解决官方 CT 在按住 E 读条前全员判定 DEFUSE_BOMB 一起往雷包上撞无掩护的缺陷。
-//      实时竞选单人「首席拆包员」直扑 C4 拆包，其余赶到包点 1500 码内的 CT 提前转入 GUARD_BOMB_DEFUSER，
+//      实时竞选单人「首席拆包员」直扑 C4 拆包，其余到达包点触发区（m_bInBombZone）的支援 CT 提前转入 GUARD_BOMB_DEFUSER，
 //      调用原生 CCSBot::Hide 在包点掩体后散开架枪蹲点，形成立体交叉火力掩护；首席倒地秒级接力。
 //
 // 支持架构：
@@ -101,7 +101,6 @@ public void OnPluginStart()
 	PrepHuntStateHook();
 	PrepNoticeLooseBombHook();
 	PrepDefuseSDKCalls();
-	StartDefuseCoordTimer();
 	HookGameEvents();
 
 	// Mid-round hot-reload synchronization: check if bomb is already planted on map
@@ -111,6 +110,7 @@ public void OnPluginStart()
 		g_bBombPlanted = true;
 		GetEntPropVector(bomb, Prop_Data, "m_vecAbsOrigin", g_fBombPlantedPos);
 		UpdateDesignatedDefuser();
+		StartDefuseCoordTimer();
 		LogMessage("[BotRouteFix] [Hot-Reload] Synchronized active planted C4 at (%.1f, %.1f, %.1f)",
 			g_fBombPlantedPos[0], g_fBombPlantedPos[1], g_fBombPlantedPos[2]);
 	}

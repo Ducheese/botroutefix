@@ -62,7 +62,34 @@ public Action Timer_CheckPoliteQueue(Handle timer)
 			// 1. Clear waiting behind friend flag
 			StoreToAddress(pBot + view_as<Address>(g_iOffset_IsWaitingBehindFriend), 0, NumberType_Int8);
 
-			// 2. DestroyPath: clear stopping, pathLength, and pathLadder to force immediate repath
+			// 2. Add temporary Danger (+0.8f) to the blocked doorway NavArea so A* avoids this chokepoint on immediate repath
+			int team = GetClientTeam(i);
+			if (team == 2 || team == 3)
+			{
+				int teamIdx = team - 2;
+				Address pConnectInfo = pBot + view_as<Address>(g_iOffset_Path);
+				Address pArea = LoadAddressFromAddress(pConnectInfo);
+				if (pArea != Address_Null)
+				{
+					float curDanger = view_as<float>(LoadFromAddress(pArea + view_as<Address>(g_iOffset_Danger + teamIdx * 4), NumberType_Int32));
+					StoreToAddress(pArea + view_as<Address>(g_iOffset_Danger + teamIdx * 4), view_as<int>(curDanger + 0.8), NumberType_Int32);
+					StoreToAddress(pArea + view_as<Address>(g_iOffset_DangerTimestamp + teamIdx * 4), view_as<int>(curtime), NumberType_Int32);
+				}
+
+				if (pathLength > 1)
+				{
+					Address pNextConnectInfo = pBot + view_as<Address>(g_iOffset_Path + g_iPathStride);
+					Address pNextArea = LoadAddressFromAddress(pNextConnectInfo);
+					if (pNextArea != Address_Null)
+					{
+						float curDanger = view_as<float>(LoadFromAddress(pNextArea + view_as<Address>(g_iOffset_Danger + teamIdx * 4), NumberType_Int32));
+						StoreToAddress(pNextArea + view_as<Address>(g_iOffset_Danger + teamIdx * 4), view_as<int>(curDanger + 0.8), NumberType_Int32);
+						StoreToAddress(pNextArea + view_as<Address>(g_iOffset_DangerTimestamp + teamIdx * 4), view_as<int>(curtime), NumberType_Int32);
+					}
+				}
+			}
+
+			// 3. DestroyPath: clear stopping, pathLength, and pathLadder to force immediate repath
 			StoreToAddress(pBot + view_as<Address>(g_iOffset_IsStopping), 0, NumberType_Int8);
 			StoreToAddress(pBot + view_as<Address>(g_iOffset_PathLength), 0, NumberType_Int32);
 			StoreAddressToAddress(pBot + view_as<Address>(g_iOffset_PathLadder), Address_Null);

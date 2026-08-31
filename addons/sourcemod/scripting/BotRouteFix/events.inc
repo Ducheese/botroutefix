@@ -23,8 +23,10 @@ public void Event_RoundStart(Event event, const char[] name, bool dontBroadcast)
 {
 	g_bBombPlanted = false;
 	g_iDesignatedDefuser = 0;
+	StopDefuseCoordTimer();
 	ResetAllNavAreaDanger();
 	SelectRandomBombsite();
+	ResetLooseBombCache();
 }
 
 public void Event_RoundFreezeEnd(Event event, const char[] name, bool dontBroadcast)
@@ -64,6 +66,9 @@ public void Event_BombDropped(Event event, const char[] name, bool dontBroadcast
 
 	// 2. Tactical Retake Adaptability: restore native GetClosestZone so new carrier adapts to current field position
 	RestorePlantBombClosestZonePatch();
+
+	// 3. Reset loose bomb retriever cache
+	ResetLooseBombCache();
 }
 
 public void Event_BombPlanted(Event event, const char[] name, bool dontBroadcast)
@@ -77,12 +82,14 @@ public void Event_BombPlanted(Event event, const char[] name, bool dontBroadcast
 	}
 
 	UpdateDesignatedDefuser();
+	StartDefuseCoordTimer();
 }
 
 public void Event_BombEnded(Event event, const char[] name, bool dontBroadcast)
 {
 	g_bBombPlanted = false;
 	g_iDesignatedDefuser = 0;
+	StopDefuseCoordTimer();
 }
 
 public void Event_PlayerDeath(Event event, const char[] name, bool dontBroadcast)

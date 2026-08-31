@@ -57,10 +57,17 @@ Handle g_hHuntStateDetour = INVALID_HANDLE;
 int g_iOffset_HuntArea = 0;
 int g_iOffset_ClearedTimestamp = 0;
 
-// Module 7: C4 Loose Bomb Top 3 Tactical Retriever (NavMesh Path Walk Distance)
+// Module 7: C4 Loose Bomb Top 3 Tactical Retriever & Shared NavMesh Walk Distance
+Handle g_hComputePathSDKCall = INVALID_HANDLE;
 int g_iOffset_Path = 0;
 int g_iPathStride = 0;
 int g_iOffset_ConnectInfoPos = 0;
+
+enum struct CandidateT
+{
+	int client;
+	float dist;
+}
 
 // Module 8: CT Designated Defuser & Crossfire Guard
 Handle g_hHideSDKCall = INVALID_HANDLE;
@@ -122,5 +129,53 @@ void PrepOffsets()
 		return;
 	}
 
+	// Shared SDKCall: CCSBot::ComputePath (to calculate true ground path distance)
+	StartPrepSDKCall(SDKCall_Entity);
+	PrepSDKCall_SetFromConf(gc, SDKConf_Signature, "CCSBot_ComputePath");
+	PrepSDKCall_AddParameter(SDKType_Vector, SDKPass_ByRef);
+	PrepSDKCall_AddParameter(SDKType_PlainOldData, SDKPass_Plain); // RouteType (0 = FASTEST_ROUTE)
+	PrepSDKCall_SetReturnInfo(SDKType_Bool, SDKPass_Plain);
+	g_hComputePathSDKCall = EndPrepSDKCall();
+
 	delete gc;
+}
+
+float GetNavMeshWalkDistance(int client, const float targetPos[3])
+{
+	if (g_hComputePathSDKCall == null)
+		return -1.0;
+
+	Address pBot = GetEntityAddress(client);
+	if (pBot == Address_Null)
+		return -1.0;
+
+	// Compute fastest path to the target position (invokes NavAreaBuildPath under the hood)
+	bool hasPath = SDKCall(g_hComputePathSDKCall, client, targetPos, 0); // 0 = FASTEST_ROUTE
+	if (!hasPath)
+		return -1.0;
+
+	int pathLength = LoadFromAddress(pBot + view_as<Address>(g_iOffset_PathLength), NumberType_Int32);
+	if (pathLength <= 0)
+		return -1.0;
+
+	float totalDist = 0.0;
+	float prevPos[3];
+	GetClientAbsOrigin(client, prevPos);
+
+	int vecOffset = g_iOffset_ConnectInfoPos;
+
+	for (int i = 0; i < pathLength; i++)
+	{
+		Address pConnectInfo = pBot + view_as<Address>(g_iOffset_Path + i * g_iPathStride);
+		float nodePos[3];
+		nodePos[0] = view_as<float>(LoadFromAddress(pConnectInfo + view_as<Address>(vecOffset), NumberType_Int32));
+		nodePos[1] = view_as<float>(LoadFromAddress(pConnectInfo + view_as<Address>(vecOffset + 4), NumberType_Int32));
+		nodePos[2] = view_as<float>(LoadFromAddress(pConnectInfo + view_as<Address>(vecOffset + 8), NumberType_Int32));
+
+		totalDist += GetVectorDistance(prevPos, nodePos);
+		prevPos = nodePos;
+	}
+
+	totalDist += GetVectorDistance(prevPos, targetPos);
+	return totalDist;
 }

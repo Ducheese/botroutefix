@@ -292,6 +292,7 @@ void PrepPlantBombClosestZonePatch()
 		{
 			g_pTheCSBotsPtr = view_as<Address>(LoadFromAddress(sigRush + view_as<Address>(1), NumberType_Int32));
 		}
+		LogMessage("[BotRouteFix] [Patch 4] Resolved TheCSBotsPtr @ %X", g_pTheCSBotsPtr);
 	}
 
 	Address sigAddr = GameConfGetAddress(gc, "IdleState_PlantBombClosestZone");
@@ -351,8 +352,7 @@ void PrepPlantBombClosestZonePatch()
 		g_iOriginalPlantBombClosestZoneBytes[i] = LoadFromAddress(g_pPlantBombClosestZonePatchAddress + view_as<Address>(i), NumberType_Int8);
 	}
 
-	LogMessage("[BotRouteFix] [Patch 4] PlantBombClosestZone Verified @ %X (TheCSBots @ %X, Target Lock Ready)",
-		g_pPlantBombClosestZonePatchAddress, g_pTheCSBotsPtr);
+	LogMessage("[BotRouteFix] [Patch 4] Verified PlantBombClosestZone block @ %X", g_pPlantBombClosestZonePatchAddress);
 	delete gc;
 }
 
