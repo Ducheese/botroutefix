@@ -12,10 +12,9 @@
 //   3. 对 IsTimeToPlantBomb 开局 10~30 秒强制延迟跳转打入 6 字节 NOP，消除包匪开局
 //      不运包反而带 C4 冲 CT 家送人头的致命缺陷，开局即刻前往包点。
 //
-// [模块 3：全动态走廊 Danger 预约与多路分流 (Dynamic Corridor Reservation & Route Splitting)]
-//   5. Detour CCSBot::ComputePath Post 阶段，在刚规划好路线的前沿 5 个 NavArea 节点
-//      动态注入 +0.8f 的 m_danger 占用阻力，驱使后续队友的 A* 算法自动分支转向副道/侧翼，
-//      全图自然实现两翼包抄、兵分多路，彻底消除单一路线开火车拥堵。
+// [模块 3：开局全图 Danger 彻底重置 (Round Danger Reset)]
+//   4. 遍历全局 CUtlVector<CNavArea*> TheNavAreas，在 round_start 时将全图各区域的
+//      m_danger 彻底清零并重置时间戳，彻底消除上一回合残局死人留下的跨回合“幽灵恐惧”假象。
 //
 // [模块 4：礼貌排队 1.2 秒超时打碎与门口掉头 (1.2s Queue Breaker & Anti-Jam Turnaround)]
 //   6. 监控 Bot 在狭窄门口/路口遇到队友挡路时的 m_isWaitingBehindFriend 礼貌等待状态。
@@ -59,7 +58,7 @@
 
 #include "BotRouteFix/globals.inc"
 #include "BotRouteFix/patches.inc"
-#include "BotRouteFix/corridor_danger.inc"
+#include "BotRouteFix/danger_reset.inc"
 #include "BotRouteFix/queue_breaker.inc"
 #include "BotRouteFix/carrier_escort.inc"
 #include "BotRouteFix/hunt_claim.inc"
@@ -92,7 +91,8 @@ public void OnPluginStart()
 	PrepDefensePatch();
 	PrepDefenseRushPatch();
 	PrepC4PlantDelayPatch();
-	PrepComputePathHook();
+	PrepDangerReset();
+	ResetAllNavAreaDanger();
 	StartQueueBreakerTimer();
 	PrepFollowSDKCalls();
 	PrepHuntStateHook();
@@ -122,7 +122,6 @@ public void OnPluginEnd()
 	RestoreDefensePatch();
 	RestoreDefenseRushPatch();
 	RestoreC4PlantDelayPatch();
-	RestoreComputePathHook();
 	RestoreHuntStateHook();
 	RestoreNoticeLooseBombHook();
 }

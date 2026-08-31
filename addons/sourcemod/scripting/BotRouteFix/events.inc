@@ -23,6 +23,7 @@ public void Event_RoundStart(Event event, const char[] name, bool dontBroadcast)
 {
 	g_bBombPlanted = false;
 	g_iDesignatedDefuser = 0;
+	ResetAllNavAreaDanger();
 }
 
 public void Event_RoundFreezeEnd(Event event, const char[] name, bool dontBroadcast)
