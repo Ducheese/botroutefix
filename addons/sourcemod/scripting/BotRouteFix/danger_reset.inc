@@ -60,7 +60,7 @@ void ResetAllNavAreaDanger()
 	if (pArray == Address_Null)
 		return;
 
-	int ptrSize = g_bIsWin64 ? 8 : 4;
+	int ptrSize = g_iPtrSize;
 	float curtime = GetGameTime();
 
 	for (int i = 0; i < count; i++)

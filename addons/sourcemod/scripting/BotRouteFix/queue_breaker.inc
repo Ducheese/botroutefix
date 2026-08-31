@@ -46,9 +46,9 @@ public Action Timer_CheckPoliteQueue(Handle timer)
 		if (pathLength <= 0)
 			continue;
 
-		// Read CountdownTimer m_duration and m_timestamp (offset: +8/+12 on x64, +4/+8 on x86)
-		int durationOffset = g_bIsWin64 ? (g_iOffset_PoliteTimer + 8) : (g_iOffset_PoliteTimer + 4);
-		int timestampOffset = g_bIsWin64 ? (g_iOffset_PoliteTimer + 12) : (g_iOffset_PoliteTimer + 8);
+		// Read CountdownTimer m_duration and m_timestamp
+		int durationOffset = g_iOffset_PoliteTimer + g_iOffset_TimerDuration;
+		int timestampOffset = g_iOffset_PoliteTimer + g_iOffset_TimerTimestamp;
 
 		float duration = view_as<float>(LoadFromAddress(pBot + view_as<Address>(durationOffset), NumberType_Int32));
 		float timestamp = view_as<float>(LoadFromAddress(pBot + view_as<Address>(timestampOffset), NumberType_Int32));

@@ -268,3 +268,163 @@ void RestoreC4PlantDelayPatch()
 		g_bC4PlantDelayPatched = false;
 	}
 }
+
+//========================================================================================
+// PATCH 4: T ROUND BOMBSITE RANDOM TARGET LOCK (GetClosestZone In-Memory Patch)
+//========================================================================================
+
+void PrepPlantBombClosestZonePatch()
+{
+	Handle gc = LoadGameConfigFile(GAMEDATA);
+	if (gc == null)
+		return;
+
+	// Resolve TheCSBotsPtr pointer address from IdleState_DefenseRush
+	Address sigRush = GameConfGetAddress(gc, "IdleState_DefenseRush");
+	if (sigRush != Address_Null)
+	{
+		if (g_bIsWin64)
+		{
+			int relOffset = LoadFromAddress(sigRush + view_as<Address>(3), NumberType_Int32);
+			g_pTheCSBotsPtr = sigRush + view_as<Address>(7 + relOffset);
+		}
+		else
+		{
+			g_pTheCSBotsPtr = view_as<Address>(LoadFromAddress(sigRush + view_as<Address>(1), NumberType_Int32));
+		}
+	}
+
+	Address sigAddr = GameConfGetAddress(gc, "IdleState_PlantBombClosestZone");
+	if (sigAddr == Address_Null)
+	{
+		delete gc;
+		SetFailState("[BotRouteFix] Failed to locate signature for IdleState_PlantBombClosestZone!");
+		return;
+	}
+
+	int patchOffset = GameConfGetOffset(gc, "PlantBombClosestZone_PatchOffset");
+	if (patchOffset == -1)
+	{
+		delete gc;
+		SetFailState("[BotRouteFix] Failed to read PlantBombClosestZone_PatchOffset!");
+		return;
+	}
+
+	g_pPlantBombClosestZonePatchAddress = sigAddr + view_as<Address>(patchOffset);
+
+	int firstByte = LoadFromAddress(g_pPlantBombClosestZonePatchAddress, NumberType_Int8);
+	int secondByte = LoadFromAddress(g_pPlantBombClosestZonePatchAddress + view_as<Address>(1), NumberType_Int8);
+
+	// Check if already patched (0x48 0xB8 on x64, 0xB8 on x86)
+	if ((g_bIsWin64 && firstByte == 0x48 && secondByte == 0xB8) || (!g_bIsWin64 && firstByte == 0xB8))
+	{
+		LogMessage("[BotRouteFix] [Patch 4] Already patched @ %X, skipping initialization", g_pPlantBombClosestZonePatchAddress);
+		delete gc;
+		return;
+	}
+
+	// Verify expected opcodes (64-bit: 45 33, 32-bit: 6A 00)
+	if (g_bIsWin64)
+	{
+		if (firstByte != 0x45 || secondByte != 0x33)
+		{
+			delete gc;
+			SetFailState("[BotRouteFix] [Patch 4] Byte mismatch at %X (expected 45 33, got %02X %02X), patch aborted!",
+				g_pPlantBombClosestZonePatchAddress, firstByte, secondByte);
+			return;
+		}
+	}
+	else
+	{
+		if (firstByte != 0x6A || secondByte != 0x00)
+		{
+			delete gc;
+			SetFailState("[BotRouteFix] [Patch 4] Byte mismatch at %X (expected 6A 00, got %02X %02X), patch aborted!",
+				g_pPlantBombClosestZonePatchAddress, firstByte, secondByte);
+			return;
+		}
+	}
+
+	// Backup original 19 bytes
+	for (int i = 0; i < 19; i++)
+	{
+		g_iOriginalPlantBombClosestZoneBytes[i] = LoadFromAddress(g_pPlantBombClosestZonePatchAddress + view_as<Address>(i), NumberType_Int8);
+	}
+
+	LogMessage("[BotRouteFix] [Patch 4] PlantBombClosestZone Verified @ %X (TheCSBots @ %X, Target Lock Ready)",
+		g_pPlantBombClosestZonePatchAddress, g_pTheCSBotsPtr);
+	delete gc;
+}
+
+void ApplyLockedBombsitePatch(int zoneIndex)
+{
+	if (g_pPlantBombClosestZonePatchAddress == Address_Null || g_pTheCSBotsPtr == Address_Null)
+		return;
+
+	int offset = g_iOffset_ZoneBase + zoneIndex * g_iZoneStride;
+
+	if (g_bIsWin64)
+	{
+		// 64-bit: mov rax, [imm64] (48 B8 [8-byte imm64]) + 9 NOPs (total 19 bytes)
+		int lowDword = LoadFromAddress(g_pTheCSBotsPtr, NumberType_Int32) + offset;
+		int highDword = LoadFromAddress(g_pTheCSBotsPtr + view_as<Address>(4), NumberType_Int32);
+
+		StoreToAddress(g_pPlantBombClosestZonePatchAddress, 0x48, NumberType_Int8, true);
+		StoreToAddress(g_pPlantBombClosestZonePatchAddress + view_as<Address>(1), 0xB8, NumberType_Int8, true);
+		StoreToAddress(g_pPlantBombClosestZonePatchAddress + view_as<Address>(2), lowDword, NumberType_Int32, true);
+		StoreToAddress(g_pPlantBombClosestZonePatchAddress + view_as<Address>(6), highDword, NumberType_Int32, true);
+
+		for (int i = 10; i < 19; i++)
+		{
+			StoreToAddress(g_pPlantBombClosestZonePatchAddress + view_as<Address>(i), 0x90, NumberType_Int8, true);
+		}
+	}
+	else
+	{
+		// 32-bit: mov eax, [imm32] (B8 [4-byte imm32]) + 14 NOPs (total 19 bytes)
+		int lowDword = LoadFromAddress(g_pTheCSBotsPtr, NumberType_Int32) + offset;
+
+		StoreToAddress(g_pPlantBombClosestZonePatchAddress, 0xB8, NumberType_Int8, true);
+		StoreToAddress(g_pPlantBombClosestZonePatchAddress + view_as<Address>(1), lowDword, NumberType_Int32, true);
+
+		for (int i = 5; i < 19; i++)
+		{
+			StoreToAddress(g_pPlantBombClosestZonePatchAddress + view_as<Address>(i), 0x90, NumberType_Int8, true);
+		}
+	}
+
+	g_bPlantBombClosestZonePatched = true;
+	LogMessage("[BotRouteFix] [Patch 4] Locked T Carrier Target Bombsite to Zone #%d (Offset +%d) @ %X",
+		zoneIndex, offset, g_pPlantBombClosestZonePatchAddress);
+}
+
+void RestorePlantBombClosestZonePatch()
+{
+	if (g_bPlantBombClosestZonePatched && g_pPlantBombClosestZonePatchAddress != Address_Null)
+	{
+		for (int i = 0; i < 19; i++)
+		{
+			StoreToAddress(g_pPlantBombClosestZonePatchAddress + view_as<Address>(i),
+				g_iOriginalPlantBombClosestZoneBytes[i], NumberType_Int8, true);
+		}
+		g_bPlantBombClosestZonePatched = false;
+		LogMessage("[BotRouteFix] [Patch 4] Restored original GetClosestZone call @ %X", g_pPlantBombClosestZonePatchAddress);
+	}
+}
+
+void SelectRandomBombsite()
+{
+	if (g_pTheCSBotsPtr == Address_Null)
+		return;
+
+	Address pTheCSBots = LoadAddressFromAddress(g_pTheCSBotsPtr);
+	if (pTheCSBots == Address_Null)
+		return;
+
+	int zoneCount = LoadFromAddress(pTheCSBots + view_as<Address>(g_iOffset_ZoneCount), NumberType_Int32);
+	if (zoneCount <= 0)
+		return;
+
+	int randomIdx = GetRandomInt(0, zoneCount - 1);
+	ApplyLockedBombsitePatch(randomIdx);
+}

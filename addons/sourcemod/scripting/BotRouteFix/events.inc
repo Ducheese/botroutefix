@@ -24,6 +24,7 @@ public void Event_RoundStart(Event event, const char[] name, bool dontBroadcast)
 	g_bBombPlanted = false;
 	g_iDesignatedDefuser = 0;
 	ResetAllNavAreaDanger();
+	SelectRandomBombsite();
 }
 
 public void Event_RoundFreezeEnd(Event event, const char[] name, bool dontBroadcast)
@@ -49,7 +50,7 @@ public void Frame_AssignCarrierBodyguards(any data)
 
 public void Event_BombDropped(Event event, const char[] name, bool dontBroadcast)
 {
-	// When C4 is dropped on the floor, release bodyguards so they can react and cover
+	// 1. When C4 is dropped on the floor, release bodyguards so they can react and cover
 	for (int i = 1; i <= MaxClients; i++)
 	{
 		if (IsClientInGame(i) && IsPlayerAlive(i) && GetClientTeam(i) == 2 && IsFakeClient(i))
@@ -60,6 +61,9 @@ public void Event_BombDropped(Event event, const char[] name, bool dontBroadcast
 			}
 		}
 	}
+
+	// 2. Tactical Retake Adaptability: restore native GetClosestZone so new carrier adapts to current field position
+	RestorePlantBombClosestZonePatch();
 }
 
 public void Event_BombPlanted(Event event, const char[] name, bool dontBroadcast)

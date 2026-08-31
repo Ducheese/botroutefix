@@ -161,7 +161,7 @@ float GetNavMeshWalkDistance(int client, const float targetPos[3])
 	float prevPos[3];
 	GetClientAbsOrigin(client, prevPos);
 
-	int vecOffset = g_bIsWin64 ? 12 : 8;
+	int vecOffset = g_iOffset_ConnectInfoPos;
 
 	for (int i = 0; i < pathLength; i++)
 	{

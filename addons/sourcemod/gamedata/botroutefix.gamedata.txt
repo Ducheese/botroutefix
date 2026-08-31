@@ -64,6 +64,12 @@
 				"windows"	"\x55\x8B\xEC\x53\x8B\x1D\x2A\x2A\x2A\x2A\x33\xD2\x56\x33\xF6\x57\x85\xDB\x7E"
 				"windows64"	"\x48\x89\x5C\x24\x08\x57\x48\x83\xEC\x20\x33\xDB\x8B\xF9\x8B\x0D\x2A\x2A\x2A\x2A\x44\x8B\xC3\x44\x8B\xCB\x85\xC9"
 			}
+			"IdleState_PlantBombClosestZone"
+			{
+				"library"	"server"
+				"windows"	"\xF3\x0F\x10\x40\x0C\x0F\x2F\x86\x38\x1A\x00\x00\x0F\x82\x2A\x2A\x2A\x2A\x8B\x07\x8B\xCF"
+				"windows64"	"\xF3\x0F\x10\x83\x6C\x1B\x00\x00\x0F\x2F\x40\x0C\x0F\x87\x2A\x2A\x2A\x2A\x48\x8B\x07\x48\x8B\xCF"
+			}
 		}
 		"Addresses"
 		{
@@ -83,6 +89,10 @@
 			{
 				"signature"	"CCSBotManager_GetRandomArea"
 			}
+			"IdleState_PlantBombClosestZone"
+			{
+				"signature"	"IdleState_PlantBombClosestZone"
+			}
 		}
 		"Offsets"
 		{
@@ -100,6 +110,11 @@
 			{
 				"windows"	"12"
 				"windows64"	"26"
+			}
+			"PlantBombClosestZone_PatchOffset"
+			{
+				"windows"	"22"
+				"windows64"	"54"
 			}
 			"CCSBot_Path_Offset"
 			{
@@ -161,8 +176,44 @@
 				"windows"	"196"
 				"windows64"	"264"
 			}
+			"TheCSBots_ZoneCount_Offset"
+			{
+				"windows"	"6700"
+				"windows64"	"7008"
+			}
+			"TheCSBots_ZoneBase_Offset"
+			{
+				"windows"	"6220"
+				"windows64"	"6240"
+			}
+			"TheCSBots_ZoneStride"
+			{
+				"windows"	"120"
+				"windows64"	"192"
+			}
+			"CountdownTimer_Duration_Offset"
+			{
+				"windows"	"4"
+				"windows64"	"8"
+			}
+			"CountdownTimer_Timestamp_Offset"
+			{
+				"windows"	"8"
+				"windows64"	"12"
+			}
+			"ConnectInfo_Vector_Offset"
+			{
+				"windows"	"8"
+				"windows64"	"12"
+			}
+			"Pointer_Size"
+			{
+				"windows"	"4"
+				"windows64"	"8"
+			}
 			"IsWin64"
 			{
+				"windows"	"0"
 				"windows64"	"1"
 			}
 		}
