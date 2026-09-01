@@ -125,8 +125,9 @@ public void OnPluginStart()
 
 	LogMessage("[BotRouteFix] ========== Initialization Complete on %s ==========", g_bIsWin64 ? "64-bit (Steam x64)" : "32-bit (non-Steam)");
 
-	// 调试工具
+	// 调试与遥测工具
 	RegConsoleCmd("sm_bot_danger", Command_DumpDanger, "Dump current Danger values of all active Bot areas");
+	RegConsoleCmd("sm_bot_morale", Command_DumpMorale, "Dump real-time Morale and Guard site chance of all active Bots");
 }
 
 public void OnPluginEnd()
@@ -241,5 +242,65 @@ public Action Command_DumpDanger(int client, int args)
 		ReplyToCommand(client, "[BotRouteFix] No active bot telemetry available at this moment.");
 	}
 	ReplyToCommand(client, "[BotRouteFix] ================================================================");
+	return Plugin_Handled;
+}
+
+public Action Command_DumpMorale(int client, int args)
+{
+	ReplyToCommand(client, "[BotRouteFix] ========== Live Bot Morale & Tactical Gating Telemetry ==========");
+	int botCount = 0;
+
+	for (int i = 1; i <= MaxClients; i++)
+	{
+		if (IsClientInGame(i) && IsPlayerAlive(i) && IsFakeClient(i))
+		{
+			Address pBot = GetEntityAddress(i);
+			if (pBot != Address_Null && g_iOffset_Morale > 0)
+			{
+				int morale = LoadFromAddress(pBot + view_as<Address>(g_iOffset_Morale), NumberType_Int32);
+				int team = GetClientTeam(i);
+
+				char moraleEnum[16];
+				switch (morale)
+				{
+					case -3: strcopy(moraleEnum, sizeof(moraleEnum), "TERRIBLE");
+					case -2: strcopy(moraleEnum, sizeof(moraleEnum), "BAD");
+					case -1: strcopy(moraleEnum, sizeof(moraleEnum), "NEGATIVE");
+					case 0:  strcopy(moraleEnum, sizeof(moraleEnum), "NEUTRAL");
+					case 1:  strcopy(moraleEnum, sizeof(moraleEnum), "POSITIVE");
+					case 2:  strcopy(moraleEnum, sizeof(moraleEnum), "GOOD");
+					case 3:  strcopy(moraleEnum, sizeof(moraleEnum), "EXCELLENT");
+					default: Format(moraleEnum, sizeof(moraleEnum), "%d", morale);
+				}
+
+				char sign[2];
+				sign[0] = (morale > 0) ? '+' : '\0';
+				sign[1] = '\0';
+
+				if (team == 3) // CT
+				{
+					float guardChance = 70.0 - 10.0 * float(morale);
+					if (guardChance > 100.0) guardChance = 100.0;
+					if (guardChance < 0.0) guardChance = 0.0;
+					float roamChance = 100.0 - guardChance;
+
+					ReplyToCommand(client, "[BotRouteFix] [CT] '%N' -> Morale: %s%d (%-9s) | Guard Site: %5.1f%% | Roam/Hunt: %5.1f%%",
+						i, sign, morale, moraleEnum, guardChance, roamChance);
+				}
+				else if (team == 2) // T
+				{
+					ReplyToCommand(client, "[BotRouteFix] [T]  '%N' -> Morale: %s%d (%-9s)",
+						i, sign, morale, moraleEnum);
+				}
+				botCount++;
+			}
+		}
+	}
+
+	if (botCount == 0)
+	{
+		ReplyToCommand(client, "[BotRouteFix] No active bot morale telemetry available at this moment.");
+	}
+	ReplyToCommand(client, "[BotRouteFix] ===========================================================================");
 	return Plugin_Handled;
 }

@@ -15,9 +15,10 @@ bool g_bIsWin64 = false;
 // ---------------------------------------------------------------------------------------
 // [模块 1 & 2：底层二进制内存补丁 (Binary Memory Patches)]
 // ---------------------------------------------------------------------------------------
-// Patch 1: CT 守包点解锁 (guardBombsiteChance NOP 穿透)
+// Patch 1: CT 守包点士气公式原地修复 (guardBombsiteChance 汇编重写为 70 - 10 * Morale)
 Address g_pGuardBombsitePatchAddress;
-int g_iOriginalGuardBombsiteBytes[6];
+int g_iOriginalGuardBombsiteBytes[26];
+int g_iGuardBombsitePatchSize = 0;
 bool g_bGuardBombsitePatched = false;
 
 // Patch 2: CT 防前冲白给 (IsDefenseRushing NOP 穿透)
@@ -100,6 +101,7 @@ int g_iTop3RetrieverCount = 0;
 // ---------------------------------------------------------------------------------------
 Handle g_hHideSDKCall = INVALID_HANDLE;
 int g_iOffset_Task = 0;
+int g_iOffset_Morale = 0;
 bool g_bBombPlanted = false;
 float g_fBombPlantedPos[3];
 int g_iDesignatedDefuser = 0;
@@ -140,6 +142,7 @@ void PrepOffsets()
 	g_iOffset_PathLadder = GameConfGetOffset(gc, "CCSBot_PathLadder_Offset");
 	g_iOffset_ConnectInfoPos = GameConfGetOffset(gc, "ConnectInfo_Vector_Offset");
 	g_iOffset_Task = GameConfGetOffset(gc, "CCSBot_Task_Offset");
+	g_iOffset_Morale = GameConfGetOffset(gc, "CCSBot_Morale_Offset");
 
 	g_iOffset_HuntArea = GameConfGetOffset(gc, "HuntState_HuntArea_Offset");
 	g_iOffset_ClearedTimestamp = GameConfGetOffset(gc, "NavArea_ClearedTimestamp_Offset");
@@ -150,7 +153,7 @@ void PrepOffsets()
 		g_iOffset_IsWaitingBehindFriend == -1 || g_iOffset_PoliteTimer == -1 ||
 		g_iOffset_TimerDuration == -1 || g_iOffset_TimerTimestamp == -1 ||
 		g_iOffset_IsStopping == -1 || g_iOffset_PathLadder == -1 || g_iOffset_ConnectInfoPos == -1 ||
-		g_iOffset_Task == -1 ||
+		g_iOffset_Task == -1 || g_iOffset_Morale == -1 ||
 		g_iOffset_HuntArea == -1 || g_iOffset_ClearedTimestamp == -1)
 	{
 		delete gc;

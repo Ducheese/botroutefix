@@ -98,8 +98,8 @@
 		{
 			"GuardBombsite_PatchOffset"
 			{
-				"windows"	"68"
-				"windows64"	"35"
+				"windows"	"19"
+				"windows64"	"0"
 			}
 			"DefenseRush_PatchOffset"
 			{
@@ -210,6 +210,11 @@
 			{
 				"windows"	"4"
 				"windows64"	"8"
+			}
+			"CCSBot_Morale_Offset"
+			{
+				"windows"	"6664"
+				"windows64"	"7760"
 			}
 			"IsWin64"
 			{

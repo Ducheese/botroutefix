@@ -33,6 +33,46 @@ public void Event_RoundFreezeEnd(Event event, const char[] name, bool dontBroadc
 {
 	AssignCarrierBodyguards();
 	DumpRoundDangerStats();
+	DumpRoundMoraleStats();
+}
+
+void DumpRoundMoraleStats()
+{
+	char ctMoraleBuf[256];
+	ctMoraleBuf[0] = '\0';
+	int ctCount = 0;
+
+	for (int i = 1; i <= MaxClients; i++)
+	{
+		if (IsClientInGame(i) && IsPlayerAlive(i) && GetClientTeam(i) == 3 && IsFakeClient(i))
+		{
+			Address pBot = GetEntityAddress(i);
+			if (pBot != Address_Null && g_iOffset_Morale > 0)
+			{
+				int morale = LoadFromAddress(pBot + view_as<Address>(g_iOffset_Morale), NumberType_Int32);
+				float chance = 70.0 - 10.0 * float(morale);
+				if (chance > 100.0) chance = 100.0;
+				if (chance < 0.0) chance = 0.0;
+
+				char name[32];
+				GetClientName(i, name, sizeof(name));
+
+				char entry[64];
+				if (morale > 0)
+					Format(entry, sizeof(entry), "%s: +%d (%.0f%%)  ", name, morale, chance);
+				else
+					Format(entry, sizeof(entry), "%s: %d (%.0f%%)  ", name, morale, chance);
+
+				StrCat(ctMoraleBuf, sizeof(ctMoraleBuf), entry);
+				ctCount++;
+			}
+		}
+	}
+
+	if (ctCount > 0)
+	{
+		LogMessage("[BotRouteFix] [CT Morale Telemetry] %s", ctMoraleBuf);
+	}
 }
 
 public void Event_ItemPickup(Event event, const char[] name, bool dontBroadcast)

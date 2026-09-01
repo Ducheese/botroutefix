@@ -4,7 +4,13 @@
 #define _botroutefix_patches_included
 
 //========================================================================================
-// PATCH 1: CT BOMBSITE DEFENSE (guardBombsiteChance)
+// PATCH 1: CT BOMBSITE DEFENSE (guardBombsiteChance Assembly Rewrite)
+// Formula: GuardChance = 70.0 - 10.0 * Morale
+//   Morale +3 (EXCELLENT): 40% Guard, 60% Roam/Hunt
+//   Morale +1 (POSITIVE / Round Start Default): 60% Guard, 40% Roam/Hunt
+//   Morale  0 (NEUTRAL):   70% Guard, 30% Roam/Hunt
+//   Morale -1 (NEGATIVE):  80% Guard, 20% Roam/Hunt
+//   Morale -3 (TERRIBLE):  100% Guard (Full Site Camp)
 //========================================================================================
 
 void PrepGuardBombsitePatch()
@@ -21,77 +27,141 @@ void PrepGuardBombsitePatch()
 		return;
 	}
 
-	int patchOffset = GameConfGetOffset(gc, "GuardBombsite_PatchOffset");
-	if (patchOffset == -1)
-	{
-		delete gc;
-		SetFailState("[BotRouteFix] Failed to read GuardBombsite_PatchOffset!");
-		return;
-	}
-
-	g_pGuardBombsitePatchAddress = sigAddr + view_as<Address>(patchOffset);
-
-	int firstByte = LoadFromAddress(g_pGuardBombsitePatchAddress, NumberType_Int8);
-	int secondByte = LoadFromAddress(g_pGuardBombsitePatchAddress + view_as<Address>(1), NumberType_Int8);
-
-	// Check if already patched (0x90 = NOP) -> safely skip and avoid zero-overwrite on unload
-	if (firstByte == 0x90 && secondByte == 0x90)
-	{
-		LogMessage("[BotRouteFix] [Patch 1] Already patched (NOPs present @ %X), skipping", g_pGuardBombsitePatchAddress);
-		g_bGuardBombsitePatched = false;
-		delete gc;
-		return;
-	}
-
-	// Verify expected jump opcode (32-bit: 0x0F 0x86, 64-bit: 0x0F 0x83)
 	if (g_bIsWin64)
 	{
-		if (firstByte != 0x0F || secondByte != 0x83)
+		// 64-bit Steam: Rewrite the 26-byte float math sequence at sigAddr in-place
+		g_pGuardBombsitePatchAddress = sigAddr;
+		g_iGuardBombsitePatchSize = 26;
+
+		int firstByte = LoadFromAddress(g_pGuardBombsitePatchAddress, NumberType_Int8);
+		int secondByte = LoadFromAddress(g_pGuardBombsitePatchAddress + view_as<Address>(1), NumberType_Int8);
+
+		// Check if already patched (0x8B 0x87 = mov eax, [rdi+1E50h])
+		if (firstByte == 0x8B && secondByte == 0x87)
+		{
+			LogMessage("[BotRouteFix] [Patch 1] Already patched (Morale math present @ %X), skipping", g_pGuardBombsitePatchAddress);
+			g_bGuardBombsitePatched = false;
+			delete gc;
+			return;
+		}
+
+		// Verify expected original opcode (0x66 0x0F = movd xmm6, [rdi+1E50h])
+		if (firstByte != 0x66 || secondByte != 0x0F)
 		{
 			delete gc;
-			SetFailState("[BotRouteFix] [Patch 1] Byte mismatch at %X (expected 0F 83, got %02X %02X), patch aborted!",
+			SetFailState("[BotRouteFix] [Patch 1] Byte mismatch at %X (expected 66 0F, got %02X %02X), patch aborted!",
 				g_pGuardBombsitePatchAddress, firstByte, secondByte);
 			return;
 		}
+
+		// Backup original 26 bytes
+		for (int i = 0; i < 26; i++)
+		{
+			g_iOriginalGuardBombsiteBytes[i] = LoadFromAddress(g_pGuardBombsitePatchAddress + view_as<Address>(i), NumberType_Int8);
+		}
+
+		// Machine code: 70.0 - 10.0 * Morale (26 bytes exact alignment)
+		int patchBytes64[26] = {
+			0x8B, 0x87, 0x50, 0x1E, 0x00, 0x00, // mov eax, [rdi+1E50h] (m_morale)
+			0x6B, 0xC0, 0xF6,                   // imul eax, -10
+			0x83, 0xC0, 0x46,                   // add eax, 70 (70 - 10 * morale)
+			0xF3, 0x0F, 0x2A, 0xF0,             // cvtsi2ss xmm6, eax
+			0x41, 0x0F, 0x28, 0xC8,             // movaps xmm1, xmm8 (100.0f)
+			0x0F, 0x28, 0xC7,                   // movaps xmm0, xmm7 (0.0f)
+			0x90, 0x90, 0x90                    // 3x NOPs padding
+		};
+
+		for (int i = 0; i < 26; i++)
+		{
+			StoreToAddress(g_pGuardBombsitePatchAddress + view_as<Address>(i), patchBytes64[i], NumberType_Int8, true);
+		}
+
+		g_bGuardBombsitePatched = true;
+		LogMessage("[BotRouteFix] [Patch 1] Rewrote guardBombsite formula in-place (70 - 10 * Morale) @ %X (64-bit)", g_pGuardBombsitePatchAddress);
 	}
 	else
 	{
-		if (firstByte != 0x0F || secondByte != 0x86)
+		// 32-bit non-Steam: Rewrite the 26-byte float math sequence at sigAddr + offset in-place
+		int patchOffset = GameConfGetOffset(gc, "GuardBombsite_PatchOffset");
+		if (patchOffset == -1)
 		{
 			delete gc;
-			SetFailState("[BotRouteFix] [Patch 1] Byte mismatch at %X (expected 0F 86, got %02X %02X), patch aborted!",
+			SetFailState("[BotRouteFix] Failed to read GuardBombsite_PatchOffset!");
+			return;
+		}
+
+		g_pGuardBombsitePatchAddress = sigAddr + view_as<Address>(patchOffset);
+		g_iGuardBombsitePatchSize = 26;
+
+		int firstByte = LoadFromAddress(g_pGuardBombsitePatchAddress, NumberType_Int8);
+		int secondByte = LoadFromAddress(g_pGuardBombsitePatchAddress + view_as<Address>(1), NumberType_Int8);
+
+		// Check if already patched (0x83 0xEC = sub esp, 8)
+		if (firstByte == 0x83 && secondByte == 0xEC)
+		{
+			LogMessage("[BotRouteFix] [Patch 1] Already patched (Morale math present @ %X), skipping", g_pGuardBombsitePatchAddress);
+			g_bGuardBombsitePatched = false;
+			delete gc;
+			return;
+		}
+
+		// Verify expected original opcode (0xD9 0x05 = fld dword ptr [-34.0f])
+		if (firstByte != 0xD9 || secondByte != 0x05)
+		{
+			delete gc;
+			SetFailState("[BotRouteFix] [Patch 1] Byte mismatch at %X (expected D9 05, got %02X %02X), patch aborted!",
 				g_pGuardBombsitePatchAddress, firstByte, secondByte);
 			return;
 		}
-	}
 
-	// Backup original 6 bytes
-	for (int i = 0; i < 6; i++)
-	{
-		g_iOriginalGuardBombsiteBytes[i] = LoadFromAddress(g_pGuardBombsitePatchAddress + view_as<Address>(i), NumberType_Int8);
-	}
+		// Backup original 26 bytes
+		for (int i = 0; i < 26; i++)
+		{
+			g_iOriginalGuardBombsiteBytes[i] = LoadFromAddress(g_pGuardBombsitePatchAddress + view_as<Address>(i), NumberType_Int8);
+		}
 
-	// Apply 6x NOPs
-	for (int i = 0; i < 6; i++)
-	{
-		StoreToAddress(g_pGuardBombsitePatchAddress + view_as<Address>(i), 0x90, NumberType_Int8, true);
-	}
+		// Machine code: 70.0 - 10.0 * Morale (26 bytes exact alignment)
+		// 83 EC 08                sub     esp, 8               ; (3B)
+		// 8B 87 08 1A 00 00       mov     eax, [edi+1A08h]     ; (6B) eax = m_morale
+		// 6B C0 F6                imul    eax, -10             ; (3B) eax = morale * -10
+		// 83 C0 46                add     eax, 70              ; (3B) eax = 70 - 10 * morale
+		// 89 04 24                mov     [esp], eax           ; (3B)
+		// DB 04 24                fild    dword ptr [esp]      ; (3B) st(0) = float(chance)
+		// D9 1C 24                fstp    dword ptr [esp]      ; (3B) store float chance at [esp]
+		// 90 90                   nop     nop                  ; (2B)
+		int patchBytes32[26] = {
+			0x83, 0xEC, 0x08,
+			0x8B, 0x87, 0x08, 0x1A, 0x00, 0x00,
+			0x6B, 0xC0, 0xF6,
+			0x83, 0xC0, 0x46,
+			0x89, 0x04, 0x24,
+			0xDB, 0x04, 0x24,
+			0xD9, 0x1C, 0x24,
+			0x90, 0x90
+		};
 
-	g_bGuardBombsitePatched = true;
-	LogMessage("[BotRouteFix] [Patch 1] Replaced guardBombsite jump with 6x NOPs @ %X (CT Defense Unlocked)", g_pGuardBombsitePatchAddress);
+		for (int i = 0; i < 26; i++)
+		{
+			StoreToAddress(g_pGuardBombsitePatchAddress + view_as<Address>(i), patchBytes32[i], NumberType_Int8, true);
+		}
+
+		g_bGuardBombsitePatched = true;
+		LogMessage("[BotRouteFix] [Patch 1] Rewrote guardBombsite formula in-place (70 - 10 * Morale) @ %X (32-bit)", g_pGuardBombsitePatchAddress);
+	}
 
 	delete gc;
 }
 
 void RestoreGuardBombsitePatch()
 {
-	if (g_bGuardBombsitePatched && g_pGuardBombsitePatchAddress != Address_Null)
+	if (g_bGuardBombsitePatched && g_pGuardBombsitePatchAddress != Address_Null && g_iGuardBombsitePatchSize > 0)
 	{
-		for (int i = 0; i < 6; i++)
+		for (int i = 0; i < g_iGuardBombsitePatchSize; i++)
 		{
 			StoreToAddress(g_pGuardBombsitePatchAddress + view_as<Address>(i), g_iOriginalGuardBombsiteBytes[i], NumberType_Int8, true);
 		}
-		LogMessage("[BotRouteFix] [Patch 1] Restored original guardBombsite jump @ %X", g_pGuardBombsitePatchAddress);
+		LogMessage("[BotRouteFix] [Patch 1] Restored original guardBombsite code (%d bytes) @ %X",
+			g_iGuardBombsitePatchSize, g_pGuardBombsitePatchAddress);
 		g_bGuardBombsitePatched = false;
 	}
 }
