@@ -77,7 +77,7 @@ public Plugin myinfo =
 	author      = "Ducheese",
 	description = "CS:S Bot 寻路与战术决策底层修复",
 	version     = PLUGIN_VERSION,
-	url         = "https://github.com/Ducheese"
+	url         = "https://space.bilibili.com/1889622121"
 };
 
 //========================================================================================
@@ -88,32 +88,40 @@ public void OnPluginStart()
 {
 	LogMessage("[BotRouteFix] ========== Initializing BotRouteFix (v%s) ==========", PLUGIN_VERSION);
 
+	// =========================================================================
+	// [阶段 1] 基础设施与核心偏移加载 (Base Infrastructure & Offsets)
+	// =========================================================================
 	PrepOffsets();
-	PrepDefensePatch();
-	PrepDefenseRushPatch();
-	PrepC4PlantDelayPatch();
-	PrepPlantBombClosestZonePatch();
-	SelectRandomBombsite();
-	PrepDangerReset();
-	ResetAllNavAreaDanger();
-	StartQueueBreakerTimer();
+
+	// =========================================================================
+	// [阶段 2] SDKCalls 与 Detour 钩子准备 (SDKCalls & DHook Detours)
+	// =========================================================================
 	PrepFollowSDKCalls();
+	PrepHideSDKCall();
 	PrepHuntStateHook();
 	PrepNoticeLooseBombHook();
-	PrepDefuseSDKCalls();
-	HookGameEvents();
 
-	// Mid-round hot-reload synchronization: check if bomb is already planted on map
-	int bomb = FindEntityByClassname(-1, "planted_c4");
-	if (bomb != -1 && IsValidEntity(bomb))
-	{
-		g_bBombPlanted = true;
-		GetEntPropVector(bomb, Prop_Data, "m_vecAbsOrigin", g_fBombPlantedPos);
-		UpdateDesignatedDefuser();
-		StartDefuseCoordTimer();
-		LogMessage("[BotRouteFix] [Hot-Reload] Synchronized active planted C4 at (%.1f, %.1f, %.1f)",
-			g_fBombPlantedPos[0], g_fBombPlantedPos[1], g_fBombPlantedPos[2]);
-	}
+	// =========================================================================
+	// [阶段 3] 二进制内存补丁准备与注入 (Binary Memory Patches)
+	// =========================================================================
+	PrepGuardBombsitePatch();
+	PrepAntiRushPatch();
+	PrepInstantPlantPatch();
+	PrepBombsiteLockPatch();
+	PrepDangerReset();
+
+	// =========================================================================
+	// [阶段 4] 运行时状态初始化与定时器 (Runtime State & Active Timers)
+	// =========================================================================
+	SelectRandomBombsite();
+	ResetAllNavAreaDanger();
+	StartQueueBreakerTimer();
+
+	// =========================================================================
+	// [阶段 5] 游戏事件监听与热重载同步 (Game Events & Hot-Reload Sync)
+	// =========================================================================
+	HookGameEvents();
+	SyncMidRoundState();
 
 	LogMessage("[BotRouteFix] ========== Initialization Complete on %s ==========", g_bIsWin64 ? "64-bit (Steam x64)" : "32-bit (non-Steam)");
 }
@@ -122,10 +130,59 @@ public void OnPluginEnd()
 {
 	StopQueueBreakerTimer();
 	StopDefuseCoordTimer();
-	RestoreDefensePatch();
-	RestoreDefenseRushPatch();
-	RestoreC4PlantDelayPatch();
-	RestorePlantBombClosestZonePatch();
+
+	RestoreGuardBombsitePatch();
+	RestoreAntiRushPatch();
+	RestoreInstantPlantPatch();
+	RestoreBombsiteLockPatch();
+
 	RestoreHuntStateHook();
 	RestoreNoticeLooseBombHook();
+}
+
+//========================================================================================
+// MID-ROUND HOT-RELOAD SYNCHRONIZATION
+//========================================================================================
+
+void SyncMidRoundState()
+{
+	// -----------------------------------------------------------------------------------
+	// [状态 1：C4 已安放 (Planted C4)]
+	// -----------------------------------------------------------------------------------
+	int plantedBomb = FindEntityByClassname(-1, "planted_c4");
+	if (plantedBomb != -1 && IsValidEntity(plantedBomb))
+	{
+		g_bBombPlanted = true;
+		GetEntPropVector(plantedBomb, Prop_Data, "m_vecAbsOrigin", g_fBombPlantedPos);
+		UpdateDesignatedDefuser();
+		StartDefuseCoordTimer();
+
+		LogMessage("[BotRouteFix] [Hot-Reload] (State 1/3) Active Planted C4 synchronized at (%.1f, %.1f, %.1f)",
+			g_fBombPlantedPos[0], g_fBombPlantedPos[1], g_fBombPlantedPos[2]);
+		return;
+	}
+
+	// -----------------------------------------------------------------------------------
+	// [状态 2：C4 散落地面 (Loose Bomb)]
+	// -----------------------------------------------------------------------------------
+	int looseBomb = GetLooseBombEntity();
+	if (looseBomb != -1)
+	{
+		// 处于掉包残局：立即解除开局包点锁定，恢复原生动态就近下包
+		RestoreBombsiteLockPatch();
+
+		LogMessage("[BotRouteFix] [Hot-Reload] (State 2/3) Loose C4 on floor synchronized (Adaptive zone restored)");
+		return;
+	}
+
+	// -----------------------------------------------------------------------------------
+	// [状态 3：C4 处于运包途中 (Carried C4)]
+	// -----------------------------------------------------------------------------------
+	int carrier = GetC4Carrier();
+	if (carrier > 0 && IsPlayerAlive(carrier))
+	{
+		// 处于运包推进阶段：立即补发最近 2 名保镖随行护送
+		AssignCarrierBodyguards();
+		LogMessage("[BotRouteFix] [Hot-Reload] (State 3/3) Active Carrier %N synchronized (Bodyguards assigned)", carrier);
+	}
 }

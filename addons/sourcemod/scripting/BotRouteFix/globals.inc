@@ -3,43 +3,54 @@
 #endif
 #define _botroutefix_globals_included
 
+// 全局统一战术心跳周期 (0.5s / 2Hz，统一驱动 Timer 与缓存节流)
+#define TACTICAL_TICK_INTERVAL 0.5
+
 //========================================================================================
 // HANDLES & GLOBAL VARIABLES
 //========================================================================================
 
 bool g_bIsWin64 = false;
 
-// Patch 1: CT Bombsite Defense Unlock (guardBombsiteChance)
-Address g_pDefensePatchAddress;
-int g_iOriginalDefenseBytes[6];
-bool g_bDefensePatched = false;
+// ---------------------------------------------------------------------------------------
+// [模块 1 & 2：底层二进制内存补丁 (Binary Memory Patches)]
+// ---------------------------------------------------------------------------------------
+// Patch 1: CT 守包点解锁 (guardBombsiteChance NOP 穿透)
+Address g_pGuardBombsitePatchAddress;
+int g_iOriginalGuardBombsiteBytes[6];
+bool g_bGuardBombsitePatched = false;
 
-// Patch 2: CT Anti-Defense-Rush (IsDefenseRushing)
-Address g_pDefenseRushPatchAddress;
-int g_iOriginalDefenseRushBytes[6];
-bool g_bDefenseRushPatched = false;
+// Patch 2: CT 防前冲白给 (IsDefenseRushing NOP 穿透)
+Address g_pAntiRushPatchAddress;
+int g_iOriginalAntiRushBytes[6];
+bool g_bAntiRushPatched = false;
 
-// Patch 3: T C4 Carrier Instant Plant (IsTimeToPlantBomb delay removal)
-Address g_pC4PlantDelayPatchAddress;
-int g_iOriginalC4PlantDelayBytes[6];
-bool g_bC4PlantDelayPatched = false;
+// Patch 3: T C4 即刻运包 (IsTimeToPlantBomb 延迟移除)
+Address g_pInstantPlantPatchAddress;
+int g_iOriginalInstantPlantBytes[6];
+bool g_bInstantPlantPatched = false;
 
-// Patch 4: T Bombsite Target Lock (GetClosestZone in-memory replacement)
-Address g_pPlantBombClosestZonePatchAddress;
-int g_iOriginalPlantBombClosestZoneBytes[19];
-bool g_bPlantBombClosestZonePatched = false;
+// Patch 4: T 目标包点锁定与防折返跑 (GetClosestZone 汇编即时数注入)
+Address g_pBombsiteLockPatchAddress;
+int g_iOriginalBombsiteLockBytes[19];
+bool g_bBombsiteLockPatched = false;
 Address g_pTheCSBotsPtr;
 int g_iOffset_ZoneCount = 0;
 int g_iOffset_ZoneBase = 0;
 int g_iZoneStride = 0;
 
-// Module 3: Round Danger Reset (TheNavAreas Danger Zeroing)
+// ---------------------------------------------------------------------------------------
+// [模块 3：回合开局 Danger 软衰减 (TheNavAreas Danger Reset)]
+// ---------------------------------------------------------------------------------------
 int g_iOffset_Danger = 0;
 int g_iOffset_DangerTimestamp = 0;
 int g_iPtrSize = 0;
 
-// Module 4: 1.2s Queue Breaker & Doorway Turnaround
+// ---------------------------------------------------------------------------------------
+// [模块 4：1.2秒礼貌排队打碎与门口掉头 (Queue Breaker & Anti-Jam Turnaround)]
+// ---------------------------------------------------------------------------------------
 int g_iOffset_PathLength = 0;
+int g_iOffset_PathIndex = 0;
 int g_iOffset_IsWaitingBehindFriend = 0;
 int g_iOffset_PoliteTimer = 0;
 int g_iOffset_TimerDuration = 0;
@@ -48,16 +59,23 @@ int g_iOffset_IsStopping = 0;
 int g_iOffset_PathLadder = 0;
 Handle g_hQueueBreakerTimer = INVALID_HANDLE;
 
-// Module 5: T Carrier Escort (Follow & StopFollowing SDKCalls)
+// ---------------------------------------------------------------------------------------
+// [模块 5：T 包匪贴身保镖护航体系 (Carrier Escort System)]
+// ---------------------------------------------------------------------------------------
 Handle g_hFollowSDKCall = INVALID_HANDLE;
 Handle g_hStopFollowingSDKCall = INVALID_HANDLE;
 
-// Module 6: Hunt Target Claim & Flush (HuntState::OnUpdate Post Detour)
+// ---------------------------------------------------------------------------------------
+// [模块 6：搜敌目标即时抢占与全图打散 (Hunt Target Claim & Flush)]
+// ---------------------------------------------------------------------------------------
 Handle g_hHuntStateDetour = INVALID_HANDLE;
 int g_iOffset_HuntArea = 0;
 int g_iOffset_ClearedTimestamp = 0;
 
-// Module 7: C4 Loose Bomb Top 3 Tactical Retriever & Shared NavMesh Walk Distance
+// ---------------------------------------------------------------------------------------
+// [全局公共基础设施：NavMesh A* 寻路与路径节点解析 (Shared Pathfinding Infrastructure)]
+// 供模块 4 (防卡门)、模块 5 (保镖)、模块 7 (捡包)、模块 8 (拆包) 共享基础寻路
+// ---------------------------------------------------------------------------------------
 Handle g_hComputePathSDKCall = INVALID_HANDLE;
 int g_iOffset_Path = 0;
 int g_iPathStride = 0;
@@ -69,7 +87,17 @@ enum struct CandidateT
 	float dist;
 }
 
-// Module 8: CT Designated Defuser & Crossfire Guard
+// ---------------------------------------------------------------------------------------
+// [模块 7：C4 掉落 Top 3 战术抢包突击组 (Loose Bomb Top 3 Retriever)]
+// ---------------------------------------------------------------------------------------
+Handle g_hNoticeLooseBombDetour = INVALID_HANDLE;
+float g_fLastLooseBombCalcTime = 0.0;
+int g_iTop3Retrievers[3];
+int g_iTop3RetrieverCount = 0;
+
+// ---------------------------------------------------------------------------------------
+// [模块 8：CT 首席拆包员与交叉火力架枪体系 (CT Designated Defuser & Crossfire Guard)]
+// ---------------------------------------------------------------------------------------
 Handle g_hHideSDKCall = INVALID_HANDLE;
 int g_iOffset_Task = 0;
 bool g_bBombPlanted = false;
@@ -103,6 +131,7 @@ void PrepOffsets()
 	g_iOffset_Path = GameConfGetOffset(gc, "CCSBot_Path_Offset");
 	g_iPathStride = GameConfGetOffset(gc, "CCSBot_PathStride");
 	g_iOffset_PathLength = GameConfGetOffset(gc, "CCSBot_PathLength_Offset");
+	g_iOffset_PathIndex = g_iOffset_PathLength + 4; // C++ 结构体紧随 m_pathLength 之后
 	g_iOffset_IsWaitingBehindFriend = GameConfGetOffset(gc, "CCSBot_IsWaitingBehindFriend_Offset");
 	g_iOffset_PoliteTimer = GameConfGetOffset(gc, "CCSBot_PoliteTimer_Offset");
 	g_iOffset_TimerDuration = GameConfGetOffset(gc, "CountdownTimer_Duration_Offset");

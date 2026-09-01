@@ -65,7 +65,7 @@ public void Event_BombDropped(Event event, const char[] name, bool dontBroadcast
 	}
 
 	// 2. Tactical Retake Adaptability: restore native GetClosestZone so new carrier adapts to current field position
-	RestorePlantBombClosestZonePatch();
+	RestoreBombsiteLockPatch();
 
 	// 3. Reset loose bomb retriever cache
 	ResetLooseBombCache();

@@ -7,7 +7,7 @@
 // PATCH 1: CT BOMBSITE DEFENSE (guardBombsiteChance)
 //========================================================================================
 
-void PrepDefensePatch()
+void PrepGuardBombsitePatch()
 {
 	Handle gc = LoadGameConfigFile(GAMEDATA);
 	if (gc == null)
@@ -29,16 +29,16 @@ void PrepDefensePatch()
 		return;
 	}
 
-	g_pDefensePatchAddress = sigAddr + view_as<Address>(patchOffset);
+	g_pGuardBombsitePatchAddress = sigAddr + view_as<Address>(patchOffset);
 
-	int firstByte = LoadFromAddress(g_pDefensePatchAddress, NumberType_Int8);
-	int secondByte = LoadFromAddress(g_pDefensePatchAddress + view_as<Address>(1), NumberType_Int8);
+	int firstByte = LoadFromAddress(g_pGuardBombsitePatchAddress, NumberType_Int8);
+	int secondByte = LoadFromAddress(g_pGuardBombsitePatchAddress + view_as<Address>(1), NumberType_Int8);
 
 	// Check if already patched (0x90 = NOP) -> safely skip and avoid zero-overwrite on unload
 	if (firstByte == 0x90 && secondByte == 0x90)
 	{
-		LogMessage("[BotRouteFix] [Patch 1] Already patched (NOPs present @ %X), skipping", g_pDefensePatchAddress);
-		g_bDefensePatched = false;
+		LogMessage("[BotRouteFix] [Patch 1] Already patched (NOPs present @ %X), skipping", g_pGuardBombsitePatchAddress);
+		g_bGuardBombsitePatched = false;
 		delete gc;
 		return;
 	}
@@ -50,7 +50,7 @@ void PrepDefensePatch()
 		{
 			delete gc;
 			SetFailState("[BotRouteFix] [Patch 1] Byte mismatch at %X (expected 0F 83, got %02X %02X), patch aborted!",
-				g_pDefensePatchAddress, firstByte, secondByte);
+				g_pGuardBombsitePatchAddress, firstByte, secondByte);
 			return;
 		}
 	}
@@ -60,7 +60,7 @@ void PrepDefensePatch()
 		{
 			delete gc;
 			SetFailState("[BotRouteFix] [Patch 1] Byte mismatch at %X (expected 0F 86, got %02X %02X), patch aborted!",
-				g_pDefensePatchAddress, firstByte, secondByte);
+				g_pGuardBombsitePatchAddress, firstByte, secondByte);
 			return;
 		}
 	}
@@ -68,39 +68,39 @@ void PrepDefensePatch()
 	// Backup original 6 bytes
 	for (int i = 0; i < 6; i++)
 	{
-		g_iOriginalDefenseBytes[i] = LoadFromAddress(g_pDefensePatchAddress + view_as<Address>(i), NumberType_Int8);
+		g_iOriginalGuardBombsiteBytes[i] = LoadFromAddress(g_pGuardBombsitePatchAddress + view_as<Address>(i), NumberType_Int8);
 	}
 
 	// Apply 6x NOPs
 	for (int i = 0; i < 6; i++)
 	{
-		StoreToAddress(g_pDefensePatchAddress + view_as<Address>(i), 0x90, NumberType_Int8, true);
+		StoreToAddress(g_pGuardBombsitePatchAddress + view_as<Address>(i), 0x90, NumberType_Int8, true);
 	}
 
-	g_bDefensePatched = true;
-	LogMessage("[BotRouteFix] [Patch 1] Replaced guardBombsite jump with 6x NOPs @ %X (CT Defense Unlocked)", g_pDefensePatchAddress);
+	g_bGuardBombsitePatched = true;
+	LogMessage("[BotRouteFix] [Patch 1] Replaced guardBombsite jump with 6x NOPs @ %X (CT Defense Unlocked)", g_pGuardBombsitePatchAddress);
 
 	delete gc;
 }
 
-void RestoreDefensePatch()
+void RestoreGuardBombsitePatch()
 {
-	if (g_bDefensePatched && g_pDefensePatchAddress != Address_Null)
+	if (g_bGuardBombsitePatched && g_pGuardBombsitePatchAddress != Address_Null)
 	{
 		for (int i = 0; i < 6; i++)
 		{
-			StoreToAddress(g_pDefensePatchAddress + view_as<Address>(i), g_iOriginalDefenseBytes[i], NumberType_Int8, true);
+			StoreToAddress(g_pGuardBombsitePatchAddress + view_as<Address>(i), g_iOriginalGuardBombsiteBytes[i], NumberType_Int8, true);
 		}
-		LogMessage("[BotRouteFix] [Patch 1] Restored original guardBombsite jump @ %X", g_pDefensePatchAddress);
-		g_bDefensePatched = false;
+		LogMessage("[BotRouteFix] [Patch 1] Restored original guardBombsite jump @ %X", g_pGuardBombsitePatchAddress);
+		g_bGuardBombsitePatched = false;
 	}
 }
 
 //========================================================================================
-// PATCH 2: CT ANTI-DEFENSE-RUSH (IsDefenseRushing)
+// PATCH 2: CT ANTI-RUSH (IsDefenseRushing)
 //========================================================================================
 
-void PrepDefenseRushPatch()
+void PrepAntiRushPatch()
 {
 	Handle gc = LoadGameConfigFile(GAMEDATA);
 	if (gc == null)
@@ -122,16 +122,16 @@ void PrepDefenseRushPatch()
 		return;
 	}
 
-	g_pDefenseRushPatchAddress = sigAddr + view_as<Address>(patchOffset);
+	g_pAntiRushPatchAddress = sigAddr + view_as<Address>(patchOffset);
 
-	int firstByte = LoadFromAddress(g_pDefenseRushPatchAddress, NumberType_Int8);
-	int secondByte = LoadFromAddress(g_pDefenseRushPatchAddress + view_as<Address>(1), NumberType_Int8);
+	int firstByte = LoadFromAddress(g_pAntiRushPatchAddress, NumberType_Int8);
+	int secondByte = LoadFromAddress(g_pAntiRushPatchAddress + view_as<Address>(1), NumberType_Int8);
 
 	// Check if already patched (0x90 = NOP) -> safely skip and avoid zero-overwrite on unload
 	if (firstByte == 0x90 && secondByte == 0x90)
 	{
-		LogMessage("[BotRouteFix] [Patch 2] Already patched (NOPs present @ %X), skipping", g_pDefenseRushPatchAddress);
-		g_bDefenseRushPatched = false;
+		LogMessage("[BotRouteFix] [Patch 2] Already patched (NOPs present @ %X), skipping", g_pAntiRushPatchAddress);
+		g_bAntiRushPatched = false;
 		delete gc;
 		return;
 	}
@@ -141,38 +141,38 @@ void PrepDefenseRushPatch()
 	{
 		delete gc;
 		SetFailState("[BotRouteFix] [Patch 2] Byte mismatch at %X (expected 0F 85, got %02X %02X), patch aborted!",
-			g_pDefenseRushPatchAddress, firstByte, secondByte);
+				g_pAntiRushPatchAddress, firstByte, secondByte);
 		return;
 	}
 
 	// Backup original 6 bytes
 	for (int i = 0; i < 6; i++)
 	{
-		g_iOriginalDefenseRushBytes[i] = LoadFromAddress(g_pDefenseRushPatchAddress + view_as<Address>(i), NumberType_Int8);
+		g_iOriginalAntiRushBytes[i] = LoadFromAddress(g_pAntiRushPatchAddress + view_as<Address>(i), NumberType_Int8);
 	}
 
 	// Apply 6x NOPs
 	for (int i = 0; i < 6; i++)
 	{
-		StoreToAddress(g_pDefenseRushPatchAddress + view_as<Address>(i), 0x90, NumberType_Int8, true);
+		StoreToAddress(g_pAntiRushPatchAddress + view_as<Address>(i), 0x90, NumberType_Int8, true);
 	}
 
-	g_bDefenseRushPatched = true;
-	LogMessage("[BotRouteFix] [Patch 2] Replaced IsDefenseRushing jump with 6x NOPs @ %X (Anti-Rush Activated)", g_pDefenseRushPatchAddress);
+	g_bAntiRushPatched = true;
+	LogMessage("[BotRouteFix] [Patch 2] Replaced IsDefenseRushing jump with 6x NOPs @ %X (Anti-Rush Activated)", g_pAntiRushPatchAddress);
 
 	delete gc;
 }
 
-void RestoreDefenseRushPatch()
+void RestoreAntiRushPatch()
 {
-	if (g_bDefenseRushPatched && g_pDefenseRushPatchAddress != Address_Null)
+	if (g_bAntiRushPatched && g_pAntiRushPatchAddress != Address_Null)
 	{
 		for (int i = 0; i < 6; i++)
 		{
-			StoreToAddress(g_pDefenseRushPatchAddress + view_as<Address>(i), g_iOriginalDefenseRushBytes[i], NumberType_Int8, true);
+			StoreToAddress(g_pAntiRushPatchAddress + view_as<Address>(i), g_iOriginalAntiRushBytes[i], NumberType_Int8, true);
 		}
-		LogMessage("[BotRouteFix] [Patch 2] Restored original IsDefenseRushing jump @ %X", g_pDefenseRushPatchAddress);
-		g_bDefenseRushPatched = false;
+		LogMessage("[BotRouteFix] [Patch 2] Restored original IsDefenseRushing jump @ %X", g_pAntiRushPatchAddress);
+		g_bAntiRushPatched = false;
 	}
 }
 
@@ -180,7 +180,7 @@ void RestoreDefenseRushPatch()
 // PATCH 3: T C4 CARRIER INSTANT PLANT (IsTimeToPlantBomb delay removal)
 //========================================================================================
 
-void PrepC4PlantDelayPatch()
+void PrepInstantPlantPatch()
 {
 	Handle gc = LoadGameConfigFile(GAMEDATA);
 	if (gc == null)
@@ -202,16 +202,16 @@ void PrepC4PlantDelayPatch()
 		return;
 	}
 
-	g_pC4PlantDelayPatchAddress = sigAddr + view_as<Address>(patchOffset);
+	g_pInstantPlantPatchAddress = sigAddr + view_as<Address>(patchOffset);
 
-	int firstByte = LoadFromAddress(g_pC4PlantDelayPatchAddress, NumberType_Int8);
-	int secondByte = LoadFromAddress(g_pC4PlantDelayPatchAddress + view_as<Address>(1), NumberType_Int8);
+	int firstByte = LoadFromAddress(g_pInstantPlantPatchAddress, NumberType_Int8);
+	int secondByte = LoadFromAddress(g_pInstantPlantPatchAddress + view_as<Address>(1), NumberType_Int8);
 
 	// Check if already patched (0x90 = NOP) -> safely skip and avoid zero-overwrite on unload
 	if (firstByte == 0x90 && secondByte == 0x90)
 	{
-		LogMessage("[BotRouteFix] [Patch 3] Already patched (NOPs present @ %X), skipping", g_pC4PlantDelayPatchAddress);
-		g_bC4PlantDelayPatched = false;
+		LogMessage("[BotRouteFix] [Patch 3] Already patched (NOPs present @ %X), skipping", g_pInstantPlantPatchAddress);
+		g_bInstantPlantPatched = false;
 		delete gc;
 		return;
 	}
@@ -223,7 +223,7 @@ void PrepC4PlantDelayPatch()
 		{
 			delete gc;
 			SetFailState("[BotRouteFix] [Patch 3] Byte mismatch at %X (expected 0F 87, got %02X %02X), patch aborted!",
-				g_pC4PlantDelayPatchAddress, firstByte, secondByte);
+				g_pInstantPlantPatchAddress, firstByte, secondByte);
 			return;
 		}
 	}
@@ -233,7 +233,7 @@ void PrepC4PlantDelayPatch()
 		{
 			delete gc;
 			SetFailState("[BotRouteFix] [Patch 3] Byte mismatch at %X (expected 0F 82, got %02X %02X), patch aborted!",
-				g_pC4PlantDelayPatchAddress, firstByte, secondByte);
+				g_pInstantPlantPatchAddress, firstByte, secondByte);
 			return;
 		}
 	}
@@ -241,31 +241,31 @@ void PrepC4PlantDelayPatch()
 	// Backup original 6 bytes
 	for (int i = 0; i < 6; i++)
 	{
-		g_iOriginalC4PlantDelayBytes[i] = LoadFromAddress(g_pC4PlantDelayPatchAddress + view_as<Address>(i), NumberType_Int8);
+		g_iOriginalInstantPlantBytes[i] = LoadFromAddress(g_pInstantPlantPatchAddress + view_as<Address>(i), NumberType_Int8);
 	}
 
 	// Apply 6x NOPs
 	for (int i = 0; i < 6; i++)
 	{
-		StoreToAddress(g_pC4PlantDelayPatchAddress + view_as<Address>(i), 0x90, NumberType_Int8, true);
+		StoreToAddress(g_pInstantPlantPatchAddress + view_as<Address>(i), 0x90, NumberType_Int8, true);
 	}
 
-	g_bC4PlantDelayPatched = true;
-	LogMessage("[BotRouteFix] [Patch 3] Replaced IsTimeToPlantBomb delay jump with 6x NOPs @ %X (C4 Carrier Instant Plant Activated)", g_pC4PlantDelayPatchAddress);
+	g_bInstantPlantPatched = true;
+	LogMessage("[BotRouteFix] [Patch 3] Replaced IsTimeToPlantBomb delay jump with 6x NOPs @ %X (C4 Carrier Instant Plant Activated)", g_pInstantPlantPatchAddress);
 
 	delete gc;
 }
 
-void RestoreC4PlantDelayPatch()
+void RestoreInstantPlantPatch()
 {
-	if (g_bC4PlantDelayPatched && g_pC4PlantDelayPatchAddress != Address_Null)
+	if (g_bInstantPlantPatched && g_pInstantPlantPatchAddress != Address_Null)
 	{
 		for (int i = 0; i < 6; i++)
 		{
-			StoreToAddress(g_pC4PlantDelayPatchAddress + view_as<Address>(i), g_iOriginalC4PlantDelayBytes[i], NumberType_Int8, true);
+			StoreToAddress(g_pInstantPlantPatchAddress + view_as<Address>(i), g_iOriginalInstantPlantBytes[i], NumberType_Int8, true);
 		}
-		LogMessage("[BotRouteFix] [Patch 3] Restored original C4 plant delay jump @ %X", g_pC4PlantDelayPatchAddress);
-		g_bC4PlantDelayPatched = false;
+		LogMessage("[BotRouteFix] [Patch 3] Restored original C4 plant delay jump @ %X", g_pInstantPlantPatchAddress);
+		g_bInstantPlantPatched = false;
 	}
 }
 
@@ -273,7 +273,7 @@ void RestoreC4PlantDelayPatch()
 // PATCH 4: T ROUND BOMBSITE RANDOM TARGET LOCK (GetClosestZone In-Memory Patch)
 //========================================================================================
 
-void PrepPlantBombClosestZonePatch()
+void PrepBombsiteLockPatch()
 {
 	Handle gc = LoadGameConfigFile(GAMEDATA);
 	if (gc == null)
@@ -311,15 +311,15 @@ void PrepPlantBombClosestZonePatch()
 		return;
 	}
 
-	g_pPlantBombClosestZonePatchAddress = sigAddr + view_as<Address>(patchOffset);
+	g_pBombsiteLockPatchAddress = sigAddr + view_as<Address>(patchOffset);
 
-	int firstByte = LoadFromAddress(g_pPlantBombClosestZonePatchAddress, NumberType_Int8);
-	int secondByte = LoadFromAddress(g_pPlantBombClosestZonePatchAddress + view_as<Address>(1), NumberType_Int8);
+	int firstByte = LoadFromAddress(g_pBombsiteLockPatchAddress, NumberType_Int8);
+	int secondByte = LoadFromAddress(g_pBombsiteLockPatchAddress + view_as<Address>(1), NumberType_Int8);
 
 	// Check if already patched (0x48 0xB8 on x64, 0xB8 on x86)
 	if ((g_bIsWin64 && firstByte == 0x48 && secondByte == 0xB8) || (!g_bIsWin64 && firstByte == 0xB8))
 	{
-		LogMessage("[BotRouteFix] [Patch 4] Already patched @ %X, skipping initialization", g_pPlantBombClosestZonePatchAddress);
+		LogMessage("[BotRouteFix] [Patch 4] Already patched @ %X, skipping initialization", g_pBombsiteLockPatchAddress);
 		delete gc;
 		return;
 	}
@@ -331,7 +331,7 @@ void PrepPlantBombClosestZonePatch()
 		{
 			delete gc;
 			SetFailState("[BotRouteFix] [Patch 4] Byte mismatch at %X (expected 45 33, got %02X %02X), patch aborted!",
-				g_pPlantBombClosestZonePatchAddress, firstByte, secondByte);
+				g_pBombsiteLockPatchAddress, firstByte, secondByte);
 			return;
 		}
 	}
@@ -341,7 +341,7 @@ void PrepPlantBombClosestZonePatch()
 		{
 			delete gc;
 			SetFailState("[BotRouteFix] [Patch 4] Byte mismatch at %X (expected 6A 00, got %02X %02X), patch aborted!",
-				g_pPlantBombClosestZonePatchAddress, firstByte, secondByte);
+				g_pBombsiteLockPatchAddress, firstByte, secondByte);
 			return;
 		}
 	}
@@ -349,66 +349,65 @@ void PrepPlantBombClosestZonePatch()
 	// Backup original 19 bytes
 	for (int i = 0; i < 19; i++)
 	{
-		g_iOriginalPlantBombClosestZoneBytes[i] = LoadFromAddress(g_pPlantBombClosestZonePatchAddress + view_as<Address>(i), NumberType_Int8);
+		g_iOriginalBombsiteLockBytes[i] = LoadFromAddress(g_pBombsiteLockPatchAddress + view_as<Address>(i), NumberType_Int8);
 	}
 
-	LogMessage("[BotRouteFix] [Patch 4] Verified PlantBombClosestZone block @ %X", g_pPlantBombClosestZonePatchAddress);
+	LogMessage("[BotRouteFix] [Patch 4] Verified PlantBombClosestZone block @ %X", g_pBombsiteLockPatchAddress);
 	delete gc;
 }
 
 void ApplyLockedBombsitePatch(int zoneIndex)
 {
-	if (g_pPlantBombClosestZonePatchAddress == Address_Null || g_pTheCSBotsPtr == Address_Null)
+	if (g_pBombsiteLockPatchAddress == Address_Null || g_pTheCSBotsPtr == Address_Null)
+		return;
+
+	Address pTheCSBots = LoadAddressFromAddress(g_pTheCSBotsPtr);
+	if (pTheCSBots == Address_Null)
 		return;
 
 	int offset = g_iOffset_ZoneBase + zoneIndex * g_iZoneStride;
+	Address targetZone = pTheCSBots + view_as<Address>(offset);
 
 	if (g_bIsWin64)
 	{
 		// 64-bit: mov rax, [imm64] (48 B8 [8-byte imm64]) + 9 NOPs (total 19 bytes)
-		int lowDword = LoadFromAddress(g_pTheCSBotsPtr, NumberType_Int32) + offset;
-		int highDword = LoadFromAddress(g_pTheCSBotsPtr + view_as<Address>(4), NumberType_Int32);
-
-		StoreToAddress(g_pPlantBombClosestZonePatchAddress, 0x48, NumberType_Int8, true);
-		StoreToAddress(g_pPlantBombClosestZonePatchAddress + view_as<Address>(1), 0xB8, NumberType_Int8, true);
-		StoreToAddress(g_pPlantBombClosestZonePatchAddress + view_as<Address>(2), lowDword, NumberType_Int32, true);
-		StoreToAddress(g_pPlantBombClosestZonePatchAddress + view_as<Address>(6), highDword, NumberType_Int32, true);
+		StoreToAddress(g_pBombsiteLockPatchAddress, 0x48, NumberType_Int8, true);
+		StoreToAddress(g_pBombsiteLockPatchAddress + view_as<Address>(1), 0xB8, NumberType_Int8, true);
+		StoreAddressToAddress(g_pBombsiteLockPatchAddress + view_as<Address>(2), targetZone, true);
 
 		for (int i = 10; i < 19; i++)
 		{
-			StoreToAddress(g_pPlantBombClosestZonePatchAddress + view_as<Address>(i), 0x90, NumberType_Int8, true);
+			StoreToAddress(g_pBombsiteLockPatchAddress + view_as<Address>(i), 0x90, NumberType_Int8, true);
 		}
 	}
 	else
 	{
 		// 32-bit: mov eax, [imm32] (B8 [4-byte imm32]) + 14 NOPs (total 19 bytes)
-		int lowDword = LoadFromAddress(g_pTheCSBotsPtr, NumberType_Int32) + offset;
-
-		StoreToAddress(g_pPlantBombClosestZonePatchAddress, 0xB8, NumberType_Int8, true);
-		StoreToAddress(g_pPlantBombClosestZonePatchAddress + view_as<Address>(1), lowDword, NumberType_Int32, true);
+		StoreToAddress(g_pBombsiteLockPatchAddress, 0xB8, NumberType_Int8, true);
+		StoreAddressToAddress(g_pBombsiteLockPatchAddress + view_as<Address>(1), targetZone, true);
 
 		for (int i = 5; i < 19; i++)
 		{
-			StoreToAddress(g_pPlantBombClosestZonePatchAddress + view_as<Address>(i), 0x90, NumberType_Int8, true);
+			StoreToAddress(g_pBombsiteLockPatchAddress + view_as<Address>(i), 0x90, NumberType_Int8, true);
 		}
 	}
 
-	g_bPlantBombClosestZonePatched = true;
+	g_bBombsiteLockPatched = true;
 	LogMessage("[BotRouteFix] [Patch 4] Locked T Carrier Target Bombsite to Zone #%d (Offset +%d) @ %X",
-		zoneIndex, offset, g_pPlantBombClosestZonePatchAddress);
+		zoneIndex, offset, g_pBombsiteLockPatchAddress);
 }
 
-void RestorePlantBombClosestZonePatch()
+void RestoreBombsiteLockPatch()
 {
-	if (g_bPlantBombClosestZonePatched && g_pPlantBombClosestZonePatchAddress != Address_Null)
+	if (g_bBombsiteLockPatched && g_pBombsiteLockPatchAddress != Address_Null)
 	{
 		for (int i = 0; i < 19; i++)
 		{
-			StoreToAddress(g_pPlantBombClosestZonePatchAddress + view_as<Address>(i),
-				g_iOriginalPlantBombClosestZoneBytes[i], NumberType_Int8, true);
+			StoreToAddress(g_pBombsiteLockPatchAddress + view_as<Address>(i),
+				g_iOriginalBombsiteLockBytes[i], NumberType_Int8, true);
 		}
-		g_bPlantBombClosestZonePatched = false;
-		LogMessage("[BotRouteFix] [Patch 4] Restored original GetClosestZone call @ %X", g_pPlantBombClosestZonePatchAddress);
+		g_bBombsiteLockPatched = false;
+		LogMessage("[BotRouteFix] [Patch 4] Restored original GetClosestZone call @ %X", g_pBombsiteLockPatchAddress);
 	}
 }
 

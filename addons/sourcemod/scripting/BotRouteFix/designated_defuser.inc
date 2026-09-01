@@ -7,7 +7,7 @@
 // MODULE 8: CT DESIGNATED DEFUSER & CROSSFIRE GUARD
 //========================================================================================
 
-void PrepDefuseSDKCalls()
+void PrepHideSDKCall()
 {
 	Handle gc = LoadGameConfigFile(GAMEDATA);
 	if (gc == null)
@@ -35,7 +35,7 @@ void StartDefuseCoordTimer()
 {
 	if (g_hDefuseCoordTimer == INVALID_HANDLE)
 	{
-		g_hDefuseCoordTimer = CreateTimer(0.2, Timer_DefuseCoordination, _, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
+		g_hDefuseCoordTimer = CreateTimer(TACTICAL_TICK_INTERVAL, Timer_DefuseCoordination, _, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
 	}
 }
 
@@ -65,15 +65,24 @@ public Action Timer_DefuseCoordination(Handle timer)
 		if (i == g_iDesignatedDefuser)
 			continue;
 
-		float ctPos[3];
-		GetClientAbsOrigin(i, ctPos);
-		float distToBomb = GetVectorDistance(ctPos, g_fBombPlantedPos);
-
-		// Bombsite Gating: Native func_bomb_target trigger check + near-site fallback
+		// Bombsite Gating: Native func_bomb_target trigger check + near-site NavMesh walk distance
 		// If farther away, let them continue sprinting to the bombsite via MoveTo!
 		bool isAtSite = (GetEntProp(i, Prop_Send, "m_bInBombZone") == 1);
-		if (!isAtSite && distToBomb > 600.0)
-			continue;
+		if (!isAtSite)
+		{
+			// 0-cost Euclidean coarse check: skip expensive A* if bot is far away (>1000 units)
+			float ctPos[3];
+			GetClientAbsOrigin(i, ctPos);
+			if (GetVectorDistance(ctPos, g_fBombPlantedPos) > 1000.0)
+				continue;
+
+			float walkDist = GetNavMeshWalkDistance(i, g_fBombPlantedPos);
+			if (walkDist < 0.0)
+				walkDist = GetVectorDistance(ctPos, g_fBombPlantedPos) * 2.0;
+
+			if (walkDist > 800.0)
+				continue;
+		}
 
 		Address pBot = GetEntityAddress(i);
 		if (pBot == Address_Null)
@@ -103,6 +112,13 @@ void UpdateDesignatedDefuser()
 		return;
 	}
 
+	// Fast Short-Circuit: If current designated defuser is still alive and on CT team, keep assignment
+	if (g_iDesignatedDefuser > 0 && IsClientInGame(g_iDesignatedDefuser) &&
+		IsPlayerAlive(g_iDesignatedDefuser) && GetClientTeam(g_iDesignatedDefuser) == 3)
+	{
+		return;
+	}
+
 	int bestCT = 0;
 	float bestScore = 99999999.0;
 
@@ -111,13 +127,17 @@ void UpdateDesignatedDefuser()
 		// Only evaluate Bots for the AI designated lead defuser slot to prevent AFK human deadlock
 		if (IsClientInGame(i) && IsPlayerAlive(i) && GetClientTeam(i) == 3 && IsFakeClient(i))
 		{
-			float pos[3];
-			GetClientAbsOrigin(i, pos);
-			float dist = GetVectorDistance(pos, g_fBombPlantedPos);
+			float walkDist = GetNavMeshWalkDistance(i, g_fBombPlantedPos);
+			if (walkDist < 0.0)
+			{
+				float pos[3];
+				GetClientAbsOrigin(i, pos);
+				walkDist = GetVectorDistance(pos, g_fBombPlantedPos) * 2.0;
+			}
 
 			// Bonus if CT has defusal kit (-500 units priority)
 			bool hasKit = (GetEntProp(i, Prop_Send, "m_bHasDefuser") == 1);
-			float score = hasKit ? (dist - 500.0) : dist;
+			float score = hasKit ? (walkDist - 500.0) : walkDist;
 
 			if (score < bestScore)
 			{

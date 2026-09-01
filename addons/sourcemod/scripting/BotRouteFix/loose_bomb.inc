@@ -7,8 +7,6 @@
 // MODULE 7: TACTICAL TOP 3 RETRIEVER (NavMesh Ground Walk Distance)
 //========================================================================================
 
-Handle g_hNoticeLooseBombDetour = INVALID_HANDLE;
-
 void PrepNoticeLooseBombHook()
 {
 	Handle gc = LoadGameConfigFile(GAMEDATA);
@@ -38,10 +36,6 @@ void RestoreNoticeLooseBombHook()
 		g_hNoticeLooseBombDetour = null;
 	}
 }
-
-float g_fLastLooseBombCalcTime = 0.0;
-int g_iTop3Retrievers[3];
-int g_iTop3RetrieverCount = 0;
 
 void ResetLooseBombCache()
 {
@@ -74,8 +68,8 @@ public MRESReturn Hook_NoticeLooseBomb_Post(int client, Handle hReturn)
 
 	float curtime = GetGameTime();
 
-	// Invalidate cache if 0.5s elapsed or any cached member died/disconnected
-	bool needRecalc = (curtime - g_fLastLooseBombCalcTime >= 0.5);
+	// Invalidate cache if tactical interval elapsed or any cached member died/disconnected
+	bool needRecalc = (curtime - g_fLastLooseBombCalcTime >= TACTICAL_TICK_INTERVAL);
 	if (!needRecalc)
 	{
 		for (int i = 0; i < g_iTop3RetrieverCount; i++)

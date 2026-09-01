@@ -47,7 +47,7 @@ void AssignCarrierBodyguards()
 	// Reset all active followers first to strictly enforce the bodyguard quota
 	for (int i = 1; i <= MaxClients; i++)
 	{
-		if (IsClientInGame(i) && IsPlayerAlive(i) && GetClientTeam(i) == 2 && IsFakeClient(i))
+		if (i != carrier && IsClientInGame(i) && IsPlayerAlive(i) && GetClientTeam(i) == 2 && IsFakeClient(i))
 		{
 			if (g_hStopFollowingSDKCall != null)
 			{
