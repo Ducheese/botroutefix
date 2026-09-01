@@ -86,13 +86,34 @@ void AssignCarrierBodyguards()
 	if (candidateCount <= 0)
 		return;
 
-	// Determine bodyguard count based on alive teammates ratio:
-	// - 1 teammate left: 1 follows
-	// - 2 teammates left: 1 follows, 1 free
-	// - >= 3 teammates left: 2 follow, remaining free
-	int bodyguardsToAssign = 1;
-	if (candidateCount >= 3)
-		bodyguardsToAssign = 2;
+	// 1. Read carrier's Morale
+	int carrierMorale = 1; // Default POSITIVE
+	Address pCarrier = GetEntityAddress(carrier);
+	if (pCarrier != Address_Null && g_iOffset_Morale > 0)
+	{
+		carrierMorale = LoadFromAddress(pCarrier + view_as<Address>(g_iOffset_Morale), NumberType_Int32);
+	}
+
+	// 2. Linear Bodyguard formula: 3 - Morale (clamped to [0, 6])
+	int bodyguardsToAssign = 3 - carrierMorale;
+	if (bodyguardsToAssign < 0) bodyguardsToAssign = 0;
+	if (bodyguardsToAssign > 6) bodyguardsToAssign = 6;
+
+	// 3. Linear Plant Delay formula: 30.0 + 10.0 * Morale (clamped to [0.0, 60.0])
+	float plantDelay = 30.0 + 10.0 * float(carrierMorale);
+	if (plantDelay < 0.0) plantDelay = 0.0;
+	if (plantDelay > 60.0) plantDelay = 60.0;
+
+	// 4. Dynamically update TheCSBots()->m_earliestBombPlantTimestamp in engine memory
+	if (g_pTheCSBotsPtr != Address_Null && g_iOffset_EarliestBombPlant > 0)
+	{
+		Address pTheCSBots = LoadAddressFromAddress(g_pTheCSBotsPtr);
+		if (pTheCSBots != Address_Null)
+		{
+			float targetTimestamp = GetGameTime() + plantDelay;
+			StoreToAddress(pTheCSBots + view_as<Address>(g_iOffset_EarliestBombPlant), view_as<int>(targetTimestamp), NumberType_Int32);
+		}
+	}
 
 	// Sort candidates ascending by pre-calculated distance (pure in-memory sort, 0 extra A* calls)
 	for (int i = 0; i < candidateCount - 1; i++)
@@ -110,15 +131,23 @@ void AssignCarrierBodyguards()
 	}
 
 	// Assign the closest bodyguards
+	int assignedCount = 0;
 	for (int i = 0; i < bodyguardsToAssign && i < candidateCount; i++)
 	{
 		int bot = candidates[i].client;
 		if (g_hFollowSDKCall != null)
 		{
 			SDKCall(g_hFollowSDKCall, bot, carrier);
-			LogMessage("[BotRouteFix] [Module 5] Assigned %N to escort C4 carrier %N", bot, carrier);
+			assignedCount++;
 		}
 	}
+
+	char sign[2];
+	sign[0] = (carrierMorale > 0) ? '+' : '\0';
+	sign[1] = '\0';
+
+	LogMessage("[BotRouteFix] [Module 5] Assigned %d/%d bodyguard(s) to C4 carrier %N (Morale: %s%d, Plant Delay: %.1fs)",
+		assignedCount, bodyguardsToAssign, carrier, sign, carrierMorale, plantDelay);
 }
 
 int GetC4Carrier()

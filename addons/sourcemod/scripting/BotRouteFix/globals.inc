@@ -102,6 +102,7 @@ int g_iTop3RetrieverCount = 0;
 Handle g_hHideSDKCall = INVALID_HANDLE;
 int g_iOffset_Task = 0;
 int g_iOffset_Morale = 0;
+int g_iOffset_EarliestBombPlant = 0;
 bool g_bBombPlanted = false;
 float g_fBombPlantedPos[3];
 int g_iDesignatedDefuser = 0;
@@ -143,6 +144,7 @@ void PrepOffsets()
 	g_iOffset_ConnectInfoPos = GameConfGetOffset(gc, "ConnectInfo_Vector_Offset");
 	g_iOffset_Task = GameConfGetOffset(gc, "CCSBot_Task_Offset");
 	g_iOffset_Morale = GameConfGetOffset(gc, "CCSBot_Morale_Offset");
+	g_iOffset_EarliestBombPlant = GameConfGetOffset(gc, "TheCSBots_EarliestBombPlant_Offset");
 
 	g_iOffset_HuntArea = GameConfGetOffset(gc, "HuntState_HuntArea_Offset");
 	g_iOffset_ClearedTimestamp = GameConfGetOffset(gc, "NavArea_ClearedTimestamp_Offset");
@@ -153,7 +155,7 @@ void PrepOffsets()
 		g_iOffset_IsWaitingBehindFriend == -1 || g_iOffset_PoliteTimer == -1 ||
 		g_iOffset_TimerDuration == -1 || g_iOffset_TimerTimestamp == -1 ||
 		g_iOffset_IsStopping == -1 || g_iOffset_PathLadder == -1 || g_iOffset_ConnectInfoPos == -1 ||
-		g_iOffset_Task == -1 || g_iOffset_Morale == -1 ||
+		g_iOffset_Task == -1 || g_iOffset_Morale == -1 || g_iOffset_EarliestBombPlant == -1 ||
 		g_iOffset_HuntArea == -1 || g_iOffset_ClearedTimestamp == -1)
 	{
 		delete gc;

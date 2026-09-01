@@ -216,6 +216,11 @@
 				"windows"	"6664"
 				"windows64"	"7760"
 			}
+			"TheCSBots_EarliestBombPlant_Offset"
+			{
+				"windows"	"6712"
+				"windows64"	"7020"
+			}
 			"IsWin64"
 			{
 				"windows"	"0"

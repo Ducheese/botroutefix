@@ -39,32 +39,68 @@ public void Event_RoundFreezeEnd(Event event, const char[] name, bool dontBroadc
 void DumpRoundMoraleStats()
 {
 	char ctMoraleBuf[256];
+	char tMoraleBuf[256];
 	ctMoraleBuf[0] = '\0';
+	tMoraleBuf[0] = '\0';
 	int ctCount = 0;
+	int tCount = 0;
+	int carrier = GetC4Carrier();
 
 	for (int i = 1; i <= MaxClients; i++)
 	{
-		if (IsClientInGame(i) && IsPlayerAlive(i) && GetClientTeam(i) == 3 && IsFakeClient(i))
+		if (IsClientInGame(i) && IsPlayerAlive(i) && IsFakeClient(i))
 		{
 			Address pBot = GetEntityAddress(i);
 			if (pBot != Address_Null && g_iOffset_Morale > 0)
 			{
 				int morale = LoadFromAddress(pBot + view_as<Address>(g_iOffset_Morale), NumberType_Int32);
-				float chance = 70.0 - 10.0 * float(morale);
-				if (chance > 100.0) chance = 100.0;
-				if (chance < 0.0) chance = 0.0;
-
+				int team = GetClientTeam(i);
 				char name[32];
 				GetClientName(i, name, sizeof(name));
 
-				char entry[64];
-				if (morale > 0)
-					Format(entry, sizeof(entry), "%s: +%d (%.0f%%)  ", name, morale, chance);
-				else
-					Format(entry, sizeof(entry), "%s: %d (%.0f%%)  ", name, morale, chance);
+				if (team == 3) // CT
+				{
+					float chance = 70.0 - 10.0 * float(morale);
+					if (chance > 100.0) chance = 100.0;
+					if (chance < 0.0) chance = 0.0;
 
-				StrCat(ctMoraleBuf, sizeof(ctMoraleBuf), entry);
-				ctCount++;
+					char entry[64];
+					if (morale > 0)
+						Format(entry, sizeof(entry), "%s: +%d (%.0f%%)  ", name, morale, chance);
+					else
+						Format(entry, sizeof(entry), "%s: %d (%.0f%%)  ", name, morale, chance);
+
+					StrCat(ctMoraleBuf, sizeof(ctMoraleBuf), entry);
+					ctCount++;
+				}
+				else if (team == 2) // T
+				{
+					char entry[64];
+					if (i == carrier)
+					{
+						int escorts = 3 - morale;
+						if (escorts < 0) escorts = 0;
+						if (escorts > 6) escorts = 6;
+						float delay = 30.0 + 10.0 * float(morale);
+						if (delay < 0.0) delay = 0.0;
+						if (delay > 60.0) delay = 60.0;
+
+						if (morale > 0)
+							Format(entry, sizeof(entry), "[Carrier]%s: +%d (%d Escorts, %.0fs Delay)  ", name, morale, escorts, delay);
+						else
+							Format(entry, sizeof(entry), "[Carrier]%s: %d (%d Escorts, %.0fs Delay)  ", name, morale, escorts, delay);
+					}
+					else
+					{
+						if (morale > 0)
+							Format(entry, sizeof(entry), "%s: +%d  ", name, morale);
+						else
+							Format(entry, sizeof(entry), "%s: %d  ", name, morale);
+					}
+
+					StrCat(tMoraleBuf, sizeof(tMoraleBuf), entry);
+					tCount++;
+				}
 			}
 		}
 	}
@@ -72,6 +108,10 @@ void DumpRoundMoraleStats()
 	if (ctCount > 0)
 	{
 		LogMessage("[BotRouteFix] [CT Morale Telemetry] %s", ctMoraleBuf);
+	}
+	if (tCount > 0)
+	{
+		LogMessage("[BotRouteFix] [T  Morale Telemetry] %s", tMoraleBuf);
 	}
 }
 

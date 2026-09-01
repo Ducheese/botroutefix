@@ -5,11 +5,11 @@
 //
 // ---------------------------------------------------------------------------------------
 // [模块 1：CT 守包点与防发疯前冲底层补丁 (CT Bombsite Defense & Anti-Rush Patches)]
-//   1. 对 guardBombsiteChance 条件跳转打入 6 字节 NOP，激活官方原生 CT 守包点体系；
+//   1. 对 guardBombsiteChance 原地覆写 26 字节机器码，将守点概率公式修复为 70 - 10 * Morale 并保留原生跳转流转；
 //   2. 对 IsDefenseRushing 条件跳转打入 6 字节 NOP，彻底消除官方 33.3% 的 CT 前冲白给局。
 //
-// [模块 2：T 包匪开局即刻运包与 A/B 随机包点锁定 (T C4 Carrier Instant Plant & Bombsite Target Lock)]
-//   3. 对 IsTimeToPlantBomb 开局延迟条件跳转打入 6 字节 NOP，消除包匪开局 10~30 秒原地罚站/逛街送人头的致命缺陷，开局即刻前往包点；
+// [模块 2：T 包匪动态运包时机与 A/B 随机包点锁定 (T C4 Carrier Dynamic Plant & Bombsite Target Lock)]
+//   3. 将 IsTimeToPlantBomb 开局延迟接入士气线性映射 (30 + 10 * Morale，0s~60s)，劣势(-3)即刻0秒速推下包求生，优势(+3)放开60秒自由控图抓单；
 //   4. 解决官方 GetClosestZone 导致 T 包匪 100% 局数只冲近点缺陷，在 IdleState 运包决策点进行汇编级 64位/32位 内存即时数注入 (mov rax, imm64 / mov eax, imm32)，
 //      每回合开局 50%/50% 随机预选并锁定目标包点，整回合恒定有效，既实现全图随机战略进攻，又彻底杜绝 180 度横跳折返跑。
 //
@@ -23,9 +23,8 @@
 //      时立即强制清空路径并打碎排队，配合 NavArea 阻力，驱使 Bot 立即掉头绕道。
 //
 // [模块 5：T 阵营 C4 包匪专属护卫与保镖协同 (T C4 Carrier Escort & Bodyguard System)]
-//   7. 解决不带包的 T 队员与包匪完全脱节、各自为战的致命缺陷。
-//      开局及捡包时，挑选距离包匪最近的 2 名 T 队友调用官方原生 CCSBot::Follow
-//      贴身护送包匪，负责探路、掩护补枪与秒捡掉落 C4；下包后由引擎底层自动解除跟随并就地守包。
+//   7. 解决不带包的 T 队员与包匪脱节问题，根据士气线性分配 3 - Morale 名保镖 (0~6人) 调用原生 CCSBot::Follow 贴身护送包匪，
+//      形成绝境(-3)多保镖重装抱团推点、连胜(+3)全员0保镖放飞拉枪线控图的立体战术形态；下包后由引擎底层自动解除跟随并就地守包。
 //
 // [模块 6：搜敌目标即时抢占与全图打散 (Hunt Target Claim & Anti-Swarm Search)]
 //   8. 解决官方 HuntState 多人同时选中同一个偏远小角落产生“全图排队跑图”缺陷。
@@ -248,6 +247,7 @@ public Action Command_DumpDanger(int client, int args)
 public Action Command_DumpMorale(int client, int args)
 {
 	ReplyToCommand(client, "[BotRouteFix] ========== Live Bot Morale & Tactical Gating Telemetry ==========");
+	int carrier = GetC4Carrier();
 	int botCount = 0;
 
 	for (int i = 1; i <= MaxClients; i++)
@@ -284,13 +284,28 @@ public Action Command_DumpMorale(int client, int args)
 					if (guardChance < 0.0) guardChance = 0.0;
 					float roamChance = 100.0 - guardChance;
 
-					ReplyToCommand(client, "[BotRouteFix] [CT] '%N' -> Morale: %s%d (%-9s) | Guard Site: %5.1f%% | Roam/Hunt: %5.1f%%",
+					ReplyToCommand(client, "[BotRouteFix] [CT]        '%N' -> Morale: %s%d (%-9s) | Guard Site: %5.1f%% | Roam/Hunt: %5.1f%%",
 						i, sign, morale, moraleEnum, guardChance, roamChance);
 				}
 				else if (team == 2) // T
 				{
-					ReplyToCommand(client, "[BotRouteFix] [T]  '%N' -> Morale: %s%d (%-9s)",
-						i, sign, morale, moraleEnum);
+					if (i == carrier)
+					{
+						int bodyguards = 3 - morale;
+						if (bodyguards < 0) bodyguards = 0;
+						if (bodyguards > 6) bodyguards = 6;
+						float plantDelay = 30.0 + 10.0 * float(morale);
+						if (plantDelay < 0.0) plantDelay = 0.0;
+						if (plantDelay > 60.0) plantDelay = 60.0;
+
+						ReplyToCommand(client, "[BotRouteFix] [T-Carrier] '%N' -> Morale: %s%d (%-9s) | Escorts: %d | Plant Delay: %4.1fs",
+							i, sign, morale, moraleEnum, bodyguards, plantDelay);
+					}
+					else
+					{
+						ReplyToCommand(client, "[BotRouteFix] [T]         '%N' -> Morale: %s%d (%-9s)",
+							i, sign, morale, moraleEnum);
+					}
 				}
 				botCount++;
 			}

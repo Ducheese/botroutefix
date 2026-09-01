@@ -247,96 +247,22 @@ void RestoreAntiRushPatch()
 }
 
 //========================================================================================
-// PATCH 3: T C4 CARRIER INSTANT PLANT (IsTimeToPlantBomb delay removal)
+//========================================================================================
+// PATCH 3: T C4 CARRIER DYNAMIC PLANT TIMING (IsTimeToPlantBomb Morale Gating)
+// Formula: Plant Delay = 30.0 + 10.0 * Morale (0.0s ~ 60.0s)
+//   - Morale -3:  0.0s Delay (Instant Rush Plant)
+//   - Morale  0: 30.0s Delay
+//   - Morale +3: 60.0s Delay (Full Map Control & Hunting)
+// Dynamically controlled in memory via TheCSBots()->m_earliestBombPlantTimestamp
 //========================================================================================
 
 void PrepInstantPlantPatch()
 {
-	Handle gc = LoadGameConfigFile(GAMEDATA);
-	if (gc == null)
-		return;
-
-	Address sigAddr = GameConfGetAddress(gc, "IdleState_C4PlantDelay");
-	if (sigAddr == Address_Null)
-	{
-		delete gc;
-		SetFailState("[BotRouteFix] Failed to locate signature for IdleState_C4PlantDelay!");
-		return;
-	}
-
-	int patchOffset = GameConfGetOffset(gc, "C4PlantDelay_PatchOffset");
-	if (patchOffset == -1)
-	{
-		delete gc;
-		SetFailState("[BotRouteFix] Failed to read C4PlantDelay_PatchOffset!");
-		return;
-	}
-
-	g_pInstantPlantPatchAddress = sigAddr + view_as<Address>(patchOffset);
-
-	int firstByte = LoadFromAddress(g_pInstantPlantPatchAddress, NumberType_Int8);
-	int secondByte = LoadFromAddress(g_pInstantPlantPatchAddress + view_as<Address>(1), NumberType_Int8);
-
-	// Check if already patched (0x90 = NOP) -> safely skip and avoid zero-overwrite on unload
-	if (firstByte == 0x90 && secondByte == 0x90)
-	{
-		LogMessage("[BotRouteFix] [Patch 3] Already patched (NOPs present @ %X), skipping", g_pInstantPlantPatchAddress);
-		g_bInstantPlantPatched = false;
-		delete gc;
-		return;
-	}
-
-	// Verify expected jump opcode (32-bit: 0x0F 0x82, 64-bit: 0x0F 0x87)
-	if (g_bIsWin64)
-	{
-		if (firstByte != 0x0F || secondByte != 0x87)
-		{
-			delete gc;
-			SetFailState("[BotRouteFix] [Patch 3] Byte mismatch at %X (expected 0F 87, got %02X %02X), patch aborted!",
-				g_pInstantPlantPatchAddress, firstByte, secondByte);
-			return;
-		}
-	}
-	else
-	{
-		if (firstByte != 0x0F || secondByte != 0x82)
-		{
-			delete gc;
-			SetFailState("[BotRouteFix] [Patch 3] Byte mismatch at %X (expected 0F 82, got %02X %02X), patch aborted!",
-				g_pInstantPlantPatchAddress, firstByte, secondByte);
-			return;
-		}
-	}
-
-	// Backup original 6 bytes
-	for (int i = 0; i < 6; i++)
-	{
-		g_iOriginalInstantPlantBytes[i] = LoadFromAddress(g_pInstantPlantPatchAddress + view_as<Address>(i), NumberType_Int8);
-	}
-
-	// Apply 6x NOPs
-	for (int i = 0; i < 6; i++)
-	{
-		StoreToAddress(g_pInstantPlantPatchAddress + view_as<Address>(i), 0x90, NumberType_Int8, true);
-	}
-
-	g_bInstantPlantPatched = true;
-	LogMessage("[BotRouteFix] [Patch 3] Replaced IsTimeToPlantBomb delay jump with 6x NOPs @ %X (C4 Carrier Instant Plant Activated)", g_pInstantPlantPatchAddress);
-
-	delete gc;
+	LogMessage("[BotRouteFix] [Patch 3] Dynamic C4 Plant Delay Activated (0s ~ 60s Morale Gating)");
 }
 
 void RestoreInstantPlantPatch()
 {
-	if (g_bInstantPlantPatched && g_pInstantPlantPatchAddress != Address_Null)
-	{
-		for (int i = 0; i < 6; i++)
-		{
-			StoreToAddress(g_pInstantPlantPatchAddress + view_as<Address>(i), g_iOriginalInstantPlantBytes[i], NumberType_Int8, true);
-		}
-		LogMessage("[BotRouteFix] [Patch 3] Restored original C4 plant delay jump @ %X", g_pInstantPlantPatchAddress);
-		g_bInstantPlantPatched = false;
-	}
 }
 
 //========================================================================================
