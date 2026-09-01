@@ -93,3 +93,113 @@ void ResetAllNavAreaDanger()
 
 	LogMessage("[BotRouteFix] [Module 3] Soft-decayed danger (80%% reduction) on all %d NavAreas for round restart", count);
 }
+
+// ========================================================================================
+// DANGER DIAGNOSTICS & TELEMETRY
+// ========================================================================================
+
+bool GetClientNavAreaDanger(int client, float &dangerT, float &dangerCT, int &areaId)
+{
+	dangerT = 0.0;
+	dangerCT = 0.0;
+	areaId = -1;
+
+	if (g_pTheNavAreasCount == Address_Null || g_pTheNavAreasBase == Address_Null)
+		return false;
+
+	int count = LoadFromAddress(g_pTheNavAreasCount, NumberType_Int32);
+	Address pArray = LoadAddressFromAddress(g_pTheNavAreasBase);
+	if (count <= 0 || pArray == Address_Null)
+		return false;
+
+	float clientPos[3];
+	GetClientAbsOrigin(client, clientPos);
+
+	int nwOffset = g_bIsWin64 ? 8 : 4;
+	int seOffset = g_bIsWin64 ? 20 : 16;
+	int ptrSize = g_iPtrSize;
+
+	Address pBestArea = Address_Null;
+	float bestDistSq = 99999999.0;
+
+	for (int i = 0; i < count; i++)
+	{
+		Address pArea = LoadAddressFromAddress(pArray + view_as<Address>(i * ptrSize));
+		if (pArea == Address_Null)
+			continue;
+
+		float nwX = view_as<float>(LoadFromAddress(pArea + view_as<Address>(nwOffset), NumberType_Int32));
+		float nwY = view_as<float>(LoadFromAddress(pArea + view_as<Address>(nwOffset + 4), NumberType_Int32));
+		float seX = view_as<float>(LoadFromAddress(pArea + view_as<Address>(seOffset), NumberType_Int32));
+		float seY = view_as<float>(LoadFromAddress(pArea + view_as<Address>(seOffset + 4), NumberType_Int32));
+
+		// Check if client position falls inside this area's 2D bounding box
+		if (clientPos[0] >= (nwX - 15.0) && clientPos[0] <= (seX + 15.0) &&
+			clientPos[1] >= (nwY - 15.0) && clientPos[1] <= (seY + 15.0))
+		{
+			pBestArea = pArea;
+			areaId = i;
+			break;
+		}
+
+		// Fallback: track closest center
+		float centerX = (nwX + seX) * 0.5;
+		float centerY = (nwY + seY) * 0.5;
+		float distSq = (clientPos[0] - centerX) * (clientPos[0] - centerX) + (clientPos[1] - centerY) * (clientPos[1] - centerY);
+		if (distSq < bestDistSq)
+		{
+			bestDistSq = distSq;
+			pBestArea = pArea;
+			areaId = i;
+		}
+	}
+
+	if (pBestArea != Address_Null)
+	{
+		dangerT = view_as<float>(LoadFromAddress(pBestArea + view_as<Address>(g_iOffset_Danger), NumberType_Int32));
+		dangerCT = view_as<float>(LoadFromAddress(pBestArea + view_as<Address>(g_iOffset_Danger + 4), NumberType_Int32));
+		return true;
+	}
+
+	return false;
+}
+
+void DumpRoundDangerStats()
+{
+	int carrier = GetC4Carrier();
+	int sampleT = 0;
+
+	for (int i = 1; i <= MaxClients; i++)
+	{
+		if (IsClientInGame(i) && IsPlayerAlive(i) && GetClientTeam(i) == 2 && IsFakeClient(i))
+		{
+			if (i != carrier)
+			{
+				sampleT = i;
+				break;
+			}
+		}
+	}
+
+	if (sampleT > 0)
+	{
+		float dangerT, dangerCT;
+		int areaId;
+		if (GetClientNavAreaDanger(sampleT, dangerT, dangerCT, areaId))
+		{
+			LogMessage("[BotRouteFix] [Danger-Diag] T-Bot '%N' @ Area #%d -> T-Danger: %.2f | CT-Danger: %.2f",
+				sampleT, areaId, dangerT, dangerCT);
+		}
+	}
+
+	if (carrier > 0 && IsPlayerAlive(carrier))
+	{
+		float dangerT, dangerCT;
+		int areaId;
+		if (GetClientNavAreaDanger(carrier, dangerT, dangerCT, areaId))
+		{
+			LogMessage("[BotRouteFix] [Danger-Diag] Carrier '%N' @ Area #%d -> T-Danger: %.2f | CT-Danger: %.2f",
+				carrier, areaId, dangerT, dangerCT);
+		}
+	}
+}

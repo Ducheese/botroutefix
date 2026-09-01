@@ -44,10 +44,10 @@ void AssignCarrierBodyguards()
 	if (carrier <= 0 || !IsPlayerAlive(carrier))
 		return;
 
-	// Reset all active followers first to strictly enforce the bodyguard quota
+	// Reset all active followers first (ensures newly promoted carrier clears old leader state)
 	for (int i = 1; i <= MaxClients; i++)
 	{
-		if (i != carrier && IsClientInGame(i) && IsPlayerAlive(i) && GetClientTeam(i) == 2 && IsFakeClient(i))
+		if (IsClientInGame(i) && IsPlayerAlive(i) && GetClientTeam(i) == 2 && IsFakeClient(i))
 		{
 			if (g_hStopFollowingSDKCall != null)
 			{

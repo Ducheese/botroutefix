@@ -124,6 +124,9 @@ public void OnPluginStart()
 	SyncMidRoundState();
 
 	LogMessage("[BotRouteFix] ========== Initialization Complete on %s ==========", g_bIsWin64 ? "64-bit (Steam x64)" : "32-bit (non-Steam)");
+
+	// 调试工具
+	RegConsoleCmd("sm_bot_danger", Command_DumpDanger, "Dump current Danger values of all active Bot areas");
 }
 
 public void OnPluginEnd()
@@ -185,4 +188,58 @@ void SyncMidRoundState()
 		AssignCarrierBodyguards();
 		LogMessage("[BotRouteFix] [Hot-Reload] (State 3/3) Active Carrier %N synchronized (Bodyguards assigned)", carrier);
 	}
+}
+
+//========================================================================================
+// COMMAND HANDLERS
+//========================================================================================
+
+public Action Command_DumpDanger(int client, int args)
+{
+	ReplyToCommand(client, "[BotRouteFix] ========== Live Bot NavArea Danger Telemetry ==========");
+	int carrier = GetC4Carrier();
+	int botCount = 0;
+
+	for (int i = 1; i <= MaxClients; i++)
+	{
+		if (IsClientInGame(i) && IsPlayerAlive(i) && IsFakeClient(i))
+		{
+			float dangerT, dangerCT;
+			int areaId;
+			if (GetClientNavAreaDanger(i, dangerT, dangerCT, areaId))
+			{
+				char roleTag[16];
+				int team = GetClientTeam(i);
+				if (team == 2)
+				{
+					if (i == carrier)
+						strcopy(roleTag, sizeof(roleTag), "[T-Carrier]");
+					else
+						strcopy(roleTag, sizeof(roleTag), "[T]");
+				}
+				else if (team == 3)
+				{
+					if (i == g_iDesignatedDefuser)
+						strcopy(roleTag, sizeof(roleTag), "[CT-Defuser]");
+					else
+						strcopy(roleTag, sizeof(roleTag), "[CT]");
+				}
+				else
+				{
+					strcopy(roleTag, sizeof(roleTag), "[Spec]");
+				}
+
+				ReplyToCommand(client, "[BotRouteFix] %-12s '%N' (Area #%-4d) -> Danger [T: %.2f | CT: %.2f]",
+					roleTag, i, areaId, dangerT, dangerCT);
+				botCount++;
+			}
+		}
+	}
+
+	if (botCount == 0)
+	{
+		ReplyToCommand(client, "[BotRouteFix] No active bot telemetry available at this moment.");
+	}
+	ReplyToCommand(client, "[BotRouteFix] ================================================================");
+	return Plugin_Handled;
 }

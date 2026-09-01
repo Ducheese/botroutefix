@@ -32,6 +32,7 @@ public void Event_RoundStart(Event event, const char[] name, bool dontBroadcast)
 public void Event_RoundFreezeEnd(Event event, const char[] name, bool dontBroadcast)
 {
 	AssignCarrierBodyguards();
+	DumpRoundDangerStats();
 }
 
 public void Event_ItemPickup(Event event, const char[] name, bool dontBroadcast)
