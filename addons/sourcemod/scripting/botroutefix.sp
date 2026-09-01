@@ -26,10 +26,10 @@
 //   7. 解决不带包的 T 队员与包匪脱节问题，根据士气线性分配 3 - Morale 名保镖 (0~6人) 调用原生 CCSBot::Follow 贴身护送包匪，
 //      形成绝境(-3)多保镖重装抱团推点、连胜(+3)全员0保镖放飞拉枪线控图的立体战术形态；下包后由引擎底层自动解除跟随并就地守包。
 //
-// [模块 6：搜敌目标即时抢占与全图打散 (Hunt Target Claim & Anti-Swarm Search)]
-//   8. 解决官方 HuntState 多人同时选中同一个偏远小角落产生“全图排队跑图”缺陷。
-//      Detour CCSBot::HuntState_OnUpdate Post 阶段，Bot 选定搜敌目标瞬间立即刷新其 m_clearedTimestamp 为当前时间，
-//      驱使后续队友必须选择全图其他不同要道与战区，实现全队兵力 100% 互不重复的立体多路排查。
+// [模块 6：搜敌目标即时抢占与 45 秒冲锋破除 (Hunt Target Claim & 45s Rush Bypass)]
+//   8. 解决官方 HuntState 开局 45 秒强塞敌方老家以及多人同时选中同一个偏远小角落产生“全图排队跑图”缺陷。
+//      Pre 阶段置 m_hasVisitedEnemySpawn = true 破除 45 秒老家锁定，Post 阶段 Bot 选定搜敌目标瞬间立即刷新其 m_clearedTimestamp 为当前时间，
+//      驱使全队兵力从第 0 秒开始 100% 互不重复地进行立体网状多路排查。
 //
 // [模块 7：C4 掉落 Top 3 真实寻路距离捡包与团队火力掩护 (Loose Bomb Top 3 Retriever & Tactical Cover)]
 //   9. 解决官方 NoticeLooseBomb 只要有掉落 C4 便对全队所有 T 恒为 true 导致的“全员哄抢送死”缺陷。

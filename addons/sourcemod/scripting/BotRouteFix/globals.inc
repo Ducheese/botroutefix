@@ -103,6 +103,7 @@ Handle g_hHideSDKCall = INVALID_HANDLE;
 int g_iOffset_Task = 0;
 int g_iOffset_Morale = 0;
 int g_iOffset_EarliestBombPlant = 0;
+int g_iOffset_HasVisitedEnemySpawn = 0;
 bool g_bBombPlanted = false;
 float g_fBombPlantedPos[3];
 int g_iDesignatedDefuser = 0;
@@ -140,6 +141,7 @@ void PrepOffsets()
 	g_iOffset_TimerDuration = GameConfGetOffset(gc, "CountdownTimer_Duration_Offset");
 	g_iOffset_TimerTimestamp = GameConfGetOffset(gc, "CountdownTimer_Timestamp_Offset");
 	g_iOffset_IsStopping = GameConfGetOffset(gc, "CCSBot_IsStopping_Offset");
+	g_iOffset_HasVisitedEnemySpawn = g_iOffset_IsStopping + 1; // C++ 结构体紧随 m_isStopping 之后 (1 字节 bool)
 	g_iOffset_PathLadder = GameConfGetOffset(gc, "CCSBot_PathLadder_Offset");
 	g_iOffset_ConnectInfoPos = GameConfGetOffset(gc, "ConnectInfo_Vector_Offset");
 	g_iOffset_Task = GameConfGetOffset(gc, "CCSBot_Task_Offset");

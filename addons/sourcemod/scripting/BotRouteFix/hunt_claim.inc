@@ -30,6 +30,13 @@ void PrepHuntStateHook()
 
 	DHookAddParam(g_hHuntStateDetour, HookParamType_CBaseEntity);
 
+	if (!DHookEnableDetour(g_hHuntStateDetour, false, Hook_HuntState_OnUpdate_Pre))
+	{
+		delete gc;
+		SetFailState("[BotRouteFix] [Module 6] Failed to enable pre detour for HuntState_OnUpdate!");
+		return;
+	}
+
 	if (!DHookEnableDetour(g_hHuntStateDetour, true, Hook_HuntState_OnUpdate_Post))
 	{
 		delete gc;
@@ -37,7 +44,7 @@ void PrepHuntStateHook()
 		return;
 	}
 
-	LogMessage("[BotRouteFix] [Module 6] Hooked HuntState::OnUpdate Post (Target Claim & Anti-Swarm Activated)");
+	LogMessage("[BotRouteFix] [Module 6] Hooked HuntState::OnUpdate Pre/Post (Target Claim & 45s Rush Bypass Activated)");
 	delete gc;
 }
 
@@ -45,10 +52,27 @@ void RestoreHuntStateHook()
 {
 	if (g_hHuntStateDetour != null)
 	{
+		DHookDisableDetour(g_hHuntStateDetour, false, Hook_HuntState_OnUpdate_Pre);
 		DHookDisableDetour(g_hHuntStateDetour, true, Hook_HuntState_OnUpdate_Post);
 		delete g_hHuntStateDetour;
 		g_hHuntStateDetour = null;
 	}
+}
+
+public MRESReturn Hook_HuntState_OnUpdate_Pre(Address pThis, DHookParam hParams)
+{
+	int client = hParams.Get(1);
+	if (client <= 0 || client > MaxClients || !IsClientInGame(client) || !IsPlayerAlive(client))
+		return MRES_Ignored;
+
+	// 破除 45 秒直冲老家限制：置 m_hasVisitedEnemySpawn = true，强制 HuntState 从第 0 秒即走 TheNavAreas 全图分散搜索与抢占
+	Address pBot = GetEntityAddress(client);
+	if (pBot != Address_Null && g_iOffset_HasVisitedEnemySpawn > 0)
+	{
+		StoreToAddress(pBot + view_as<Address>(g_iOffset_HasVisitedEnemySpawn), 1, NumberType_Int8);
+	}
+
+	return MRES_Ignored;
 }
 
 public MRESReturn Hook_HuntState_OnUpdate_Post(Address pThis, DHookParam hParams)

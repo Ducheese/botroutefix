@@ -135,9 +135,9 @@ void UpdateDesignatedDefuser()
 				walkDist = GetVectorDistance(pos, g_fBombPlantedPos) * 2.0;
 			}
 
-			// Bonus if CT has defusal kit (-500 units priority)
+			// Physical time-equivalent bonus: (10.0s no kit - 5.0s kit) * 250 units/s run speed = 1250.0 units
 			bool hasKit = (GetEntProp(i, Prop_Send, "m_bHasDefuser") == 1);
-			float score = hasKit ? (walkDist - 500.0) : walkDist;
+			float score = hasKit ? (walkDist - 1250.0) : walkDist;
 
 			if (score < bestScore)
 			{
