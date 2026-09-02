@@ -109,6 +109,9 @@ float g_fBombPlantedPos[3];
 int g_iDesignatedDefuser = 0;
 Handle g_hDefuseCoordTimer = INVALID_HANDLE;
 
+Handle g_hAttackDodgeDetour = INVALID_HANDLE;
+int g_iOffset_AttackShouldDodge = 0;
+
 //========================================================================================
 // CONFIGURATION & OFFSETS LOADER
 //========================================================================================
@@ -151,6 +154,8 @@ void PrepOffsets()
 	g_iOffset_HuntArea = GameConfGetOffset(gc, "HuntState_HuntArea_Offset");
 	g_iOffset_ClearedTimestamp = GameConfGetOffset(gc, "NavArea_ClearedTimestamp_Offset");
 
+	g_iOffset_AttackShouldDodge = GameConfGetOffset(gc, "AttackState_ShouldDodge_Offset");
+
 	if (g_iOffset_ZoneCount == -1 || g_iOffset_ZoneBase == -1 || g_iZoneStride == -1 ||
 		g_iOffset_Danger == -1 || g_iOffset_DangerTimestamp == -1 || g_iPtrSize == -1 ||
 		g_iOffset_Path == -1 || g_iPathStride == -1 || g_iOffset_PathLength == -1 ||
@@ -158,7 +163,8 @@ void PrepOffsets()
 		g_iOffset_TimerDuration == -1 || g_iOffset_TimerTimestamp == -1 ||
 		g_iOffset_IsStopping == -1 || g_iOffset_PathLadder == -1 || g_iOffset_ConnectInfoPos == -1 ||
 		g_iOffset_Task == -1 || g_iOffset_Morale == -1 || g_iOffset_EarliestBombPlant == -1 ||
-		g_iOffset_HuntArea == -1 || g_iOffset_ClearedTimestamp == -1)
+		g_iOffset_HuntArea == -1 || g_iOffset_ClearedTimestamp == -1 ||
+		g_iOffset_AttackShouldDodge == -1)
 	{
 		delete gc;
 		SetFailState("[BotRouteFix] Failed to read one or more offsets from gamedata!");

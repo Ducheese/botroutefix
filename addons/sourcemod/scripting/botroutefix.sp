@@ -64,6 +64,7 @@
 #include "BotRouteFix/hunt_claim.inc"
 #include "BotRouteFix/loose_bomb.inc"
 #include "BotRouteFix/designated_defuser.inc"
+#include "BotRouteFix/dodge_fix.inc"
 #include "BotRouteFix/events.inc"
 
 //========================================================================================
@@ -99,6 +100,7 @@ public void OnPluginStart()
 	PrepHideSDKCall();
 	PrepHuntStateHook();
 	PrepNoticeLooseBombHook();
+	PrepAttackDodgeHook();
 
 	// =========================================================================
 	// [阶段 3] 二进制内存补丁准备与注入 (Binary Memory Patches)
@@ -141,6 +143,7 @@ public void OnPluginEnd()
 
 	RestoreHuntStateHook();
 	RestoreNoticeLooseBombHook();
+	RestoreAttackDodgeHook();
 }
 
 //========================================================================================

@@ -120,8 +120,8 @@
 | **`IdleState_GuardBombsiteChance`** | `0x102BBE15` | `0x18036448C` | `IdleState::OnUpdate` 守点概率覆写点 (模块 1 / Patch 1) |
 | **`IdleState_DefenseRush`** | `0x102BBDED` | `0x18036444C` | `IdleState::OnUpdate` 全队前冲 NOP 拦截点 (模块 1 / Patch 2) |
 | **`IdleState_C4PlantDelay`** | `0x102BB882` | `0x180363E0D` | `IdleState::OnUpdate` 包匪选点与 TheCSBotsPtr 解析点 (模块 2 / Patch 4) |
-| **`IdleState_PlantBombClosestZone`** | `0x102BB849` | `0x180363E51` | `IdleState::OnUpdate` 汇编级即时数注入锁包点 (模块 2 / Patch 4) |
-| **`CCSBotManager_GetRandomArea`** | `0x10290D70` | `0x180362A80` | `CCSBotManager::GetRandomArea` (用于解析 TheNavAreas 向量基址) (模块 3) |
+| **`IdleState_PlantBombClosestZone`** | `0x102BB882*` | `0x180363E0D*` | `IdleState::OnUpdate` 汇编级即时数注入锁包点 (模块 2 / Patch 4) `*复用 C4PlantDelay 基址，通过 PatchOffset 22/54 区分` |
+| **`CCSBotManager_GetRandomArea`** | `0x10290D10` | `0x18032E720` | `CCSBotManager::GetRandomArea` (用于解析 TheNavAreas 向量基址) (模块 3) |
 | **`CCSBot_Follow`** | `0x102A6B60` | `0x1803496E0` | `void CCSBot::Follow(CCSPlayer *leader)` (保镖跟随) (模块 5) |
 | **`CCSBot_StopFollowing`** | `0x102A73C0` | `0x18034A1A0` | `void CCSBot::StopFollowing()` (解除跟随) (模块 5) |
 | **`HuntState_OnUpdate`** | `0x102BA430` | `0x180362350` | `void HuntState::OnUpdate(CCSBot *me)` (45s老家破除与目标抢占) (模块 6) |
