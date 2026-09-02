@@ -81,10 +81,10 @@ public Action Timer_CheckPoliteQueue(Handle timer)
 				if (pArea != Address_Null)
 				{
 					float rawDanger = view_as<float>(LoadFromAddress(pArea + view_as<Address>(g_iOffset_Danger + teamIdx * 4), NumberType_Int32));
-					float timestamp = view_as<float>(LoadFromAddress(pArea + view_as<Address>(g_iOffset_DangerTimestamp + teamIdx * 4), NumberType_Int32));
+					float dangerTimestamp = view_as<float>(LoadFromAddress(pArea + view_as<Address>(g_iOffset_DangerTimestamp + teamIdx * 4), NumberType_Int32));
 
 					// Settle elapsed time decay first
-					float effDanger = rawDanger - ((curtime - timestamp) / 120.0);
+					float effDanger = rawDanger - ((curtime - dangerTimestamp) / 120.0);
 					if (effDanger < 0.0)
 						effDanger = 0.0;
 
@@ -105,10 +105,10 @@ public Action Timer_CheckPoliteQueue(Handle timer)
 					if (pNextArea != Address_Null)
 					{
 						float rawDanger = view_as<float>(LoadFromAddress(pNextArea + view_as<Address>(g_iOffset_Danger + teamIdx * 4), NumberType_Int32));
-						float timestamp = view_as<float>(LoadFromAddress(pNextArea + view_as<Address>(g_iOffset_DangerTimestamp + teamIdx * 4), NumberType_Int32));
+						float nextDangerTimestamp = view_as<float>(LoadFromAddress(pNextArea + view_as<Address>(g_iOffset_DangerTimestamp + teamIdx * 4), NumberType_Int32));
 
 						// Settle elapsed time decay first
-						float effDanger = rawDanger - ((curtime - timestamp) / 120.0);
+						float effDanger = rawDanger - ((curtime - nextDangerTimestamp) / 120.0);
 						if (effDanger < 0.0)
 							effDanger = 0.0;
 

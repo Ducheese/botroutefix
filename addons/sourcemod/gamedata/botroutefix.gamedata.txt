@@ -76,6 +76,12 @@
 				"windows"	"\x55\x8B\xEC\x83\xEC\x70\x53\x56\x57\x8B\x7D\x08\x8B\xD9\x8B\x87\x30\x3B\x00\x00\x83\xF8\xFF\x74\x1F"
 				"windows64"	"\x48\x8B\xC4\x55\x56\x57\x48\x8D\x6C\x24\x90\x48\x81\xEC\x70\x01\x00\x00\x0F\x29\x70\xD8"
 			}
+			"ReloadCheck_HideChance"
+			{
+				"library"	"server"
+				"windows"	"\xDF\xF1\xDD\xD8\x76\x2A\xA1\x2A\x2A\x2A\x2A\xF3\x0F\x10\x05\x2A\x2A\x2A\x2A"
+				"windows64"	"\xFF\x15\x2A\x2A\x2A\x2A\x0F\x2F\xC6\x73\x2A\x48\x8B\x05\x2A\x2A\x2A\x2A\xF3\x0F\x10\x40\x0C"
+			}
 		}
 		"Addresses"
 		{
@@ -98,6 +104,10 @@
 			"IdleState_PlantBombClosestZone"
 			{
 				"signature"	"IdleState_PlantBombClosestZone"
+			}
+			"ReloadCheck_HideChance"
+			{
+				"signature"	"ReloadCheck_HideChance"
 			}
 		}
 		"Offsets"
@@ -236,6 +246,11 @@
 			{
 				"windows"	"50"
 				"windows64"	"58"
+			}
+			"ReloadHide_PatchOffset"
+			{
+				"windows"	"4"
+				"windows64"	"9"
 			}
 		}
 	}

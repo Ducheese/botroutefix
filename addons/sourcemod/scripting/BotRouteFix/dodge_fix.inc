@@ -4,10 +4,10 @@
 #define _botroutefix_dodge_fix_included
 
 //========================================================================================
-// MODULE 9: AttackState Dodge 热补丁 80*skill -> 100% 强制闪避
-// 通过 DHook AttackState::OnEnter Post 重算 m_shouldDodge，全员 100% 进入 Dodge()
-// 原逻辑: dodgeChance = 80*skill (0-80%) -> 新: 强制 1，后续灵敏度在 Dodge() 内部再按 skill 分化
-// 偏移: CCSBot_Profile_Offset(6436/7512) -> BotProfile*, Profile_Skill_Offset(8/12) -> float skill, AttackState_ShouldDodge_Offset(50/58) -> bool
+// MODULE 9: AttackState Dodge - Force 100% (80*skill -> 100%)
+// DHook AttackState::OnEnter Post overwrites m_shouldDodge to 1 for all bots.
+// Original: dodgeChance = 80*skill (0-80%) -> New: forced 1, subsequent sensitivity handled inside Dodge() per skill.
+// Offsets: AttackState_ShouldDodge_Offset(50/58)
 //========================================================================================
 
 void PrepAttackDodgeHook()
@@ -68,8 +68,8 @@ public MRESReturn Hook_AttackState_OnEnter_Post(Address pThis, DHookParam hParam
 
 	StoreToAddress(pThis + view_as<Address>(g_iOffset_AttackShouldDodge), 1, NumberType_Int8);
 
-	LogMessage("[BotRouteFix] [Dodge] %N (%d) forced shouldDodge=1 [atkState %08x+%d]",
-		client, client, view_as<int>(pThis), g_iOffset_AttackShouldDodge);
+	// LogMessage("[BotRouteFix] [Module 9] %N (%d) forced shouldDodge=1 [atkState %08x+%d]",
+	// 	client, client, view_as<int>(pThis), g_iOffset_AttackShouldDodge);
 
 	return MRES_Ignored;
 }

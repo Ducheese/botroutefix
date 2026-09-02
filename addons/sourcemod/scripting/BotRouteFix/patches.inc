@@ -423,3 +423,95 @@ void SelectRandomBombsite()
 	int randomIdx = GetRandomInt(0, zoneCount - 1);
 	ApplyLockedBombsitePatch(randomIdx);
 }
+
+//========================================================================================
+// PATCH 5: RELOAD HIDE 100% (hideChance 25+100*skill -> forced 100%)
+// Original: RandomFloat(0,100) < hideChance (25+100*skill)  ~25%-125% skill gating
+// Patched : NOP the conditional jump (jbe/jnb) so hide path is always taken
+//           -> nearby enemy && !IsHiding() && TimeSinceLastSawEnemy<5.0  => 必进掩体
+// 32-bit: DF F1 DD D8 76 ??  (jbe)  -> 90 90   @ sig+4
+// 64-bit: FF15 .. 0F2FC6 73 ?? 48.. -> 90 90   @ sig+9
+//========================================================================================
+
+void PrepReloadHidePatch()
+{
+	Handle gc = LoadGameConfigFile(GAMEDATA);
+	if (gc == null)
+		return;
+
+	Address sigAddr = GameConfGetAddress(gc, "ReloadCheck_HideChance");
+	if (sigAddr == Address_Null)
+	{
+		delete gc;
+		SetFailState("[BotRouteFix] Failed to locate signature for ReloadCheck_HideChance!");
+		return;
+	}
+
+	int patchOffset = GameConfGetOffset(gc, "ReloadHide_PatchOffset");
+	if (patchOffset == -1)
+	{
+		delete gc;
+		SetFailState("[BotRouteFix] Failed to read ReloadHide_PatchOffset!");
+		return;
+	}
+
+	g_pReloadHidePatchAddress = sigAddr + view_as<Address>(patchOffset);
+
+	int firstByte = LoadFromAddress(g_pReloadHidePatchAddress, NumberType_Int8);
+	int secondByte = LoadFromAddress(g_pReloadHidePatchAddress + view_as<Address>(1), NumberType_Int8);
+
+	// Already patched (0x90 = NOP)
+	if (firstByte == 0x90 && secondByte == 0x90)
+	{
+		LogMessage("[BotRouteFix] [Patch 5] Already patched (NOPs present @ %X), skipping", g_pReloadHidePatchAddress);
+		g_bReloadHidePatched = false;
+		delete gc;
+		return;
+	}
+
+	// Verify expected jump opcode: 32-bit 0x76 (jbe short), 64-bit 0x73 (jnb/jnc short)
+	bool isExpected = false;
+	if (g_bIsWin64)
+		isExpected = (firstByte == 0x73);
+	else
+		isExpected = (firstByte == 0x76);
+
+	if (!isExpected)
+	{
+		delete gc;
+		SetFailState("[BotRouteFix] [Patch 5] Byte mismatch at %X (expected %s, got %02X %02X), patch aborted!",
+			g_pReloadHidePatchAddress, g_bIsWin64 ? "73" : "76", firstByte, secondByte);
+		return;
+	}
+
+	// Backup original 2 bytes
+	for (int i = 0; i < 2; i++)
+	{
+		g_iOriginalReloadHideBytes[i] = LoadFromAddress(g_pReloadHidePatchAddress + view_as<Address>(i), NumberType_Int8);
+	}
+
+	// Apply 2x NOPs -> hideChance branch always falls through to Hide()
+	for (int i = 0; i < 2; i++)
+	{
+		StoreToAddress(g_pReloadHidePatchAddress + view_as<Address>(i), 0x90, NumberType_Int8, true);
+	}
+
+	g_bReloadHidePatched = true;
+	LogMessage("[BotRouteFix] [Patch 5] Reload HideChance -> 100%% (NOPed %02X %02X @ %X) [%s]",
+		g_iOriginalReloadHideBytes[0], g_iOriginalReloadHideBytes[1], g_pReloadHidePatchAddress, g_bIsWin64 ? "64-bit" : "32-bit");
+
+	delete gc;
+}
+
+void RestoreReloadHidePatch()
+{
+	if (g_bReloadHidePatched && g_pReloadHidePatchAddress != Address_Null)
+	{
+		for (int i = 0; i < 2; i++)
+		{
+			StoreToAddress(g_pReloadHidePatchAddress + view_as<Address>(i), g_iOriginalReloadHideBytes[i], NumberType_Int8, true);
+		}
+		LogMessage("[BotRouteFix] [Patch 5] Restored original Reload HideChance jump @ %X", g_pReloadHidePatchAddress);
+		g_bReloadHidePatched = false;
+	}
+}

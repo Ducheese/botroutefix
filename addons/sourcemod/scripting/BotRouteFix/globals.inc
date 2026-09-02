@@ -6,6 +6,21 @@
 // 全局统一战术心跳周期 (0.5s / 2Hz，统一驱动 Timer 与缓存节流)
 #define TACTICAL_TICK_INTERVAL 0.5
 
+// ---------------------------------------------------------------------------------------
+// [COMPAT] SM 1.11 本地编译兼容：SM 1.11 仅 Int8/16/32 且无 Address 封装，1.12+ 原生提供
+// 线上 64 位务必用 SM 1.12+ 编译，否则高位截断；此分支仅为过 1.11 编译检查。
+// ---------------------------------------------------------------------------------------
+#if defined SOURCEMOD_V_MAJOR && SOURCEMOD_V_MAJOR == 1 && SOURCEMOD_V_MINOR < 12
+stock Address LoadAddressFromAddress(Address addr)
+{
+	return view_as<Address>(LoadFromAddress(addr, NumberType_Int32));
+}
+stock void StoreAddressToAddress(Address addr, Address val, bool updateMemAccess = true)
+{
+	StoreToAddress(addr, val, NumberType_Int32, updateMemAccess);
+}
+#endif
+
 //========================================================================================
 // HANDLES & GLOBAL VARIABLES
 //========================================================================================
@@ -111,6 +126,13 @@ Handle g_hDefuseCoordTimer = INVALID_HANDLE;
 
 Handle g_hAttackDodgeDetour = INVALID_HANDLE;
 int g_iOffset_AttackShouldDodge = 0;
+
+// ---------------------------------------------------------------------------------------
+// [模块 10：换弹掩体 100% 强制 (Reload Hide 100% Patch)]
+// ---------------------------------------------------------------------------------------
+Address g_pReloadHidePatchAddress;
+int g_iOriginalReloadHideBytes[2];
+bool g_bReloadHidePatched = false;
 
 //========================================================================================
 // CONFIGURATION & OFFSETS LOADER

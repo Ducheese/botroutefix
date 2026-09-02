@@ -41,6 +41,12 @@
 //      实时竞选单人「首席拆包员」直扑 C4 拆包，其余到达包点触发区（m_bInBombZone）的支援 CT 提前转入 GUARD_BOMB_DEFUSER，
 //      调用原生 CCSBot::Hide 在包点掩体后散开架枪蹲点，形成立体交叉火力掩护；首席倒地秒级接力。
 //
+// [模块 9：闪避倾向热补丁 (AttackState Dodge Hot Patch)]
+//  11. 将 AttackState::OnEnter 中 dodgeChance = 80*skill 热补丁为 100% 强制闪避，全员进入 Dodge()，后续灵敏度在 Dodge() 内再按 skill 分化.
+//
+// [模块 10：换弹掩体 100% 强制 (Reload Hide 100% Patch)]
+//  12. 将 ReloadCheck 中 hideChance = 25+100*skill 的随机掩体判定 NOP 为 100% 必进掩体，附近有敌且 5s 内见敌时换弹必找掩体。
+//
 // 支持架构：
 //   - 32-bit: Windows non-Steam (v91/v92) server.dll
 //   - 64-bit: Windows Steam x64 server.dll
@@ -110,6 +116,7 @@ public void OnPluginStart()
 	PrepInstantPlantPatch();
 	PrepBombsiteLockPatch();
 	PrepDangerReset();
+	PrepReloadHidePatch();
 
 	// =========================================================================
 	// [阶段 4] 运行时状态初始化与定时器 (Runtime State & Active Timers)
@@ -140,6 +147,7 @@ public void OnPluginEnd()
 	RestoreAntiRushPatch();
 	RestoreInstantPlantPatch();
 	RestoreBombsiteLockPatch();
+	RestoreReloadHidePatch();
 
 	RestoreHuntStateHook();
 	RestoreNoticeLooseBombHook();
