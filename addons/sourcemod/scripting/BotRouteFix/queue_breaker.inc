@@ -80,8 +80,15 @@ public Action Timer_CheckPoliteQueue(Handle timer)
 				Address pArea = LoadAddressFromAddress(pConnectInfo);
 				if (pArea != Address_Null)
 				{
-					float curDanger = view_as<float>(LoadFromAddress(pArea + view_as<Address>(g_iOffset_Danger + teamIdx * 4), NumberType_Int32));
-					float newDanger = curDanger + 0.8;
+					float rawDanger = view_as<float>(LoadFromAddress(pArea + view_as<Address>(g_iOffset_Danger + teamIdx * 4), NumberType_Int32));
+					float timestamp = view_as<float>(LoadFromAddress(pArea + view_as<Address>(g_iOffset_DangerTimestamp + teamIdx * 4), NumberType_Int32));
+
+					// Settle elapsed time decay first
+					float effDanger = rawDanger - ((curtime - timestamp) / 120.0);
+					if (effDanger < 0.0)
+						effDanger = 0.0;
+
+					float newDanger = effDanger + 0.8;
 					if (newDanger > 2.5)
 						newDanger = 2.5; // Cap to prevent permanent deadlock
 
@@ -97,8 +104,15 @@ public Action Timer_CheckPoliteQueue(Handle timer)
 					Address pNextArea = LoadAddressFromAddress(pNextConnectInfo);
 					if (pNextArea != Address_Null)
 					{
-						float curDanger = view_as<float>(LoadFromAddress(pNextArea + view_as<Address>(g_iOffset_Danger + teamIdx * 4), NumberType_Int32));
-						float newDanger = curDanger + 0.8;
+						float rawDanger = view_as<float>(LoadFromAddress(pNextArea + view_as<Address>(g_iOffset_Danger + teamIdx * 4), NumberType_Int32));
+						float timestamp = view_as<float>(LoadFromAddress(pNextArea + view_as<Address>(g_iOffset_DangerTimestamp + teamIdx * 4), NumberType_Int32));
+
+						// Settle elapsed time decay first
+						float effDanger = rawDanger - ((curtime - timestamp) / 120.0);
+						if (effDanger < 0.0)
+							effDanger = 0.0;
+
+						float newDanger = effDanger + 0.8;
 						if (newDanger > 2.5)
 							newDanger = 2.5; // Cap to prevent permanent deadlock
 
@@ -113,6 +127,11 @@ public Action Timer_CheckPoliteQueue(Handle timer)
 			StoreToAddress(pBot + view_as<Address>(g_iOffset_PathLength), 0, NumberType_Int32);
 			StoreToAddress(pBot + view_as<Address>(g_iOffset_PathIndex), 0, NumberType_Int32);
 			StoreAddressToAddress(pBot + view_as<Address>(g_iOffset_PathLadder), Address_Null);
+			StoreToAddress(pBot + view_as<Address>(g_iOffset_IsWaitingBehindFriend), 0, NumberType_Int8);
+
+			// Invalidate polite timer (-1.0f) to wipe out any waiting state residue
+			// IDA: polite m_duration@+g_iOffset_TimerDuration, m_timestamp@+g_iOffset_TimerTimestamp
+			StoreToAddress(pBot + view_as<Address>(g_iOffset_PoliteTimer + g_iOffset_TimerTimestamp), view_as<int>(-1.0), NumberType_Int32);
 		}
 	}
 

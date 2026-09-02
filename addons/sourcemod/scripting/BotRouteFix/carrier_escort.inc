@@ -72,9 +72,8 @@ void AssignCarrierBodyguards()
 			float walkDist = GetNavMeshWalkDistance(i, carrierOrigin);
 			if (walkDist < 0.0)
 			{
-				float pos[3];
-				GetClientAbsOrigin(i, pos);
-				walkDist = GetVectorDistance(carrierOrigin, pos) * 2.0;
+				// Target is unreachable on NavMesh: set to massive distance so unreachable bot ranks dead last
+				walkDist = 9999999.0;
 			}
 
 			candidates[candidateCount].client = i;

@@ -96,9 +96,8 @@ public MRESReturn Hook_NoticeLooseBomb_Post(int client, Handle hReturn)
 				float walkDist = GetNavMeshWalkDistance(i, bombPos);
 				if (walkDist < 0.0)
 				{
-					float botPos[3];
-					GetClientAbsOrigin(i, botPos);
-					walkDist = GetVectorDistance(botPos, bombPos) * 2.0;
+					// Target is unreachable on NavMesh: set to massive distance so unreachable bot ranks dead last
+					walkDist = 9999999.0;
 				}
 
 				candidates[candidateCount].client = i;

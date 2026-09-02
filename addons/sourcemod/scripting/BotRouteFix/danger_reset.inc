@@ -69,24 +69,33 @@ void ResetAllNavAreaDanger()
 		if (pArea == Address_Null)
 			continue;
 
-		// 1. Read existing Terrorist (index 0) and CT (index 1) danger values
-		float dangerT = view_as<float>(LoadFromAddress(pArea + view_as<Address>(g_iOffset_Danger), NumberType_Int32));
-		float dangerCT = view_as<float>(LoadFromAddress(pArea + view_as<Address>(g_iOffset_Danger + 4), NumberType_Int32));
+		// 1. Read existing raw danger values & timestamps
+		float rawDangerT = view_as<float>(LoadFromAddress(pArea + view_as<Address>(g_iOffset_Danger), NumberType_Int32));
+		float rawDangerCT = view_as<float>(LoadFromAddress(pArea + view_as<Address>(g_iOffset_Danger + 4), NumberType_Int32));
+		float timestampT = view_as<float>(LoadFromAddress(pArea + view_as<Address>(g_iOffset_DangerTimestamp), NumberType_Int32));
+		float timestampCT = view_as<float>(LoadFromAddress(pArea + view_as<Address>(g_iOffset_DangerTimestamp + 4), NumberType_Int32));
 
-		// 2. Soft decay: reduce danger by 80% (retain 20% residual memory for dynamic path variance)
-		dangerT *= 0.2;
-		dangerCT *= 0.2;
+		// 2. Settle elapsed time decay first (Source engine native decay rate: 1.0 / 120.0s)
+		float effDangerT = rawDangerT - ((curtime - timestampT) / 120.0);
+		if (effDangerT < 0.0)
+			effDangerT = 0.0;
+
+		float effDangerCT = rawDangerCT - ((curtime - timestampCT) / 120.0);
+		if (effDangerCT < 0.0)
+			effDangerCT = 0.0;
+
+		// 3. Soft decay: reduce effective danger by 80% (retain 20% residual memory for dynamic path variance)
+		float dangerT = effDangerT * 0.2;
+		float dangerCT = effDangerCT * 0.2;
 
 		if (dangerT < 0.05)
 			dangerT = 0.0;
 		if (dangerCT < 0.05)
 			dangerCT = 0.0;
 
-		// 3. Store decayed danger values
+		// 4. Store decayed danger values & reset timestamps to curtime
 		StoreToAddress(pArea + view_as<Address>(g_iOffset_Danger), view_as<int>(dangerT), NumberType_Int32);
 		StoreToAddress(pArea + view_as<Address>(g_iOffset_Danger + 4), view_as<int>(dangerCT), NumberType_Int32);
-
-		// 4. Reset danger timestamps to curtime
 		StoreToAddress(pArea + view_as<Address>(g_iOffset_DangerTimestamp), view_as<int>(curtime), NumberType_Int32);
 		StoreToAddress(pArea + view_as<Address>(g_iOffset_DangerTimestamp + 4), view_as<int>(curtime), NumberType_Int32);
 	}
@@ -156,8 +165,17 @@ bool GetClientNavAreaDanger(int client, float &dangerT, float &dangerCT, int &ar
 
 	if (pBestArea != Address_Null)
 	{
-		dangerT = view_as<float>(LoadFromAddress(pBestArea + view_as<Address>(g_iOffset_Danger), NumberType_Int32));
-		dangerCT = view_as<float>(LoadFromAddress(pBestArea + view_as<Address>(g_iOffset_Danger + 4), NumberType_Int32));
+		float rawT = view_as<float>(LoadFromAddress(pBestArea + view_as<Address>(g_iOffset_Danger), NumberType_Int32));
+		float timeT = view_as<float>(LoadFromAddress(pBestArea + view_as<Address>(g_iOffset_DangerTimestamp), NumberType_Int32));
+		float rawCT = view_as<float>(LoadFromAddress(pBestArea + view_as<Address>(g_iOffset_Danger + 4), NumberType_Int32));
+		float timeCT = view_as<float>(LoadFromAddress(pBestArea + view_as<Address>(g_iOffset_DangerTimestamp + 4), NumberType_Int32));
+		float curtime = GetGameTime();
+
+		float effT = rawT - ((curtime - timeT) / 120.0);
+		dangerT = (effT > 0.0) ? effT : 0.0;
+
+		float effCT = rawCT - ((curtime - timeCT) / 120.0);
+		dangerCT = (effCT > 0.0) ? effCT : 0.0;
 		return true;
 	}
 

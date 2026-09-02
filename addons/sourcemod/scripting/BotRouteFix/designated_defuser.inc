@@ -78,7 +78,7 @@ public Action Timer_DefuseCoordination(Handle timer)
 
 			float walkDist = GetNavMeshWalkDistance(i, g_fBombPlantedPos);
 			if (walkDist < 0.0)
-				walkDist = GetVectorDistance(ctPos, g_fBombPlantedPos) * 2.0;
+				walkDist = 9999999.0;
 
 			if (walkDist > 800.0)
 				continue;
@@ -92,11 +92,11 @@ public Action Timer_DefuseCoordination(Handle timer)
 		// If a non-defuser CT bot is attempting task 3 (DEFUSE_BOMB):
 		if (task == 3) // DEFUSE_BOMB
 		{
-			// Switch task to GUARD_BOMB_DEFUSER (task 5) and take cover to set up crossfire
+			// Switch task to GUARD_BOMB_DEFUSER (task 5) and take cover in bombsite (500.0 units) to set up crossfire
 			StoreToAddress(pBot + view_as<Address>(g_iOffset_Task), 5, NumberType_Int32);
 			if (g_hHideSDKCall != null)
 			{
-				SDKCall(g_hHideSDKCall, i, Address_Null, -1.0, 0.0, false);
+				SDKCall(g_hHideSDKCall, i, Address_Null, -1.0, 500.0, false);
 			}
 		}
 	}
@@ -130,9 +130,7 @@ void UpdateDesignatedDefuser()
 			float walkDist = GetNavMeshWalkDistance(i, g_fBombPlantedPos);
 			if (walkDist < 0.0)
 			{
-				float pos[3];
-				GetClientAbsOrigin(i, pos);
-				walkDist = GetVectorDistance(pos, g_fBombPlantedPos) * 2.0;
+				walkDist = 9999999.0;
 			}
 
 			// Physical time-equivalent bonus: (10.0s no kit - 5.0s kit) * 250 units/s run speed = 1250.0 units

@@ -185,33 +185,112 @@ float GetNavMeshWalkDistance(int client, const float targetPos[3])
 	if (pBot == Address_Null)
 		return -1.0;
 
-	// Compute fastest path to the target position (invokes NavAreaBuildPath under the hood)
-	bool hasPath = SDKCall(g_hComputePathSDKCall, client, targetPos, 0); // 0 = FASTEST_ROUTE
-	if (!hasPath)
-		return -1.0;
+	//========================================================================
+	// 1. BACKUP BOT MOVEMENT STATE (NON-DESTRUCTIVE SNAPSHOT)
+	//========================================================================
+	int oldPathLength = LoadFromAddress(pBot + view_as<Address>(g_iOffset_PathLength), NumberType_Int32);
+	int oldPathIndex = LoadFromAddress(pBot + view_as<Address>(g_iOffset_PathIndex), NumberType_Int32);
+	Address oldPathLadder = LoadAddressFromAddress(pBot + view_as<Address>(g_iOffset_PathLadder));
+	int oldIsStopping = LoadFromAddress(pBot + view_as<Address>(g_iOffset_IsStopping), NumberType_Int8);
 
-	int pathLength = LoadFromAddress(pBot + view_as<Address>(g_iOffset_PathLength), NumberType_Int32);
-	if (pathLength <= 0)
-		return -1.0;
+	// Backup Area Pointers (m_currentArea & m_lastKnownArea)
+	int currentAreaOffset = g_iOffset_Task + 24;
+	int lastKnownAreaOffset = currentAreaOffset + g_iPtrSize;
+	Address oldCurrentArea = LoadAddressFromAddress(pBot + view_as<Address>(currentAreaOffset));
+	Address oldLastKnownArea = LoadAddressFromAddress(pBot + view_as<Address>(lastKnownAreaOffset));
 
-	float totalDist = 0.0;
-	float prevPos[3];
-	GetClientAbsOrigin(client, prevPos);
+	// Backup Goal Position (Vector: 3 floats)
+	int goalOffset = g_iOffset_Task + 8;
+	int oldGoalX = LoadFromAddress(pBot + view_as<Address>(goalOffset), NumberType_Int32);
+	int oldGoalY = LoadFromAddress(pBot + view_as<Address>(goalOffset + 4), NumberType_Int32);
+	int oldGoalZ = LoadFromAddress(pBot + view_as<Address>(goalOffset + 8), NumberType_Int32);
 
-	int vecOffset = g_iOffset_ConnectInfoPos;
+	// Backup Repath Timer (base = PathLength + 12/16, m_duration @ +TimerDuration, m_timestamp @ +TimerTimestamp)
+	// IDA x64: base=16664 (PathLength+16), duration@+8, timestamp@+12; x86: base=13364 (+12), duration@+4, timestamp@+8
+	int repathOffset = g_iOffset_PathLength + (g_bIsWin64 ? 16 : 12);
+	int oldRepathDuration = LoadFromAddress(pBot + view_as<Address>(repathOffset + g_iOffset_TimerDuration), NumberType_Int32);
+	int oldRepathTimestamp = LoadFromAddress(pBot + view_as<Address>(repathOffset + g_iOffset_TimerTimestamp), NumberType_Int32);
 
-	for (int i = 0; i < pathLength; i++)
+	// Temporarily invalidate repath timer so ComputePath is guaranteed not to be throttled
+	StoreToAddress(pBot + view_as<Address>(repathOffset + g_iOffset_TimerTimestamp), view_as<int>(-1.0), NumberType_Int32);
+
+	// Backup Path Buffer (up to 256 nodes)
+	int dwordsPerNode = g_iPathStride / 4;
+	int clampedOldLength = oldPathLength;
+	if (clampedOldLength < 0) clampedOldLength = 0;
+	if (clampedOldLength > 256) clampedOldLength = 256;
+
+	int oldPathBuffer[2048]; // Support up to 8 dwords per node (32 bytes on x64) * 256 nodes
+	int totalDwords = clampedOldLength * dwordsPerNode;
+	if (totalDwords > 2048) totalDwords = 2048;
+
+	for (int d = 0; d < totalDwords; d++)
 	{
-		Address pConnectInfo = pBot + view_as<Address>(g_iOffset_Path + i * g_iPathStride);
-		float nodePos[3];
-		nodePos[0] = view_as<float>(LoadFromAddress(pConnectInfo + view_as<Address>(vecOffset), NumberType_Int32));
-		nodePos[1] = view_as<float>(LoadFromAddress(pConnectInfo + view_as<Address>(vecOffset + 4), NumberType_Int32));
-		nodePos[2] = view_as<float>(LoadFromAddress(pConnectInfo + view_as<Address>(vecOffset + 8), NumberType_Int32));
-
-		totalDist += GetVectorDistance(prevPos, nodePos);
-		prevPos = nodePos;
+		oldPathBuffer[d] = LoadFromAddress(pBot + view_as<Address>(g_iOffset_Path + d * 4), NumberType_Int32);
 	}
 
-	totalDist += GetVectorDistance(prevPos, targetPos);
+	//========================================================================
+	// 2. EXECUTE SDKCALL MEASUREMENT
+	//========================================================================
+	bool hasPath = SDKCall(g_hComputePathSDKCall, client, targetPos, 0); // 0 = FASTEST_ROUTE
+	float totalDist = -1.0;
+
+	if (hasPath)
+	{
+		int newPathLength = LoadFromAddress(pBot + view_as<Address>(g_iOffset_PathLength), NumberType_Int32);
+		if (newPathLength > 0)
+		{
+			totalDist = 0.0;
+			float prevPos[3];
+			GetClientAbsOrigin(client, prevPos);
+
+			int vecOffset = g_iOffset_ConnectInfoPos;
+
+			for (int i = 0; i < newPathLength; i++)
+			{
+				Address pConnectInfo = pBot + view_as<Address>(g_iOffset_Path + i * g_iPathStride);
+				float nodePos[3];
+				nodePos[0] = view_as<float>(LoadFromAddress(pConnectInfo + view_as<Address>(vecOffset), NumberType_Int32));
+				nodePos[1] = view_as<float>(LoadFromAddress(pConnectInfo + view_as<Address>(vecOffset + 4), NumberType_Int32));
+				nodePos[2] = view_as<float>(LoadFromAddress(pConnectInfo + view_as<Address>(vecOffset + 8), NumberType_Int32));
+
+				totalDist += GetVectorDistance(prevPos, nodePos);
+				prevPos = nodePos;
+			}
+
+			totalDist += GetVectorDistance(prevPos, targetPos);
+		}
+	}
+
+	//========================================================================
+	// 3. FULL SEAMLESS STATE RESTORATION
+	//========================================================================
+	// Restore Path Nodes
+	for (int d = 0; d < totalDwords; d++)
+	{
+		StoreToAddress(pBot + view_as<Address>(g_iOffset_Path + d * 4), oldPathBuffer[d], NumberType_Int32);
+	}
+
+	// Restore Path Length & Index
+	StoreToAddress(pBot + view_as<Address>(g_iOffset_PathLength), oldPathLength, NumberType_Int32);
+	StoreToAddress(pBot + view_as<Address>(g_iOffset_PathIndex), oldPathIndex, NumberType_Int32);
+
+	// Restore Area Pointers
+	StoreAddressToAddress(pBot + view_as<Address>(currentAreaOffset), oldCurrentArea);
+	StoreAddressToAddress(pBot + view_as<Address>(lastKnownAreaOffset), oldLastKnownArea);
+
+	// Restore Goal Position
+	StoreToAddress(pBot + view_as<Address>(goalOffset), oldGoalX, NumberType_Int32);
+	StoreToAddress(pBot + view_as<Address>(goalOffset + 4), oldGoalY, NumberType_Int32);
+	StoreToAddress(pBot + view_as<Address>(goalOffset + 8), oldGoalZ, NumberType_Int32);
+
+	// Restore Ladder & Stopping
+	StoreAddressToAddress(pBot + view_as<Address>(g_iOffset_PathLadder), oldPathLadder);
+	StoreToAddress(pBot + view_as<Address>(g_iOffset_IsStopping), oldIsStopping, NumberType_Int8);
+
+	// Restore Repath Timer
+	StoreToAddress(pBot + view_as<Address>(repathOffset + g_iOffset_TimerDuration), oldRepathDuration, NumberType_Int32);
+	StoreToAddress(pBot + view_as<Address>(repathOffset + g_iOffset_TimerTimestamp), oldRepathTimestamp, NumberType_Int32);
+
 	return totalDist;
 }

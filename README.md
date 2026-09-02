@@ -142,9 +142,9 @@
 
 | 结构体与成员 | 32-bit (v91/v92) | 64-bit (Steam x64) | 数据类型与使用模块 |
 | :--- | :--- | :--- | :--- |
-| **`TheCSBots()->m_zoneCount`** | `+0x1858` (`6232`) | `+0x1980` (`6528`) | 包点总数 `CUtlVector::m_Size` (模块 2 / Patch 4) |
-| **`TheCSBots()->m_zoneBase`** | `+0x184C` (`6220`) | `+0x1970` (`6512`) | 包点数组首地址指针 `CUtlVector::m_pMemory` (模块 2 / Patch 4) |
-| **`TheCSBots()->m_zoneStride`** | `44` 字节 | `56` 字节 | 单个 `Zone` 结构体物理尺寸 (模块 2 / Patch 4) |
+| **`TheCSBots()->m_zoneBase`** | `+0x184C` (`6220`) | `+0x1860` (`6240`) | 包点数组 `m_zone[4]` 起始地址 (模块 2 / Patch 4) |
+| **`TheCSBots()->m_zoneStride`** | `120` 字节 (`0x78`) | `192` 字节 (`0xC0`) | 单个 `Zone` 结构体物理尺寸 (模块 2 / Patch 4) |
+| **`TheCSBots()->m_zoneCount`** | `+0x1A2C` (`6700`) | `+0x1B60` (`7008`) | 包点总数 `int` (`m_zone[4]` 之后) (模块 2 / Patch 4) |
 | **`TheCSBots()->m_earliestBombPlantTimestamp`** | `+0x1A38` (`6712`) | `+0x1B6C` (`7020`) | 最早运包延迟时间戳 `float` (模块 2) |
 | **`CCSBot::m_morale`** | `+0x1A08` (`6664`) | `+0x1E50` (`7760`) | 个人士气值枚举 `MoraleType` (-3 ~ +3) (模块 1/2/5) |
 | **`CCSBot::m_isStopping`** | `+0x1C20` (`7200`) | `+0x2100` (`8448`) | 减速停车标志位 (bool/int8) (模块 4) |
