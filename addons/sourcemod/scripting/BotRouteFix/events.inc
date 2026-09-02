@@ -117,6 +117,10 @@ void DumpRoundMoraleStats()
 
 public void Event_ItemPickup(Event event, const char[] name, bool dontBroadcast)
 {
+	// 开局 GiveC4 触发的 c4 pickup 会在 BuyState 0.25s 内打断购买，3T 时 2 保镖 100% 不买枪，故冻结期内不触发
+	if (GameRules_GetProp("m_bFreezePeriod"))
+		return;
+
 	char item[32];
 	event.GetString("item", item, sizeof(item));
 

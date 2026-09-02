@@ -47,6 +47,9 @@
 // [模块 10：换弹掩体 100% 强制 (Reload Hide 100% Patch)]
 //  12. 将 ReloadCheck 中 hideChance = 25+100*skill 的随机掩体判定 NOP 为 100% 必进掩体，附近有敌且 5s 内见敌时换弹必找掩体。
 //
+// [模块 11：血量过低强制后撤 (Low Health PinnedDown Retreat)]
+//  13. Detour AttackState::OnUpdate Pre 检测血量 <40 时写 m_pinnedDownTimestamp=0 触发 isPinnedDown 恒真，复用 TryToRetreat 同路后撤。
+//
 // 支持架构：
 //   - 32-bit: Windows non-Steam (v91/v92) server.dll
 //   - 64-bit: Windows Steam x64 server.dll
@@ -71,6 +74,7 @@
 #include "BotRouteFix/loose_bomb.inc"
 #include "BotRouteFix/designated_defuser.inc"
 #include "BotRouteFix/dodge_fix.inc"
+#include "BotRouteFix/health_retreat.inc"
 #include "BotRouteFix/events.inc"
 
 //========================================================================================
@@ -107,6 +111,7 @@ public void OnPluginStart()
 	PrepHuntStateHook();
 	PrepNoticeLooseBombHook();
 	PrepAttackDodgeHook();
+	PrepAttackRetreatHook();
 
 	// =========================================================================
 	// [阶段 3] 二进制内存补丁准备与注入 (Binary Memory Patches)
@@ -152,6 +157,7 @@ public void OnPluginEnd()
 	RestoreHuntStateHook();
 	RestoreNoticeLooseBombHook();
 	RestoreAttackDodgeHook();
+	RestoreAttackRetreatHook();
 }
 
 //========================================================================================

@@ -85,12 +85,34 @@ void AssignCarrierBodyguards()
 	if (candidateCount <= 0)
 		return;
 
-	// 1. Read carrier's Morale
+	// 1. Read carrier's Morale (human has no bot data -> use T average)
 	int carrierMorale = 1; // Default POSITIVE
-	Address pCarrier = GetEntityAddress(carrier);
-	if (pCarrier != Address_Null && g_iOffset_Morale > 0)
+	if (IsFakeClient(carrier))
 	{
-		carrierMorale = LoadFromAddress(pCarrier + view_as<Address>(g_iOffset_Morale), NumberType_Int32);
+		Address pCarrier = GetEntityAddress(carrier);
+		if (pCarrier != Address_Null && g_iOffset_Morale > 0)
+		{
+			carrierMorale = LoadFromAddress(pCarrier + view_as<Address>(g_iOffset_Morale), NumberType_Int32);
+		}
+	}
+	else
+	{
+		// Human carrier: average alive T bot morale
+		int sum = 0, cnt = 0;
+		for (int i = 1; i <= MaxClients; i++)
+		{
+			if (IsClientInGame(i) && IsPlayerAlive(i) && GetClientTeam(i) == 2 && IsFakeClient(i))
+			{
+				Address pBot = GetEntityAddress(i);
+				if (pBot != Address_Null && g_iOffset_Morale > 0)
+				{
+					sum += LoadFromAddress(pBot + view_as<Address>(g_iOffset_Morale), NumberType_Int32);
+					cnt++;
+				}
+			}
+		}
+		if (cnt > 0)
+			carrierMorale = sum / cnt;
 	}
 
 	// 2. Linear Bodyguard formula: 3 - Morale (clamped to [0, 6])

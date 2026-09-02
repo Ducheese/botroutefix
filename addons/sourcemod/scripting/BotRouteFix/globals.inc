@@ -124,6 +124,9 @@ float g_fBombPlantedPos[3];
 int g_iDesignatedDefuser = 0;
 Handle g_hDefuseCoordTimer = INVALID_HANDLE;
 
+// ---------------------------------------------------------------------------------------
+// [模块 9：闪避倾向热补丁 (AttackState Dodge Hot Patch)]
+// ---------------------------------------------------------------------------------------
 Handle g_hAttackDodgeDetour = INVALID_HANDLE;
 int g_iOffset_AttackShouldDodge = 0;
 
@@ -133,6 +136,13 @@ int g_iOffset_AttackShouldDodge = 0;
 Address g_pReloadHidePatchAddress;
 int g_iOriginalReloadHideBytes[2];
 bool g_bReloadHidePatched = false;
+
+// ---------------------------------------------------------------------------------------
+// [模块 11：血量过低强制后撤 (Low Health PinnedDown Retreat)]
+// ---------------------------------------------------------------------------------------
+Handle g_hAttackRetreatDetour = INVALID_HANDLE;
+int g_iOffset_PinnedDownTimestamp = 0;
+int g_iOffset_MRetreatTimer = 0;
 
 //========================================================================================
 // CONFIGURATION & OFFSETS LOADER
@@ -177,6 +187,8 @@ void PrepOffsets()
 	g_iOffset_ClearedTimestamp = GameConfGetOffset(gc, "NavArea_ClearedTimestamp_Offset");
 
 	g_iOffset_AttackShouldDodge = GameConfGetOffset(gc, "AttackState_ShouldDodge_Offset");
+	g_iOffset_PinnedDownTimestamp = GameConfGetOffset(gc, "AttackState_PinnedDownTimestamp_Offset");
+	g_iOffset_MRetreatTimer = GameConfGetOffset(gc, "AttackState_MRetreatTimer_Offset");
 
 	if (g_iOffset_ZoneCount == -1 || g_iOffset_ZoneBase == -1 || g_iZoneStride == -1 ||
 		g_iOffset_Danger == -1 || g_iOffset_DangerTimestamp == -1 || g_iPtrSize == -1 ||
@@ -186,7 +198,7 @@ void PrepOffsets()
 		g_iOffset_IsStopping == -1 || g_iOffset_PathLadder == -1 || g_iOffset_ConnectInfoPos == -1 ||
 		g_iOffset_Task == -1 || g_iOffset_Morale == -1 || g_iOffset_EarliestBombPlant == -1 ||
 		g_iOffset_HuntArea == -1 || g_iOffset_ClearedTimestamp == -1 ||
-		g_iOffset_AttackShouldDodge == -1)
+		g_iOffset_AttackShouldDodge == -1 || g_iOffset_PinnedDownTimestamp == -1 || g_iOffset_MRetreatTimer == -1)
 	{
 		delete gc;
 		SetFailState("[BotRouteFix] Failed to read one or more offsets from gamedata!");
