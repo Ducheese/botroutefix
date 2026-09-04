@@ -223,12 +223,12 @@ void ApplyCarrierMoraleDisposition()
     if (morale <= -1)
     {
         StoreToAddress(pCarrier + view_as<Address>(g_iOffset_Disposition), 1, NumberType_Int32); // OPPORTUNITY_FIRE
-        LogMessage("[BotRouteFix] [Module 6] C4 Carrier %N (Morale %d) set to OPPORTUNITY_FIRE (Focused Plant)", carrier, morale);
+        DebugLog("[BotRouteFix] [Module 6] C4 Carrier %N (Morale %d) set to OPPORTUNITY_FIRE (Focused Plant)", carrier, morale);
     }
     else
     {
         StoreToAddress(pCarrier + view_as<Address>(g_iOffset_Disposition), 0, NumberType_Int32); // ENGAGE_AND_INVESTIGATE
-        LogMessage("[BotRouteFix] [Module 6] C4 Carrier %N (Morale %d) kept as ENGAGE_AND_INVESTIGATE", carrier, morale);
+        DebugLog("[BotRouteFix] [Module 6] C4 Carrier %N (Morale %d) kept as ENGAGE_AND_INVESTIGATE", carrier, morale);
     }
 }
 
@@ -257,12 +257,12 @@ void ApplyPlantedBombTMoraleDisposition()
                 {
                     StoreToAddress(pBot + view_as<Address>(g_iOffset_NoiseTimestamp), view_as<int>(0.0), NumberType_Int32);
                 }
-                LogMessage("[BotRouteFix] [Module 6] Post-Plant T %N (Morale %d) -> OPPORTUNITY_FIRE (Site Camp)", i, morale);
+                DebugLog("[BotRouteFix] [Module 6] Post-Plant T %N (Morale %d) -> OPPORTUNITY_FIRE (Site Camp)", i, morale);
             }
             else
             {
                 StoreToAddress(pBot + view_as<Address>(g_iOffset_Disposition), 0, NumberType_Int32); // ENGAGE_AND_INVESTIGATE
-                LogMessage("[BotRouteFix] [Module 6] Post-Plant T %N (Morale %d) -> ENGAGE_AND_INVESTIGATE (Dynamic Guard)", i, morale);
+                DebugLog("[BotRouteFix] [Module 6] Post-Plant T %N (Morale %d) -> ENGAGE_AND_INVESTIGATE (Dynamic Guard)", i, morale);
             }
         }
     }
@@ -347,6 +347,7 @@ public MRESReturn Hook_InvestigateNoise_Pre(int client, DHookParam hParams)
             StoreToAddress(pBot + view_as<Address>(g_iOffset_NoiseTimestamp), view_as<int>(0.0), NumberType_Int32);
         }
         g_iTotalNoiseIntercepted++;
+        DebugLog("[BotRouteFix] [Module 6] Bot %N negative morale (%d) noise investigate intercepted", client, morale);
         return MRES_Supercede;
     }
 
@@ -377,6 +378,8 @@ public MRESReturn Hook_InvestigateNoise_Pre(int client, DHookParam hParams)
             StoreToAddress(pBot + view_as<Address>(g_iOffset_NoiseTimestamp), view_as<int>(0.0), NumberType_Int32);
         }
         g_iTotalNoiseIntercepted++;
+        // DebugLog("[BotRouteFix] [Module 6] Bot %N noise investigate intercepted (dist %.1f > max %.1f)",
+        //     client, dist, maxNoiseDist);
         return MRES_Supercede;
     }
 
@@ -389,10 +392,14 @@ public MRESReturn Hook_InvestigateNoise_Pre(int client, DHookParam hParams)
             StoreToAddress(pBot + view_as<Address>(g_iOffset_NoiseTimestamp), view_as<int>(0.0), NumberType_Int32);
         }
         g_iTotalNoiseIntercepted++;
+        // DebugLog("[BotRouteFix] [Module 6] Bot %N noise investigate intercepted by probability check (chance %.1f%%)",
+        //     client, chance);
         return MRES_Supercede;
     }
 
     // 允许出击调查
     g_iTotalNoiseAllowed++;
+    DebugLog("[BotRouteFix] [Module 6] Bot %N allowed to investigate noise (dist %.1f, morale %d)",
+        client, dist, morale);
     return MRES_Ignored;
 }

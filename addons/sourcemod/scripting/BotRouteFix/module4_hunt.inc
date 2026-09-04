@@ -332,5 +332,7 @@ public MRESReturn Hook_HuntState_OnUpdate_Post(Address pThis, DHookParam hParams
     StoreToAddress(pClearedTimestampAddr, view_as<int>(curtime), NumberType_Int32);
 
     g_iTotalHuntClaims++;
+    // DebugLog("[BotRouteFix] [Module 4] Bot %N claimed oldest-cleared area @ %X (teamIdx: %d, curtime: %.1f)",
+    //     client, pArea, teamIdx, curtime);
     return MRES_Ignored;
 }

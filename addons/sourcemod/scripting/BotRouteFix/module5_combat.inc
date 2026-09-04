@@ -371,6 +371,7 @@ public MRESReturn Hook_AttackState_OnEnter_Post(Address pThis, DHookParam hParam
     StoreToAddress(pThis + view_as<Address>(g_iOffset_AttackShouldDodge), 1, NumberType_Int8);
 
     g_iTotalDodgeForced++;
+    // DebugLog("[BotRouteFix] [Module 5] Bot %N forced 100%% dodge maneuver", client);
     return MRES_Ignored;
 }
 
@@ -461,5 +462,7 @@ public MRESReturn Hook_AttackState_OnUpdate_Pre(Address pThis, DHookParam hParam
     }
 
     g_iTotalRetreatTriggered++;
+    // DebugLog("[BotRouteFix] [Module 5] Low-HP bot %N (HP: %d) forced retreat via pinnedDown",
+    //     client, GetClientHealth(client));
     return MRES_Ignored;
 }

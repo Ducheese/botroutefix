@@ -18,10 +18,11 @@ void InitCommands()
 public Action Command_Status(int client, int args)
 {
     bool bMaster = (g_cvEnable != null && g_cvEnable.BoolValue);
+    bool bDebug  = (g_cvDebug != null && g_cvDebug.BoolValue);
 
     ReplyToCommand(client, "[BotRouteFix] ==================== System Status Telemetry ====================");
     ReplyToCommand(client, "[BotRouteFix] Version       : %s | Author: %s", PLUGIN_VERSION, PLUGIN_AUTHOR);
-    ReplyToCommand(client, "[BotRouteFix] Master Switch : %s", bMaster ? "ENABLED" : "DISABLED");
+    ReplyToCommand(client, "[BotRouteFix] Master Switch : %s | Debug : %s", bMaster ? "ENABLED" : "DISABLED", bDebug ? "ON" : "OFF");
     ReplyToCommand(client, "[BotRouteFix] Architecture  : %s", g_bIsWin64 ? "64-bit (Steam x64)" : "32-bit (v91/v92)");
     ReplyToCommand(client, "[BotRouteFix] Gamedata      : %s (%s)", GAMEDATA, (g_hGameConf != null) ? "Ready" : "Not Loaded");
     ReplyToCommand(client, "[BotRouteFix] ------------------------------------------------------------");

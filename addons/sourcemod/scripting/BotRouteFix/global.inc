@@ -36,9 +36,9 @@ ConVar g_cvDebug = null;
 int g_iOffset_Morale = -1;
 
 // 全局单例指针引用（跨模块共享）
-Address g_pTheCSBotsPtr = Address_Null;
-Address g_pTheNavAreasCount = Address_Null;
-Address g_pTheNavAreasBase = Address_Null;
+Address g_pTheCSBotsPtr;
+Address g_pTheNavAreasCount;
+Address g_pTheNavAreasBase;
 
 //========================================================================================
 // COMPATIBILITY (SourceMod 1.11 / 1.12 地址读写兼容层)
@@ -55,3 +55,23 @@ stock void StoreAddressToAddress(Address addr, Address val, bool updateMemAccess
     StoreToAddress(addr, val, NumberType_Int32, updateMemAccess);
 }
 #endif
+
+//========================================================================================
+// LOGGING & TELEMETRY HELPER
+//========================================================================================
+
+/**
+ * 输出调试级战术遥测日志（仅在 sm_botroutefix_debug 开启时输出到控制台）
+ *
+ * @param format     格式化字符串
+ * @param ...        格式化参数列表
+ */
+stock void DebugLog(const char[] format, any ...)
+{
+    if (g_cvDebug != null && g_cvDebug.BoolValue)
+    {
+        char buffer[256];
+        VFormat(buffer, sizeof(buffer), format, 2);
+        LogMessage("%s", buffer);
+    }
+}

@@ -181,7 +181,7 @@ void DecayAllNavAreaDanger()
         }
     }
 
-    LogMessage("[BotRouteFix] [Module 3] Decayed danger (80%% reduction) across %d NavAreas (%d active) for round start.",
+    DebugLog("[BotRouteFix] [Module 3] Decayed danger (80%% reduction) across %d NavAreas (%d active) for round start.",
         count, decayCount);
 }
 

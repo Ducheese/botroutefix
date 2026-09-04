@@ -271,7 +271,7 @@ void Module2_OnRoundFreezeEnd()
             char moraleStr[16];
             GetMoraleName(carrierMorale, moraleStr, sizeof(moraleStr));
 
-            LogMessage("[BotRouteFix] [Module 2] C4 Carrier %N (Morale: %d %s) -> Plant Delay: %.1fs (Earliest: %.1fs)",
+            DebugLog("[BotRouteFix] [Module 2] C4 Carrier %N (Morale: %d %s) -> Plant Delay: %.1fs (Earliest: %.1fs)",
                 carrier, carrierMorale, moraleStr, g_fCurrentPlantDelay, targetTimestamp);
         }
     }
@@ -289,7 +289,7 @@ void Module2_OnBombDropped()
     if (g_bBombsiteLocked)
     {
         RestoreBombsiteLockPatch();
-        LogMessage("[BotRouteFix] [Module 2] C4 dropped! Restored native GetClosestZone for tactical adaptation.");
+        DebugLog("[BotRouteFix] [Module 2] C4 dropped! Restored native GetClosestZone for tactical adaptation.");
     }
     g_iOpeningCarrier = 0;
 }
@@ -314,7 +314,7 @@ void Module2_OnItemPickup(int client, const char[] item)
             if (g_bBombsiteLocked)
             {
                 RestoreBombsiteLockPatch();
-                LogMessage("[BotRouteFix] [Module 2] C4 picked up by new carrier %N (previous: %d)! Restored native GetClosestZone.",
+                DebugLog("[BotRouteFix] [Module 2] C4 picked up by new carrier %N (previous: %d)! Restored native GetClosestZone.",
                     client, g_iOpeningCarrier);
             }
             g_iOpeningCarrier = client;
@@ -333,7 +333,7 @@ void Module2_OnPlayerDeath(int victim)
         if (g_bBombsiteLocked)
         {
             RestoreBombsiteLockPatch();
-            LogMessage("[BotRouteFix] [Module 2] Opening C4 carrier %N died! Restored native GetClosestZone.", victim);
+            DebugLog("[BotRouteFix] [Module 2] Opening C4 carrier %N died! Restored native GetClosestZone.", victim);
         }
         g_iOpeningCarrier = 0;
     }
@@ -420,6 +420,11 @@ static void SelectRandomBombsite()
  */
 static void ApplyLockedBombsitePatch(int zoneIndex)
 {
+    if (g_bBombsiteLocked)
+    {
+        return;
+    }
+
     if (g_PatchBombsiteLock.address == Address_Null || g_pTheCSBotsPtr == Address_Null)
     {
         return;
@@ -438,32 +443,33 @@ static void ApplyLockedBombsitePatch(int zoneIndex)
     if (g_bIsWin64)
     {
         // 64-bit: mov rax, [imm64] (48 B8 [8-byte imm64]) + 9x NOP (total 19 bytes)
+        // 采用零循环平铺写入（Zero-Loop Direct Write），物理根除循环超时风险
+        // 首字节通过 updateMemAccess=true 获得整页读写权限，后续同一页内写入无需重复系统调用
         StoreToAddress(patchAddr, 0x48, NumberType_Int8, true);
-        StoreToAddress(patchAddr + view_as<Address>(1), 0xB8, NumberType_Int8, true);
-        StoreAddressToAddress(patchAddr + view_as<Address>(2), targetZone, true);
+        StoreToAddress(patchAddr + view_as<Address>(1), 0xB8, NumberType_Int8, false);
+        StoreAddressToAddress(patchAddr + view_as<Address>(2), targetZone, false);
 
-        for (int i = 10; i < 19; i++)
-        {
-            StoreToAddress(patchAddr + view_as<Address>(i), 0x90, NumberType_Int8, true);
-        }
+        // 填充 9 字节 NOP (0x90): 4 字节 + 4 字节 + 1 字节
+        StoreToAddress(patchAddr + view_as<Address>(10), 0x90909090, NumberType_Int32, false);
+        StoreToAddress(patchAddr + view_as<Address>(14), 0x90909090, NumberType_Int32, false);
+        StoreToAddress(patchAddr + view_as<Address>(18), 0x90, NumberType_Int8, false);
     }
     else
     {
         // 32-bit: mov eax, [imm32] (B8 [4-byte imm32]) + 6x NOP (total 11 bytes)
         StoreToAddress(patchAddr, 0xB8, NumberType_Int8, true);
-        StoreAddressToAddress(patchAddr + view_as<Address>(1), targetZone, true);
+        StoreAddressToAddress(patchAddr + view_as<Address>(1), targetZone, false);
 
-        for (int i = 5; i < 11; i++)
-        {
-            StoreToAddress(patchAddr + view_as<Address>(i), 0x90, NumberType_Int8, true);
-        }
+        // 填充 6 字节 NOP (0x90): 4 字节 + 2 字节
+        StoreToAddress(patchAddr + view_as<Address>(5), 0x90909090, NumberType_Int32, false);
+        StoreToAddress(patchAddr + view_as<Address>(9), 0x9090, NumberType_Int16, false);
     }
 
     g_PatchBombsiteLock.isPatched = true;
     g_bBombsiteLocked = true;
     g_iLockedZoneIndex = zoneIndex;
 
-    LogMessage("[BotRouteFix] [Module 2] Locked target bombsite to Zone #%d (Offset +%d) @ %X",
+    DebugLog("[BotRouteFix] [Module 2] Locked target bombsite to Zone #%d (Offset +%d) @ %X",
         zoneIndex, offset, patchAddr);
 }
 
@@ -477,7 +483,7 @@ static void RestoreBombsiteLockPatch()
         g_PatchBombsiteLock.Restore();
         g_bBombsiteLocked = false;
         g_iLockedZoneIndex = -1;
-        LogMessage("[BotRouteFix] [Module 2] Restored original GetClosestZone call @ %X",
+        DebugLog("[BotRouteFix] [Module 2] Restored original GetClosestZone call @ %X",
             g_PatchBombsiteLock.address);
     }
 }
