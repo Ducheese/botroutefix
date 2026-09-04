@@ -54,16 +54,44 @@ stock int GetBotMorale(int client)
 {
     if (!IsBot(client, false) || g_iOffset_Morale <= 0)
     {
-        return 0;
+        return 1; // 引擎默认开局士气为 +1 (POSITIVE)
     }
 
     Address pBot = GetEntityAddress(client);
     if (pBot == Address_Null)
     {
-        return 0;
+        return 1;
     }
 
     return LoadFromAddress(pBot + view_as<Address>(g_iOffset_Morale), NumberType_Int32);
+}
+
+/**
+ * 获取指定阵营存活 Bot 的平均士气值 (若无存活 Bot 则兜底为默认 +1)
+ *
+ * @param team          阵营索引 (2: T, 3: CT)
+ * @return              平均士气值
+ */
+stock int GetTeamAverageBotMorale(int team)
+{
+    int sum = 0;
+    int count = 0;
+
+    for (int i = 1; i <= MaxClients; i++)
+    {
+        if (IsClientInGame(i) && IsPlayerAlive(i) && GetClientTeam(i) == team && IsFakeClient(i))
+        {
+            sum += GetBotMorale(i);
+            count++;
+        }
+    }
+
+    if (count > 0)
+    {
+        return sum / count;
+    }
+
+    return 1; // 默认 +1 (POSITIVE)
 }
 
 /**

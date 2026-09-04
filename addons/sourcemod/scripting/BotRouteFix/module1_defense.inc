@@ -168,10 +168,23 @@ bool PrepGuardBombsitePatch()
             && LoadFromAddress(targetAddr + view_as<Address>(1), NumberType_Int8) == 0x87
             && LoadFromAddress(targetAddr + view_as<Address>(2), NumberType_Int8) == 0x50)
         {
-            g_PatchGuardBombsite.BackupOriginal();
-            g_PatchGuardBombsite.isPatched = true;
+            g_PatchGuardBombsite.isPatched = false;
             LogMessage("[BotRouteFix] [Module 1] Guard bombsite patch already present @ %X, skipping", targetAddr);
             return true;
+        }
+
+        // 预检验证：严格比对 26 字节完整操作码模板 (跳过漂移的寻址字节)
+        int chkOff64[18] = {0,1,2,3,8,9,10,11,12,13,14,15,16,17,18,19,20,21};
+        int chkVal64[18] = {0x66,0x0F,0x6E,0xB7,0x41,0x0F,0x28,0xC8,0x0F,0x5B,0xF6,0x0F,0x28,0xC7,0xF3,0x0F,0x59,0x35};
+        for (int i = 0; i < 18; i++)
+        {
+            int got = LoadFromAddress(targetAddr + view_as<Address>(chkOff64[i]), NumberType_Int8);
+            if (got != chkVal64[i])
+            {
+                LogError("[BotRouteFix] [Module 1] 64-bit template mismatch at +%d (expected %02X, got %02X), patch aborted!",
+                    chkOff64[i], chkVal64[i], got);
+                return false;
+            }
         }
 
         // 语义锚点验证：原代码中 mulss 常量必须准确为 -34.0f
@@ -208,8 +221,7 @@ bool PrepGuardBombsitePatch()
             && LoadFromAddress(targetAddr + view_as<Address>(10), NumberType_Int8) == 0xC0
             && LoadFromAddress(targetAddr + view_as<Address>(11), NumberType_Int8) == 0xF6)
         {
-            g_PatchGuardBombsite.BackupOriginal();
-            g_PatchGuardBombsite.isPatched = true;
+            g_PatchGuardBombsite.isPatched = false;
             LogMessage("[BotRouteFix] [Module 1] Guard bombsite patch already present @ %X, skipping", targetAddr);
             return true;
         }
@@ -307,8 +319,7 @@ bool PrepDefenseRushPatch()
     if (LoadFromAddress(targetAddr, NumberType_Int8) == 0x90
         && LoadFromAddress(targetAddr + view_as<Address>(1), NumberType_Int8) == 0x90)
     {
-        g_PatchDefenseRush.BackupOriginal();
-        g_PatchDefenseRush.isPatched = true;
+        g_PatchDefenseRush.isPatched = false;
         LogMessage("[BotRouteFix] [Module 1] Anti-Rush NOP patch already present @ %X, skipping", targetAddr);
         return true;
     }

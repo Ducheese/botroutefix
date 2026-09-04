@@ -146,3 +146,19 @@ addons\sourcemod\
   - 单例指针仅在插件载入时解析一次并缓存在 [global.inc](addons/sourcemod/scripting/BotRouteFix/global.inc) 的全局变量（`g_pTheCSBotsPtr`、`g_pTheNavAreasBase`、`g_pTheNavAreasCount`）中，运行时各模块只读消费，性能开销为 0。
   - 经评估，为了保持当前版本测试基准的绝对稳定，避免引入无必要的重构扰动与时序风险，**暂不作代码重构，特在此归档备忘**。未来若需彻底解耦，可建立独立的 `singletons.inc` 基础设施层在 `OnPluginStart` 首步统一解析，并为 Gamedata 分离出纯净的独立定位锚点。
 
+### 核心安全熔断与残留锁启动机制 (Fuse-Protected Stale Lock & Zero-Write Prevention)
+- **背景与崩服隐患**：在模块 2（开局包点锁定）中，若旧版本会话异常退出、崩溃残留，或管理员在带锁状态下热重载插件，目标内存代码段可能已处于被打了补丁的状态。若此时盲目将其判定为已打补丁并允许后续 `Restore()` 执行，因缺失未打补丁时的基线备份，会将未初始化的全零（`0x00`）写回服务端可执行代码段，直接导致非法指令段错误崩溃。
+- **现行熔断方案**：
+  1. `memory.inc` 注入核心熔断：`Restore()` 强制校验 `if (!this.hasBackup)`，无合法基线备份时坚决拒绝写回代码段，输出 `LogError` 告警并安全拦截。
+  2. 模块 2 启动幂等分支置 `isPatched = false; g_bBombsiteLocked = false;`。
+- **运行时行为与代价**：
+  - 在残留锁状态下启动时，本局包点锁定依然可通过裸写机制正常生效，但残局新队员捡包或掉包时，由于无原始基线可写，`Restore()` 会被熔断拦截（输出一条防护日志），本局锁定不会卸掉。
+  - 此行为保证了绝对零崩服，且该状态在换图或重启服务器后自动彻底清除，行为完全安全可接受。
+
+### 掉线自愈与残局热重载说明 (Disconnect & Mid-Round Hot-Reload Parity)
+- **掉线机制**：`OnClientDisconnect` 目前保持空实现。若开局持包者意外掉线，CS:S 引擎原生逻辑会将 C4 强制掉落并触发 `bomb_dropped`，模块 2 藉此无缝完成换人自愈并恢复原生就近选点。
+- **残局热重载状态同步（已显式移除）**：旧版曾在 `OnPluginStart` 中使用 `SyncMidRoundState` 探查当前残局下包与地面 C4 状态。模块化重构时已正式移除该复杂检测。若管理员在下包残局中途热重载插件，新插件实例不会在中途补发守点姿态，将在下一回合 `round_start` 时完全自然自愈。
+
+### 模块启动刚性容错策略 (Fail-Fast Startup Contract)
+- 主插件入口（`botroutefix.sp`）对全部 6 个业务模块的 `InitModule*()` 实施严格的刚性链式返回值检查。
+- 若因 Gamedata 签名失效、偏移未命中或二进制模板不匹配导致任何一个核心模块初始化失败，插件将立即调用 `SetFailState` 终止启动并报错，坚决杜绝“带病运行”导致的隐蔽战术逻辑割裂。

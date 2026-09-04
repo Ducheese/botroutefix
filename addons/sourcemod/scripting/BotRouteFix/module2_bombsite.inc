@@ -23,9 +23,9 @@
 //    - 源码位置: `bot/states/cs_bot_idle.cpp:163-196`
 //    - 机制分析: 当达到运包时钟且包匪不在包点内时，引擎硬编码调用 `TheCSBots()->GetClosestZone()`
 //               获取几何距离最近的包点，导致 100% 的局数 Bot 只冲固定最近包点（如 de_dust2 永远只冲 A）。
-//    - 补丁方案: 将 19 字节的 `GetClosestZone` 虚函数调用替换为直接赋值汇编:
+//    - 补丁方案: 将 GetClosestZone 虚函数调用替换为直接赋值汇编:
 //               - 64 位: `mov rax, <目标Zone指针>` + 9x NOP (共 19 字节)
-//               - 32 位: `mov eax, <目标Zone指针>` + 14x NOP (共 19 字节)
+//               - 32 位: `mov eax, <目标Zone指针>` + 6x NOP (共 11 字节)
 //               在 `round_freeze_end` 随机选取全图可用包点之一并锁定；
 //               ★ 换人自愈机制: 一旦开局包主掉包 (`bomb_dropped`)、包主死亡 (`player_death`)
 //               或新队友捡包 (`item_pickup`)，立即解除内存锁定，无缝恢复原生动态 `GetClosestZone`，
@@ -103,9 +103,11 @@ bool InitModule2_Bombsite()
     bool isAlreadyPatched = (g_bIsWin64 && firstByte == 0x48 && secondByte == 0xB8) || (!g_bIsWin64 && firstByte == 0xB8);
     if (isAlreadyPatched)
     {
-        g_PatchBombsiteLock.isPatched = true;
-        g_bBombsiteLocked = true;
-        LogMessage("[BotRouteFix] [Module 2] Warning: Bombsite lock patch already present @ %X on startup (skipping backup to avoid polluting baseline)", targetAddr);
+        // 核心安全防线：已打分支绝不能标 isPatched=true（因缺失未打补丁时的原始基线备份），
+        // 否则后续 round_start/掉包/死亡/换人/安包/卸载触发 Restore 时会向代码段写回全零导致崩服！
+        g_PatchBombsiteLock.isPatched = false;
+        g_bBombsiteLocked = false;
+        LogMessage("[BotRouteFix] [Module 2] Warning: Bombsite lock patch already present @ %X on startup (skipping backup; restore will be no-op to prevent code corruption)", targetAddr);
         return true;
     }
 
@@ -242,11 +244,15 @@ void Module2_OnRoundFreezeEnd()
 
     g_iOpeningCarrier = carrier;
 
-    // 1. 读取持包者士气（人类玩家默认按中立士气 0 处理）
-    int carrierMorale = 0;
+    // 1. 读取持包者士气（人类玩家采用存活 T 阵营 Bot 平均士气，若无则默认 +1 POSITIVE）
+    int carrierMorale = 1;
     if (IsBot(carrier))
     {
         carrierMorale = GetBotMorale(carrier);
+    }
+    else
+    {
+        carrierMorale = GetTeamAverageBotMorale(2);
     }
 
     // 2. 士气线性映射: 30.0 + 10.0 * Morale (0.0s ~ 60.0s)

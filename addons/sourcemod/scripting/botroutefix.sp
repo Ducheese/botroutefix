@@ -83,13 +83,13 @@ public void OnPluginStart()
     // 4. Initialize reverse engineering infrastructure
     InitSDKCalls();
 
-    // 5. Initialize business modules
-    InitModule1_Defense();
-    InitModule2_Bombsite();
-    InitModule3_Danger();
-    InitModule4_Hunt();
-    InitModule5_Combat();
-    InitModule6_TMorale();
+    // 5. Initialize business modules (fail-fast: abort startup if any module fails)
+    if (!InitModule1_Defense() || !InitModule2_Bombsite() || !InitModule3_Danger()
+        || !InitModule4_Hunt() || !InitModule5_Combat() || !InitModule6_TMorale())
+    {
+        SetFailState("[BotRouteFix] One or more core tactical modules failed to initialize! Aborting plugin startup.");
+        return;
+    }
 
     // 6. Connect ConVar change hook and check initial state
     g_cvEnable.AddChangeHook(OnConVarChange_Enable);

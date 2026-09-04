@@ -188,6 +188,14 @@ void Module6_OnBombDefused()
     g_bBombPlanted = false;
 }
 
+/**
+ * C4 爆炸 (bomb_exploded)
+ */
+void Module6_OnBombExploded()
+{
+    g_bBombPlanted = false;
+}
+
 //========================================================================================
 // DISPOSITION MANAGEMENT PRIMITIVES
 //========================================================================================

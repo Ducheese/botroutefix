@@ -11,7 +11,7 @@
 // 1. AttackState 闪避判定 100% 强制 (cs_bot_attack.cpp:115-130):
 //    - 源码逻辑:
 //        float dodgeChance = 80.0f * profile->GetSkill();
-//        if (profile->GetSkill() > 0.5f && (me->IsSurrounded() || me->IsEnemySniperVisible()))
+//        if (profile->GetSkill() > 0.5f && (me->IsOutnumbered() || me->IsEnemySniperVisible()))
 //            dodgeChance = 100.0f;
 //        if (RandomFloat( 0.0f, 100.0f ) <= dodgeChance)
 //            m_shouldDodge = true;
@@ -42,7 +42,7 @@
 //      去除了"看脸"的概率掷骰，同时完整保留了前置条件（附近有敌、未在掩蔽、5秒内目击敌人）
 //      与寻找掩体有效性检查，确保 Bot 遇敌换弹时必找掩体规避。
 //
-// 3. AttackState 残血强制后撤 (Low Health Forced Retreat via PinnedDown):
+// 3. AttackState 残血强制尝试后撤 (Low Health Forced Attempt Retreat via PinnedDown):
 //    - 源码逻辑 (cs_bot_attack.cpp:334-360):
 //        if (m_retreatTimer.IsElapsed()) {
 //            bool isPinnedDown = (gpGlobals->curtime > m_pinnedDownTimestamp);
@@ -53,13 +53,14 @@
 //                }
 //            }
 //        }
-//    - 机制分析: 原生只有交火 7~10 秒后 (`m_pinnedDownTimestamp`) 或被围攻时才后撤，Bot 残血时
-//               往往无脑继续对枪直至暴毙。
-//    - 解决机制: 在 `AttackState::OnUpdate` 的 Pre 钩子中，检测血量 < 35 HP 时:
+//    - 机制分析: 原生只有交火持续 7~10 秒后 (`m_pinnedDownTimestamp`) 或被围攻时才后撤，Bot 残血时
+//               往往无脑继续对枪直至暴毙。注意：引擎原生撤退段内仍受敌人视线与技能判定门控，
+//               且最终调用 `TryToRetreat()` 依赖掩体可达性。
+//    - 解决机制: 在 `AttackState::OnUpdate` 的 Pre 钩子中，检测血量 < 35 HP 且距上次后撤尝试过 1.5s 冷却时:
 //        * 将 `m_pinnedDownTimestamp` 写为 0.0，使 `isPinnedDown` (curtime > 0.0) 恒真；
 //        * 将 `m_retreatTimer` 冷却清空，使 `IsElapsed()` 立即成立；
-//        下一帧引擎原生撤退段必走 `TryToRetreat()` 找掩体后撤，成功即转入 `HideState`，
-//        同时复用引擎自带的敌人视线与技能判定，杜绝血低死战白给。
+//        强行撕开原版交火时长与退避冷却的硬性封锁，促使下一帧引擎原生撤退段立即执行 `TryToRetreat()` 尝试后撤，
+//        成功即转入 `HideState`，杜绝残血时因计时器死锁而在开阔地白给。
 //========================================================================================
 
 #define HEALTH_RETREAT_THRESHOLD 35
@@ -173,10 +174,26 @@ void EnableModule5_Combat(bool enable)
     if (enable)
     {
         PrepReloadHidePatch();
+        if (g_hAttackDodgeDetour != null)
+        {
+            DHookEnableDetour(g_hAttackDodgeDetour, true, Hook_AttackState_OnEnter_Post);
+        }
+        if (g_hAttackRetreatDetour != null)
+        {
+            DHookEnableDetour(g_hAttackRetreatDetour, false, Hook_AttackState_OnUpdate_Pre);
+        }
     }
     else
     {
         g_PatchReloadHide.Restore();
+        if (g_hAttackDodgeDetour != null)
+        {
+            DHookDisableDetour(g_hAttackDodgeDetour, true, Hook_AttackState_OnEnter_Post);
+        }
+        if (g_hAttackRetreatDetour != null)
+        {
+            DHookDisableDetour(g_hAttackRetreatDetour, false, Hook_AttackState_OnUpdate_Pre);
+        }
         for (int i = 0; i <= MaxClients; i++)
         {
             g_flNextForcedRetreat[i] = 0.0;
@@ -262,19 +279,30 @@ static bool PrepReloadHidePatch()
 
     if (allNop)
     {
-        g_PatchReloadHide.BackupOriginal();
-        g_PatchReloadHide.isPatched = true;
+        g_PatchReloadHide.isPatched = false;
         LogMessage("[BotRouteFix] [Module 5] Reload hide patch already present @ %X, skipping", targetAddr);
         return true;
     }
 
-    // 预检验证：严格比对跳转指令操作码 (32位 0x76 jbe, 64位 0x73 jnb)
+    // 预检验证：严格比对跳转指令及相邻操作码 (32位: 76 <rel> A1, 64位: 73 <rel> 48 8B)
     int firstByte = LoadFromAddress(targetAddr, NumberType_Int8);
-    bool isExpected = g_bIsWin64 ? (firstByte == 0x73) : (firstByte == 0x76);
+    bool isExpected = false;
+    if (g_bIsWin64)
+    {
+        isExpected = (firstByte == 0x73
+            && LoadFromAddress(targetAddr + view_as<Address>(2), NumberType_Int8) == 0x48
+            && LoadFromAddress(targetAddr + view_as<Address>(3), NumberType_Int8) == 0x8B);
+    }
+    else
+    {
+        isExpected = (firstByte == 0x76
+            && LoadFromAddress(targetAddr + view_as<Address>(2), NumberType_Int8) == 0xA1);
+    }
+
     if (!isExpected)
     {
-        LogError("[BotRouteFix] [Module 5] Reload hide template mismatch @ %X (expected %02X, got %02X), patch aborted!",
-            targetAddr, g_bIsWin64 ? 0x73 : 0x76, firstByte);
+        LogError("[BotRouteFix] [Module 5] Reload hide template mismatch @ %X (expected %s, got %02X), patch aborted!",
+            targetAddr, g_bIsWin64 ? "73 .. 48 8B" : "76 .. A1", firstByte);
         return false;
     }
 

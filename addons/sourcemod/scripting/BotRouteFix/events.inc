@@ -21,6 +21,7 @@ void InitEvents()
     HookEvent("bomb_dropped", Event_BombDropped, EventHookMode_PostNoCopy);
     HookEvent("bomb_planted", Event_BombPlanted, EventHookMode_PostNoCopy);
     HookEvent("bomb_defused", Event_BombDefused, EventHookMode_PostNoCopy);
+    HookEvent("bomb_exploded", Event_BombExploded, EventHookMode_PostNoCopy);
 }
 
 /**
@@ -35,6 +36,7 @@ void CleanupEvents()
     UnhookEvent("bomb_dropped", Event_BombDropped, EventHookMode_PostNoCopy);
     UnhookEvent("bomb_planted", Event_BombPlanted, EventHookMode_PostNoCopy);
     UnhookEvent("bomb_defused", Event_BombDefused, EventHookMode_PostNoCopy);
+    UnhookEvent("bomb_exploded", Event_BombExploded, EventHookMode_PostNoCopy);
 }
 
 //========================================================================================
@@ -130,4 +132,14 @@ public void Event_BombDefused(Event event, const char[] name, bool dontBroadcast
     }
 
     Module6_OnBombDefused();
+}
+
+public void Event_BombExploded(Event event, const char[] name, bool dontBroadcast)
+{
+    if (g_cvEnable != null && !g_cvEnable.BoolValue)
+    {
+        return;
+    }
+
+    Module6_OnBombExploded();
 }

@@ -111,6 +111,15 @@ enum struct MemoryPatch
             return false;
         }
 
+        // 核心安全熔断：若未锁定原始基线，绝对禁止向代码段写回零字节，防止服务器崩溃
+        if (!this.hasBackup)
+        {
+            LogError("[BotRouteFix] [MemoryPatch] Refusing to restore '%s' @ %X: no valid baseline backup present!",
+                this.name, this.address);
+            this.isPatched = false;
+            return false;
+        }
+
         for (int i = 0; i < this.size; i++)
         {
             StoreToAddress(this.address + view_as<Address>(i), this.originalBytes[i], NumberType_Int8, true);

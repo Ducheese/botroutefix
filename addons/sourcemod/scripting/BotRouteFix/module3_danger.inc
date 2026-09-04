@@ -311,7 +311,7 @@ static bool ResolveTheNavAreas()
         }
 
         int baseAddr = LoadFromAddress(pairAddr + view_as<Address>(2), NumberType_Int32);
-        if (baseAddr < 0x10000000 || baseAddr >= 0x40000000)
+        if (baseAddr < 0x10000000 || baseAddr >= 0x20000000)
         {
             LogError("[BotRouteFix] [Module 3] Nav-array base address out of range (%X)!", baseAddr);
             return false;

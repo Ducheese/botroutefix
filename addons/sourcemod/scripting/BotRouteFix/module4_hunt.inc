@@ -87,11 +87,10 @@ bool InitModule4_Hunt()
         return false;
     }
 
-    // 2. 准备并应用随机覆盖 NOP 补丁 (恢复 oldest-scan 权威)
+    // 2. 准备并应用随机覆盖 NOP 补丁 (恢复 oldest-scan 权威，失败则降级为 flush-only 模式，不杀 Detour)
     if (!PrepHuntRandomBypassPatch())
     {
-        LogError("[BotRouteFix] [Module 4] Failed to inject HuntState random-override bypass patch!");
-        return false;
+        LogMessage("[BotRouteFix] [Module 4] Warning: Random bypass patch skipped (running in flush-only mode).");
     }
 
     // 3. 准备并挂载 HuntState::OnUpdate Pre/Post Detour
@@ -195,8 +194,7 @@ static bool PrepHuntRandomBypassPatch()
 
     if (allNop)
     {
-        g_PatchHuntRandomBypass.BackupOriginal();
-        g_PatchHuntRandomBypass.isPatched = true;
+        g_PatchHuntRandomBypass.isPatched = false;
         LogMessage("[BotRouteFix] [Module 4] Random bypass patch already present @ %X, skipping", targetAddr);
         return true;
     }
@@ -219,7 +217,7 @@ static bool PrepHuntRandomBypassPatch()
 
     if (!isExpected)
     {
-        LogError("[BotRouteFix] [Module 4] Random bypass template mismatch @ %X, patch aborted!", targetAddr);
+        LogMessage("[BotRouteFix] [Module 4] Warning: Random bypass template mismatch @ %X, bypass skipped (flush-only mode)!", targetAddr);
         return false;
     }
 
