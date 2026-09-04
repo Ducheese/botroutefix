@@ -28,16 +28,68 @@ void PrepDangerReset()
 		}
 		else
 		{
-			// 32-bit: mov ebx, dword_105E83A4 @ sigAddr + 4
-			g_pTheNavAreasCount = LoadAddressFromAddress(sigAddr + view_as<Address>(6));
-			if (g_pTheNavAreasCount != Address_Null)
+			// 32-bit: derive TheNavAreas from HuntState::OnUpdate's random-pick pair:
+			//   mov ecx,[Base] / mov ecx,[ecx+edx*4]   (8B 0D <Base> 8B 0C 91)
+			// verified DLL-unique on v91 (Base 0x1058FB40) and v92 (Base 0x10591CB8).
+			// Count = Base + 12 (CUtlVector m_Size; m_pMemory @ +0 holds the array).
+			Address huntAddr = GameConfGetAddress(gc, "HuntState_NavArrayAnchor");
+			if (huntAddr == Address_Null)
 			{
-				g_pTheNavAreasBase = g_pTheNavAreasCount - view_as<Address>(12);
+				delete gc;
+				SetFailState("[BotRouteFix] Failed to locate signature for HuntState_NavArrayAnchor!");
+				return;
 			}
+
+			Address pairAddr = Address_Null;
+			for (int off = 0; off < 0x700; off++)
+			{
+				if (LoadFromAddress(huntAddr + view_as<Address>(off), NumberType_Int8) == 0x8B
+					&& LoadFromAddress(huntAddr + view_as<Address>(off + 1), NumberType_Int8) == 0x0D
+					&& LoadFromAddress(huntAddr + view_as<Address>(off + 6), NumberType_Int8) == 0x8B
+					&& LoadFromAddress(huntAddr + view_as<Address>(off + 7), NumberType_Int8) == 0x0C
+					&& LoadFromAddress(huntAddr + view_as<Address>(off + 8), NumberType_Int8) == 0x91)
+				{
+					pairAddr = huntAddr + view_as<Address>(off);
+					break;
+				}
+			}
+
+			if (pairAddr == Address_Null)
+			{
+				delete gc;
+				SetFailState("[BotRouteFix] [Module 3] Nav-array pair pattern not found in HuntState::OnUpdate, patch aborted!");
+				return;
+			}
+
+			int baseAddr = LoadFromAddress(pairAddr + view_as<Address>(2), NumberType_Int32);
+			if (baseAddr < 0x10000000 || baseAddr >= 0x20000000)
+			{
+				delete gc;
+				SetFailState("[BotRouteFix] [Module 3] Nav-array base out of range (%X), patch aborted!", baseAddr);
+				return;
+			}
+
+			g_pTheNavAreasBase = view_as<Address>(baseAddr);
+			g_pTheNavAreasCount = view_as<Address>(baseAddr + 12);
+
+			int areaCount = LoadFromAddress(g_pTheNavAreasCount, NumberType_Int32);
+			if (areaCount < 0 || areaCount > 100000)
+			{
+				delete gc;
+				SetFailState("[BotRouteFix] [Module 3] Nav-area count insane (%d), patch aborted!", areaCount);
+				return;
+			}
+
+			LogMessage("[BotRouteFix] [Module 3] Resolved TheNavAreas 32-bit anchor (Base: @%X, Count: @%X, areas: %d)",
+				g_pTheNavAreasBase, g_pTheNavAreasCount, areaCount);
 		}
 
-		LogMessage("[BotRouteFix] [Module 3] Resolved TheNavAreas (Count: @%X, Base: @%X)",
-			g_pTheNavAreasCount, g_pTheNavAreasBase);
+		if (g_bIsWin64)
+		{
+			LogMessage("[BotRouteFix] [Module 3] Resolved TheNavAreas (Count: @%X, Base: @%X)",
+				g_pTheNavAreasCount, g_pTheNavAreasBase);
+		}
+		// 32-bit branch logs its own resolved line (or FailStates above).
 	}
 	else
 	{

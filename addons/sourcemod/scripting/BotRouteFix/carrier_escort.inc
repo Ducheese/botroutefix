@@ -38,7 +38,7 @@ void PrepFollowSDKCalls()
 	delete gc;
 }
 
-void AssignCarrierBodyguards()
+void AssignCarrierBodyguards(bool bUpdatePlantTimestamp = true)
 {
 	int carrier = GetC4Carrier();
 	if (carrier <= 0 || !IsPlayerAlive(carrier))
@@ -125,8 +125,10 @@ void AssignCarrierBodyguards()
 	if (plantDelay < 0.0) plantDelay = 0.0;
 	if (plantDelay > 60.0) plantDelay = 60.0;
 
-	// 4. Dynamically update TheCSBots()->m_earliestBombPlantTimestamp in engine memory
-	if (g_pTheCSBotsPtr != Address_Null && g_iOffset_EarliestBombPlant > 0)
+	// 4. Dynamically update TheCSBots()->m_earliestBombPlantTimestamp in engine memory.
+	//    Only the round-opening assignment owns the clock (Module 2 morale delay).
+	//    Mid-round pickup / death replenish inherits the existing timestamp (no second wait).
+	if (bUpdatePlantTimestamp && g_pTheCSBotsPtr != Address_Null && g_iOffset_EarliestBombPlant > 0)
 	{
 		Address pTheCSBots = LoadAddressFromAddress(g_pTheCSBotsPtr);
 		if (pTheCSBots != Address_Null)
@@ -167,8 +169,8 @@ void AssignCarrierBodyguards()
 	sign[0] = (carrierMorale > 0) ? '+' : '\0';
 	sign[1] = '\0';
 
-	LogMessage("[BotRouteFix] [Module 5] Assigned %d/%d bodyguard(s) to C4 carrier %N (Morale: %s%d, Plant Delay: %.1fs)",
-		assignedCount, bodyguardsToAssign, carrier, sign, carrierMorale, plantDelay);
+	LogMessage("[BotRouteFix] [Module 5] Assigned %d/%d bodyguard(s) to C4 carrier %N (Morale: %s%d, Plant Delay: %.1fs%s)",
+		assignedCount, bodyguardsToAssign, carrier, sign, carrierMorale, plantDelay, bUpdatePlantTimestamp ? "" : " (inherited)");
 }
 
 int GetC4Carrier()

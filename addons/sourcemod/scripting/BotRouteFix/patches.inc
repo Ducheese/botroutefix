@@ -81,7 +81,19 @@ void PrepGuardBombsitePatch()
 	}
 	else
 	{
-		// 32-bit non-Steam: Rewrite the 26-byte float math sequence at sigAddr + offset in-place
+		// 32-bit non-Steam: 55-byte in-place x87 rewrite. The site is NOT a plain
+		// float sequence but FPU arg-slot code (56 bytes @ sigAddr + 19):
+		//   fld [100.0] / sub esp,8 / mov eax,[edi+morale] / mov [ebp+t],eax
+		//   fstp [esp+4] / fldz / fstp [esp] / call RandomFloat
+		//   fild [ebp+t] / add esp,8 / fmul [-34.0] / fcomip / fstp st / jbe skip
+		// i.e. guard iff RandomFloat(0,100) < -34.0*morale. The rewrite keeps the
+		// call, the compare shape and the FPU contract (stack empty at the jump)
+		// and swaps the chance math to 70-10*morale, flipping jbe->jae (same len):
+		//   sub esp,8 / mov eax,[edi+morale] / imul eax,-10 / add eax,70
+		//   mov [esp],eax / fild [esp] / fldz / fstp [esp] / fld [100.0]
+		//   fstp [esp+4] / call RandomFloat / add esp,8 / fcomip / fstp st / jae skip
+		// All absolute addresses are extracted from the original bytes, so v91/v92
+		// share this code path with zero version forks.
 		int patchOffset = GameConfGetOffset(gc, "GuardBombsite_PatchOffset");
 		if (patchOffset == -1)
 		{
@@ -91,62 +103,91 @@ void PrepGuardBombsitePatch()
 		}
 
 		g_pGuardBombsitePatchAddress = sigAddr + view_as<Address>(patchOffset);
-		g_iGuardBombsitePatchSize = 26;
+		g_iGuardBombsitePatchSize = 55;
 
-		int firstByte = LoadFromAddress(g_pGuardBombsitePatchAddress, NumberType_Int8);
-		int secondByte = LoadFromAddress(g_pGuardBombsitePatchAddress + view_as<Address>(1), NumberType_Int8);
+		Address base = g_pGuardBombsitePatchAddress;
 
-		// Check if already patched (0x83 0xEC = sub esp, 8)
-		if (firstByte == 0x83 && secondByte == 0xEC)
+		// Already patched? (0x6B 0xC0 0xF6 = imul eax, -10 at +9)
+		if (LoadFromAddress(base + view_as<Address>(9), NumberType_Int8) == 0x6B
+			&& LoadFromAddress(base + view_as<Address>(10), NumberType_Int8) == 0xC0
+			&& LoadFromAddress(base + view_as<Address>(11), NumberType_Int8) == 0xF6)
 		{
-			LogMessage("[BotRouteFix] [Patch 1] Already patched (Morale math present @ %X), skipping", g_pGuardBombsitePatchAddress);
+			LogMessage("[BotRouteFix] [Patch 1] Already patched (70-10*Morale present @ %X), skipping", base);
 			g_bGuardBombsitePatched = false;
 			delete gc;
 			return;
 		}
 
-		// Verify expected original opcode (0xD9 0x05 = fld dword ptr [-34.0f])
-		if (firstByte != 0xD9 || secondByte != 0x05)
+		// Preflight: verify the original 56-byte template opcodes before touching anything
+		int chkOff[33] = {0,1,6,7,8,9,10,15,16,18,19,20,21,22,23,24,25,26,27,28,33,34,36,37,38,39,40,45,46,47,48,49,50};
+		int chkVal[33] = {0xD9,0x05,0x83,0xEC,0x08,0x8B,0x87,0x89,0x45,0xD9,0x5C,0x24,0x04,0xD9,0xEE,0xD9,0x1C,0x24,0xFF,0x15,0xDB,0x45,0x83,0xC4,0x08,0xD8,0x0D,0xDF,0xF1,0xDD,0xD8,0x0F,0x86};
+		for (int i = 0; i < 33; i++)
+		{
+			int got = LoadFromAddress(base + view_as<Address>(chkOff[i]), NumberType_Int8);
+			if (got != chkVal[i])
+			{
+				delete gc;
+				SetFailState("[BotRouteFix] [Patch 1] Template mismatch at +%d (expected %02X, got %02X), patch aborted!",
+					chkOff[i], chkVal[i], got);
+				return;
+			}
+		}
+
+		// Extract version-specific addresses + jump displacement from the template
+		int addr100 = LoadFromAddress(base + view_as<Address>(2), NumberType_Int32);
+		int moraleOff = LoadFromAddress(base + view_as<Address>(11), NumberType_Int32);
+		int rfAddr = LoadFromAddress(base + view_as<Address>(29), NumberType_Int32);
+		int kAddr = LoadFromAddress(base + view_as<Address>(41), NumberType_Int32);
+		int jbeRel = LoadFromAddress(base + view_as<Address>(51), NumberType_Int32);
+
+		// Semantic anchors: the two float constants must read exactly 100.0 / -34.0
+		if (view_as<float>(LoadFromAddress(view_as<Address>(addr100), NumberType_Int32)) != 100.0
+			|| view_as<float>(LoadFromAddress(view_as<Address>(kAddr), NumberType_Int32)) != -34.0)
 		{
 			delete gc;
-			SetFailState("[BotRouteFix] [Patch 1] Byte mismatch at %X (expected D9 05, got %02X %02X), patch aborted!",
-				g_pGuardBombsitePatchAddress, firstByte, secondByte);
+			SetFailState("[BotRouteFix] [Patch 1] Constant mismatch (expected 100.0/-34.0), patch aborted!");
 			return;
 		}
 
-		// Backup original 26 bytes
-		for (int i = 0; i < 26; i++)
+		// Backup original 55 bytes (restore path is size-driven, see RestoreGuardBombsitePatch)
+		for (int i = 0; i < 55; i++)
 		{
-			g_iOriginalGuardBombsiteBytes[i] = LoadFromAddress(g_pGuardBombsitePatchAddress + view_as<Address>(i), NumberType_Int8);
+			g_iOriginalGuardBombsiteBytes[i] = LoadFromAddress(base + view_as<Address>(i), NumberType_Int8);
 		}
 
-		// Machine code: 70.0 - 10.0 * Morale (26 bytes exact alignment)
-		// 83 EC 08                sub     esp, 8               ; (3B)
-		// 8B 87 08 1A 00 00       mov     eax, [edi+1A08h]     ; (6B) eax = m_morale
-		// 6B C0 F6                imul    eax, -10             ; (3B) eax = morale * -10
-		// 83 C0 46                add     eax, 70              ; (3B) eax = 70 - 10 * morale
-		// 89 04 24                mov     [esp], eax           ; (3B)
-		// DB 04 24                fild    dword ptr [esp]      ; (3B) st(0) = float(chance)
-		// D9 1C 24                fstp    dword ptr [esp]      ; (3B) store float chance at [esp]
-		// 90 90                   nop     nop                  ; (2B)
-		int patchBytes32[26] = {
-			0x83, 0xEC, 0x08,
-			0x8B, 0x87, 0x08, 0x1A, 0x00, 0x00,
-			0x6B, 0xC0, 0xF6,
-			0x83, 0xC0, 0x46,
-			0x89, 0x04, 0x24,
-			0xDB, 0x04, 0x24,
-			0xD9, 0x1C, 0x24,
-			0x90, 0x90
+		// Machine code: 70 - 10 * Morale, chance kept on the FPU across the call
+		int patchBytes32[55] = {
+			0x83, 0xEC, 0x08,                   // +0  sub esp,8
+			0x8B, 0x87, 0, 0, 0, 0,             // +3  mov eax,[edi+morale] (dword spliced below)
+			0x6B, 0xC0, 0xF6,                   // +9  imul eax,-10
+			0x83, 0xC0, 0x46,                   // +12 add eax,70
+			0x89, 0x04, 0x24,                   // +15 mov [esp],eax
+			0xDB, 0x04, 0x24,                   // +18 fild dword [esp] (st = chance)
+			0xD9, 0xEE,                         // +21 fldz
+			0xD9, 0x1C, 0x24,                   // +23 fstp dword [esp] ([esp] = 0.0)
+			0xD9, 0x05, 0, 0, 0, 0,             // +26 fld [100.0] (dword spliced below)
+			0xD9, 0x5C, 0x24, 0x04,             // +32 fstp dword [esp+4] ([esp+4] = 100.0)
+			0xFF, 0x15, 0, 0, 0, 0,             // +36 call [RandomFloat] (dword spliced below)
+			0x83, 0xC4, 0x08,                   // +42 add esp,8
+			0xDF, 0xF1,                         // +45 fcomip st,st(1) (R vs chance)
+			0xDD, 0xD8,                         // +47 fstp st
+			0x0F, 0x83, 0, 0, 0, 0              // +49 jae skip (rel spliced below)
 		};
-
-		for (int i = 0; i < 26; i++)
+		for (int b = 0; b < 4; b++)
 		{
-			StoreToAddress(g_pGuardBombsitePatchAddress + view_as<Address>(i), patchBytes32[i], NumberType_Int8, true);
+			patchBytes32[5 + b] = (moraleOff >> (b * 8)) & 0xFF;
+			patchBytes32[28 + b] = (addr100 >> (b * 8)) & 0xFF;
+			patchBytes32[38 + b] = (rfAddr >> (b * 8)) & 0xFF;
+			patchBytes32[51 + b] = (jbeRel >> (b * 8)) & 0xFF;
+		}
+
+		for (int i = 0; i < 55; i++)
+		{
+			StoreToAddress(base + view_as<Address>(i), patchBytes32[i], NumberType_Int8, true);
 		}
 
 		g_bGuardBombsitePatched = true;
-		LogMessage("[BotRouteFix] [Patch 1] Rewrote guardBombsite formula in-place (70 - 10 * Morale) @ %X (32-bit)", g_pGuardBombsitePatchAddress);
+		LogMessage("[BotRouteFix] [Patch 1] Rewrote guardBombsite formula in-place (70 - 10 * Morale) @ %X (32-bit, 55B x87 rewrite)", base);
 	}
 
 	delete gc;
@@ -315,7 +356,14 @@ void PrepBombsiteLockPatch()
 	// Check if already patched (0x48 0xB8 on x64, 0xB8 on x86)
 	if ((g_bIsWin64 && firstByte == 0x48 && secondByte == 0xB8) || (!g_bIsWin64 && firstByte == 0xB8))
 	{
-		LogMessage("[BotRouteFix] [Patch 4] Already patched @ %X, skipping initialization", g_pBombsiteLockPatchAddress);
+		// Harden: adopt the live bytes as the restore baseline. A previous session may have
+		// ended with the lock applied (no restore ran); without this, a later Restore would
+		// write back 19 zero bytes over live code.
+		for (int i = 0; i < 19; i++)
+		{
+			g_iOriginalBombsiteLockBytes[i] = LoadFromAddress(g_pBombsiteLockPatchAddress + view_as<Address>(i), NumberType_Int8);
+		}
+		LogMessage("[BotRouteFix] [Patch 4] Already patched @ %X, adopted live bytes as restore baseline", g_pBombsiteLockPatchAddress);
 		delete gc;
 		return;
 	}

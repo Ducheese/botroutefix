@@ -76,6 +76,7 @@
 #include "BotRouteFix/dodge_fix.inc"
 #include "BotRouteFix/health_retreat.inc"
 #include "BotRouteFix/events.inc"
+#include "BotRouteFix/t_morale_tactics.inc"
 
 //========================================================================================
 // PLUGIN INFO
@@ -112,6 +113,7 @@ public void OnPluginStart()
 	PrepNoticeLooseBombHook();
 	PrepAttackDodgeHook();
 	PrepAttackRetreatHook();
+	PrepInvestigateNoiseHook();
 
 	// =========================================================================
 	// [阶段 3] 二进制内存补丁准备与注入 (Binary Memory Patches)
@@ -158,6 +160,7 @@ public void OnPluginEnd()
 	RestoreNoticeLooseBombHook();
 	RestoreAttackDodgeHook();
 	RestoreAttackRetreatHook();
+	RestoreInvestigateNoiseHook();
 }
 
 //========================================================================================
@@ -176,6 +179,7 @@ void SyncMidRoundState()
 		GetEntPropVector(plantedBomb, Prop_Data, "m_vecAbsOrigin", g_fBombPlantedPos);
 		UpdateDesignatedDefuser();
 		StartDefuseCoordTimer();
+		ApplyPlantedBombTMoraleDisposition();
 
 		LogMessage("[BotRouteFix] [Hot-Reload] (State 1/3) Active Planted C4 synchronized at (%.1f, %.1f, %.1f)",
 			g_fBombPlantedPos[0], g_fBombPlantedPos[1], g_fBombPlantedPos[2]);
@@ -201,8 +205,9 @@ void SyncMidRoundState()
 	int carrier = GetC4Carrier();
 	if (carrier > 0 && IsPlayerAlive(carrier))
 	{
-		// 处于运包推进阶段：立即补发最近 2 名保镖随行护送
-		AssignCarrierBodyguards();
+		// 处于运包推进阶段：立即补发最近 2 名保镖随行护送（不碰运包时钟，沿用开局值）
+		AssignCarrierBodyguards(false);
+		ApplyCarrierMoraleDisposition();
 		LogMessage("[BotRouteFix] [Hot-Reload] (State 3/3) Active Carrier %N synchronized (Bodyguards assigned)", carrier);
 	}
 }

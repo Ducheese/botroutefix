@@ -32,7 +32,7 @@ bool g_bIsWin64 = false;
 // ---------------------------------------------------------------------------------------
 // Patch 1: CT 守包点士气公式原地修复 (guardBombsiteChance 汇编重写为 70 - 10 * Morale)
 Address g_pGuardBombsitePatchAddress;
-int g_iOriginalGuardBombsiteBytes[26];
+int g_iOriginalGuardBombsiteBytes[56];
 int g_iGuardBombsitePatchSize = 0;
 bool g_bGuardBombsitePatched = false;
 
@@ -40,11 +40,6 @@ bool g_bGuardBombsitePatched = false;
 Address g_pAntiRushPatchAddress;
 int g_iOriginalAntiRushBytes[6];
 bool g_bAntiRushPatched = false;
-
-// Patch 3: T C4 即刻运包 (IsTimeToPlantBomb 延迟移除)
-Address g_pInstantPlantPatchAddress;
-int g_iOriginalInstantPlantBytes[6];
-bool g_bInstantPlantPatched = false;
 
 // Patch 4: T 目标包点锁定与防折返跑 (GetClosestZone 汇编即时数注入)
 Address g_pBombsiteLockPatchAddress;
@@ -144,6 +139,14 @@ Handle g_hAttackRetreatDetour = INVALID_HANDLE;
 int g_iOffset_PinnedDownTimestamp = 0;
 int g_iOffset_MRetreatTimer = 0;
 
+// ---------------------------------------------------------------------------------------
+// [模块 12：T阵营士气战术姿态与守包听觉梯度 (T Morale Tactical Disposition & Audio Gradient)]
+// ---------------------------------------------------------------------------------------
+Handle g_hInvestigateNoiseDetour = INVALID_HANDLE;
+int g_iOffset_Disposition = 0;
+int g_iOffset_NoisePosition = 0;
+int g_iOffset_NoiseTimestamp = 0;
+
 //========================================================================================
 // CONFIGURATION & OFFSETS LOADER
 //========================================================================================
@@ -190,6 +193,10 @@ void PrepOffsets()
 	g_iOffset_PinnedDownTimestamp = GameConfGetOffset(gc, "AttackState_PinnedDownTimestamp_Offset");
 	g_iOffset_MRetreatTimer = GameConfGetOffset(gc, "AttackState_MRetreatTimer_Offset");
 
+	g_iOffset_Disposition = GameConfGetOffset(gc, "CCSBot_Disposition_Offset");
+	g_iOffset_NoisePosition = GameConfGetOffset(gc, "CCSBot_NoisePosition_Offset");
+	g_iOffset_NoiseTimestamp = GameConfGetOffset(gc, "CCSBot_NoiseTimestamp_Offset");
+
 	if (g_iOffset_ZoneCount == -1 || g_iOffset_ZoneBase == -1 || g_iZoneStride == -1 ||
 		g_iOffset_Danger == -1 || g_iOffset_DangerTimestamp == -1 || g_iPtrSize == -1 ||
 		g_iOffset_Path == -1 || g_iPathStride == -1 || g_iOffset_PathLength == -1 ||
@@ -198,7 +205,8 @@ void PrepOffsets()
 		g_iOffset_IsStopping == -1 || g_iOffset_PathLadder == -1 || g_iOffset_ConnectInfoPos == -1 ||
 		g_iOffset_Task == -1 || g_iOffset_Morale == -1 || g_iOffset_EarliestBombPlant == -1 ||
 		g_iOffset_HuntArea == -1 || g_iOffset_ClearedTimestamp == -1 ||
-		g_iOffset_AttackShouldDodge == -1 || g_iOffset_PinnedDownTimestamp == -1 || g_iOffset_MRetreatTimer == -1)
+		g_iOffset_AttackShouldDodge == -1 || g_iOffset_PinnedDownTimestamp == -1 || g_iOffset_MRetreatTimer == -1 ||
+		g_iOffset_Disposition == -1 || g_iOffset_NoisePosition == -1 || g_iOffset_NoiseTimestamp == -1)
 	{
 		delete gc;
 		SetFailState("[BotRouteFix] Failed to read one or more offsets from gamedata!");

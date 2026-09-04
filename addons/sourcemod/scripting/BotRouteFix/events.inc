@@ -32,6 +32,7 @@ public void Event_RoundStart(Event event, const char[] name, bool dontBroadcast)
 public void Event_RoundFreezeEnd(Event event, const char[] name, bool dontBroadcast)
 {
 	AssignCarrierBodyguards();
+	ApplyCarrierMoraleDisposition();
 	DumpRoundDangerStats();
 	DumpRoundMoraleStats();
 }
@@ -132,7 +133,9 @@ public void Event_ItemPickup(Event event, const char[] name, bool dontBroadcast)
 
 public void Frame_AssignCarrierBodyguards(any data)
 {
-	AssignCarrierBodyguards();
+	// Mid-round pickup: re-escort under the new carrier but inherit the plant clock (Module 2)
+	AssignCarrierBodyguards(false);
+	ApplyCarrierMoraleDisposition();
 }
 
 public void Event_BombDropped(Event event, const char[] name, bool dontBroadcast)
@@ -168,6 +171,7 @@ public void Event_BombPlanted(Event event, const char[] name, bool dontBroadcast
 
 	UpdateDesignatedDefuser();
 	StartDefuseCoordTimer();
+	ApplyPlantedBombTMoraleDisposition();
 }
 
 public void Event_BombEnded(Event event, const char[] name, bool dontBroadcast)
