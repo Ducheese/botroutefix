@@ -83,6 +83,12 @@ Handle g_hHuntStateDetour = INVALID_HANDLE;
 int g_iOffset_HuntArea = 0;
 int g_iOffset_ClearedTimestamp = 0;
 
+// PATCH 6: HuntState random-override bypass (restore oldest-scan)
+Address g_pHuntBypassPatchAddress;
+int g_iOriginalHuntBypassBytes[4];
+int g_iHuntBypassPatchSize = 0;
+bool g_bHuntBypassPatched = false;
+
 // ---------------------------------------------------------------------------------------
 // [全局公共基础设施：NavMesh A* 寻路与路径节点解析 (Shared Pathfinding Infrastructure)]
 // 供模块 4 (防卡门)、模块 5 (保镖)、模块 7 (捡包)、模块 8 (拆包) 共享基础寻路

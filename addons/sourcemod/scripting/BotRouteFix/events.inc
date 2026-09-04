@@ -25,12 +25,12 @@ public void Event_RoundStart(Event event, const char[] name, bool dontBroadcast)
 	g_iDesignatedDefuser = 0;
 	StopDefuseCoordTimer();
 	ResetAllNavAreaDanger();
-	SelectRandomBombsite();
 	ResetLooseBombCache();
 }
 
 public void Event_RoundFreezeEnd(Event event, const char[] name, bool dontBroadcast)
 {
+	SelectRandomBombsite();
 	AssignCarrierBodyguards();
 	ApplyCarrierMoraleDisposition();
 	DumpRoundDangerStats();

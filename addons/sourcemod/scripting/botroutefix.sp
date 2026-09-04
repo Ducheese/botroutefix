@@ -28,8 +28,8 @@
 //
 // [模块 6：搜敌目标即时抢占与 45 秒冲锋破除 (Hunt Target Claim & 45s Rush Bypass)]
 //   8. 解决官方 HuntState 开局 45 秒强塞敌方老家以及多人同时选中同一个偏远小角落产生“全图排队跑图”缺陷。
-//      Pre 阶段置 m_hasVisitedEnemySpawn = true 破除 45 秒老家锁定，Post 阶段 Bot 选定搜敌目标瞬间立即刷新其 m_clearedTimestamp 为当前时间，
-//      驱使全队兵力从第 0 秒开始 100% 互不重复地进行立体网状多路排查。
+//      Pre 阶段置 m_hasVisitedEnemySpawn = true 破除 45 秒老家锁定；Post 盖 clearedTimestamp 认领；
+//      Patch 6 NOP 掉随机覆盖的 m_huntArea 写回，恢复引擎 oldest 扫描——刚认领恒被跳过，全队天然互斥。
 //
 // [模块 7：C4 掉落 Top 3 真实寻路距离捡包与团队火力掩护 (Loose Bomb Top 3 Retriever & Tactical Cover)]
 //   9. 解决官方 NoticeLooseBomb 只要有掉落 C4 便对全队所有 T 恒为 true 导致的“全员哄抢送死”缺陷。
@@ -124,6 +124,7 @@ public void OnPluginStart()
 	PrepBombsiteLockPatch();
 	PrepDangerReset();
 	PrepReloadHidePatch();
+	PrepHuntRandomBypassPatch();
 
 	// =========================================================================
 	// [阶段 4] 运行时状态初始化与定时器 (Runtime State & Active Timers)
@@ -155,6 +156,7 @@ public void OnPluginEnd()
 	RestoreInstantPlantPatch();
 	RestoreBombsiteLockPatch();
 	RestoreReloadHidePatch();
+	RestoreHuntRandomBypassPatch();
 
 	RestoreHuntStateHook();
 	RestoreNoticeLooseBombHook();

@@ -107,6 +107,10 @@
 			{
 				"signature"	"HuntState_OnUpdate"
 			}
+			"HuntState_RandomBypass"
+			{
+				"signature"	"HuntState_OnUpdate"
+			}
 			"IdleState_PlantBombClosestZone"
 			{
 				"signature"	"IdleState_PlantBombClosestZone"
@@ -132,6 +136,11 @@
 			{
 				"windows"	"22"
 				"windows64"	"54"
+			}
+			"HuntState_RandomBypass_PatchOffset"
+			{
+				"windows"	"1241"
+				"windows64"	"1549"
 			}
 			"CCSBot_Path_Offset"
 			{

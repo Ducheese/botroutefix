@@ -88,7 +88,9 @@ public MRESReturn Hook_HuntState_OnUpdate_Post(Address pThis, DHookParam hParams
 	if (team != 2 && team != 3) // 2=T, 3=CT
 		return MRES_Ignored;
 
-	int teamIdx = team - 2; // T=0, CT=1 (CS:S internal MAX_NAV_TEAMS index)
+	// Engine convention: (GetTeamNumber()-1) % 2 -> T=1, CT=0.
+	// (The reader uses the same slot; a swapped slot makes claims invisible.)
+	int teamIdx = (team - 1) % 2;
 
 	// Read m_huntArea from HuntState instance (+4 on 32-bit, +8 on 64-bit)
 	Address pArea = LoadAddressFromAddress(pThis + view_as<Address>(g_iOffset_HuntArea));

@@ -647,3 +647,116 @@ void RestoreReloadHidePatch()
 		g_bReloadHidePatched = false;
 	}
 }
+
+//========================================================================================
+// PATCH 6: HUNT RANDOM-OVERRIDE BYPASS (restore the engine's oldest-scan)
+//
+// HuntState::OnUpdate scans for the oldest-cleared area, then UNCONDITIONALLY
+// overwrites it with a uniform-random pick (missing NULL guard). Our Post
+// flush stamps claims, but with the reader dead the stamps do nothing.
+// This patch NOPs the random loop's m_huntArea store only (the loop still
+// iterates+breaks, RandomInt still runs, RNG stream unchanged):
+//   32-bit (v91+v92, byte-identical): 89 4B 04 (mov [ebx+4],ecx) -> 3x NOP
+//   64-bit: 49 89 56 08 (mov [r14+8],rdx) -> 4x NOP
+// Effect: the oldest-scan result stands; claim stamps become live mutual
+// exclusion (freshly stamped age 0 never wins the strict-> scan; ties go to
+// vector order; release is automatic when a bot stops stamping).
+// Enhancement-grade: any mismatch -> warning + skip (Pre+flush continue).
+//========================================================================================
+
+void PrepHuntRandomBypassPatch()
+{
+	Handle gc = LoadGameConfigFile(GAMEDATA);
+	if (gc == null)
+		return;
+
+	Address sigAddr = GameConfGetAddress(gc, "HuntState_RandomBypass");
+	if (sigAddr == Address_Null)
+	{
+		LogMessage("[BotRouteFix] [Patch 6] Warning: Failed to locate HuntState signature, bypass skipped!");
+		delete gc;
+		return;
+	}
+
+	int patchOffset = GameConfGetOffset(gc, "HuntState_RandomBypass_PatchOffset");
+	if (patchOffset == -1)
+	{
+		LogMessage("[BotRouteFix] [Patch 6] Warning: Failed to read HuntState_RandomBypass_PatchOffset, bypass skipped!");
+		delete gc;
+		return;
+	}
+
+	g_pHuntBypassPatchAddress = sigAddr + view_as<Address>(patchOffset);
+	int patchSize = g_bIsWin64 ? 4 : 3;
+	g_iHuntBypassPatchSize = patchSize;
+
+	// Already bypassed (all NOP)? Adopt live bytes and skip.
+	bool allNop = true;
+	for (int i = 0; i < patchSize; i++)
+	{
+		if (LoadFromAddress(g_pHuntBypassPatchAddress + view_as<Address>(i), NumberType_Int8) != 0x90)
+		{
+			allNop = false;
+			break;
+		}
+	}
+	if (allNop)
+	{
+		for (int i = 0; i < patchSize; i++)
+		{
+			g_iOriginalHuntBypassBytes[i] = 0x90;
+		}
+		LogMessage("[BotRouteFix] [Patch 6] Already bypassed (NOPs present @ %X), skipping", g_pHuntBypassPatchAddress);
+		g_bHuntBypassPatched = false;
+		delete gc;
+		return;
+	}
+
+	// Verify expected store (opcodes only, no addresses):
+	// 32-bit: 89 4B 04 | 64-bit: 49 89 56 08
+	bool isExpected = false;
+	if (g_bIsWin64)
+		isExpected = (LoadFromAddress(g_pHuntBypassPatchAddress, NumberType_Int8) == 0x49
+			&& LoadFromAddress(g_pHuntBypassPatchAddress + view_as<Address>(1), NumberType_Int8) == 0x89
+			&& LoadFromAddress(g_pHuntBypassPatchAddress + view_as<Address>(2), NumberType_Int8) == 0x56
+			&& LoadFromAddress(g_pHuntBypassPatchAddress + view_as<Address>(3), NumberType_Int8) == 0x08);
+	else
+		isExpected = (LoadFromAddress(g_pHuntBypassPatchAddress, NumberType_Int8) == 0x89
+			&& LoadFromAddress(g_pHuntBypassPatchAddress + view_as<Address>(1), NumberType_Int8) == 0x4B
+			&& LoadFromAddress(g_pHuntBypassPatchAddress + view_as<Address>(2), NumberType_Int8) == 0x04);
+
+	if (!isExpected)
+	{
+		LogMessage("[BotRouteFix] [Patch 6] Warning: template mismatch, bypass skipped (flush-only mode)!");
+		delete gc;
+		return;
+	}
+
+	// Backup original bytes
+	for (int i = 0; i < patchSize; i++)
+	{
+		g_iOriginalHuntBypassBytes[i] = LoadFromAddress(g_pHuntBypassPatchAddress + view_as<Address>(i), NumberType_Int8);
+	}
+
+	// NOP the store
+	for (int i = 0; i < patchSize; i++)
+	{
+		StoreToAddress(g_pHuntBypassPatchAddress + view_as<Address>(i), 0x90, NumberType_Int8, true);
+	}
+
+	g_bHuntBypassPatched = true;
+	LogMessage("[BotRouteFix] [Patch 6] Bypassed hunt random-override (oldest-scan restored) @ %X [%s]", g_pHuntBypassPatchAddress, g_bIsWin64 ? "64-bit" : "32-bit");
+}
+
+void RestoreHuntRandomBypassPatch()
+{
+	if (g_bHuntBypassPatched && g_pHuntBypassPatchAddress != Address_Null && g_iHuntBypassPatchSize > 0)
+	{
+		for (int i = 0; i < g_iHuntBypassPatchSize; i++)
+		{
+			StoreToAddress(g_pHuntBypassPatchAddress + view_as<Address>(i), g_iOriginalHuntBypassBytes[i], NumberType_Int8, true);
+		}
+		LogMessage("[BotRouteFix] [Patch 6] Restored original hunt random-override store @ %X", g_pHuntBypassPatchAddress);
+		g_bHuntBypassPatched = false;
+	}
+}
