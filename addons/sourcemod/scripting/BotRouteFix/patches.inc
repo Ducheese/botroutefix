@@ -36,21 +36,45 @@ void PrepGuardBombsitePatch()
 		int firstByte = LoadFromAddress(g_pGuardBombsitePatchAddress, NumberType_Int8);
 		int secondByte = LoadFromAddress(g_pGuardBombsitePatchAddress + view_as<Address>(1), NumberType_Int8);
 
-		// Check if already patched (0x8B 0x87 = mov eax, [rdi+1E50h])
+		// Check if already patched (0x8B 0x87 = mov eax, [rdi+1E50h]).
+		// Harden: adopt live bytes as the restore baseline (a previous session
+		// may have ended patched without restore running).
 		if (firstByte == 0x8B && secondByte == 0x87)
 		{
+			for (int i = 0; i < 26; i++)
+			{
+				g_iOriginalGuardBombsiteBytes[i] = LoadFromAddress(g_pGuardBombsitePatchAddress + view_as<Address>(i), NumberType_Int8);
+			}
 			LogMessage("[BotRouteFix] [Patch 1] Already patched (Morale math present @ %X), skipping", g_pGuardBombsitePatchAddress);
 			g_bGuardBombsitePatched = false;
 			delete gc;
 			return;
 		}
 
-		// Verify expected original opcode (0x66 0x0F = movd xmm6, [rdi+1E50h])
-		if (firstByte != 0x66 || secondByte != 0x0F)
+		// Verify the full 26-byte template (opcodes/ModRM only; address bytes
+		// drift per build and are skipped): movd/movaps/cvtdq2ps/movaps/mulss
+		// + RandomFloat call + comiss + jnb. Any drift -> refuse, never partial-write.
+		int chkOff64[18] = {0,1,2,3,8,9,10,11,12,13,14,15,16,17,18,19,20,21};
+		int chkVal64[18] = {0x66,0x0F,0x6E,0xB7,0x41,0x0F,0x28,0xC8,0x0F,0x5B,0xF6,0x0F,0x28,0xC7,0xF3,0x0F,0x59,0x35};
+		for (int i = 0; i < 18; i++)
+		{
+			int got = LoadFromAddress(g_pGuardBombsitePatchAddress + view_as<Address>(chkOff64[i]), NumberType_Int8);
+			if (got != chkVal64[i])
+			{
+				delete gc;
+				SetFailState("[BotRouteFix] [Patch 1] Template mismatch at +%d (expected %02X, got %02X), patch aborted!",
+					chkOff64[i], chkVal64[i], got);
+				return;
+			}
+		}
+
+		// Semantic anchor: the mulss constant must read exactly -34.0
+		int kRel64 = LoadFromAddress(g_pGuardBombsitePatchAddress + view_as<Address>(22), NumberType_Int32);
+		Address kAddr64 = g_pGuardBombsitePatchAddress + view_as<Address>(26 + kRel64);
+		if (view_as<float>(LoadFromAddress(kAddr64, NumberType_Int32)) != -34.0)
 		{
 			delete gc;
-			SetFailState("[BotRouteFix] [Patch 1] Byte mismatch at %X (expected 66 0F, got %02X %02X), patch aborted!",
-				g_pGuardBombsitePatchAddress, firstByte, secondByte);
+			SetFailState("[BotRouteFix] [Patch 1] Constant mismatch (expected -34.0), patch aborted!");
 			return;
 		}
 
@@ -107,11 +131,16 @@ void PrepGuardBombsitePatch()
 
 		Address base = g_pGuardBombsitePatchAddress;
 
-		// Already patched? (0x6B 0xC0 0xF6 = imul eax, -10 at +9)
+		// Already patched? (0x6B 0xC0 0xF6 = imul eax, -10 at +9).
+		// Harden: adopt live bytes as the restore baseline.
 		if (LoadFromAddress(base + view_as<Address>(9), NumberType_Int8) == 0x6B
 			&& LoadFromAddress(base + view_as<Address>(10), NumberType_Int8) == 0xC0
 			&& LoadFromAddress(base + view_as<Address>(11), NumberType_Int8) == 0xF6)
 		{
+			for (int i = 0; i < 55; i++)
+			{
+				g_iOriginalGuardBombsiteBytes[i] = LoadFromAddress(base + view_as<Address>(i), NumberType_Int8);
+			}
 			LogMessage("[BotRouteFix] [Patch 1] Already patched (70-10*Morale present @ %X), skipping", base);
 			g_bGuardBombsitePatched = false;
 			delete gc;
@@ -238,22 +267,54 @@ void PrepAntiRushPatch()
 	int firstByte = LoadFromAddress(g_pAntiRushPatchAddress, NumberType_Int8);
 	int secondByte = LoadFromAddress(g_pAntiRushPatchAddress + view_as<Address>(1), NumberType_Int8);
 
-	// Check if already patched (0x90 = NOP) -> safely skip and avoid zero-overwrite on unload
+	// Check if already patched (0x90 = NOP) -> safely skip and avoid zero-overwrite on unload.
+	// Harden: adopt live bytes as the restore baseline.
 	if (firstByte == 0x90 && secondByte == 0x90)
 	{
+		for (int i = 0; i < 6; i++)
+		{
+			g_iOriginalAntiRushBytes[i] = LoadFromAddress(g_pAntiRushPatchAddress + view_as<Address>(i), NumberType_Int8);
+		}
 		LogMessage("[BotRouteFix] [Patch 2] Already patched (NOPs present @ %X), skipping", g_pAntiRushPatchAddress);
 		g_bAntiRushPatched = false;
 		delete gc;
 		return;
 	}
 
-	// Verify expected jump opcode (both 32-bit and 64-bit are 0x0F 0x85)
-	if (firstByte != 0x0F || secondByte != 0x85)
+	// Verify the JNE site + trailing context (rel32 drifts per build, skipped):
+	// 32-bit: 0F 85 <rel> 8B CB E8 (jne; mov ecx,ebx; call)
+	// 64-bit: 0F 85 <rel> 48 8B CE E8 (jne; mov rcx,rsi; call)
+	if (g_bIsWin64)
 	{
-		delete gc;
-		SetFailState("[BotRouteFix] [Patch 2] Byte mismatch at %X (expected 0F 85, got %02X %02X), patch aborted!",
-				g_pAntiRushPatchAddress, firstByte, secondByte);
-		return;
+		int chkOff2w64[6] = {0,1,6,7,8,9};
+		int chkVal2w64[6] = {0x0F,0x85,0x48,0x8B,0xCE,0xE8};
+		for (int i = 0; i < 6; i++)
+		{
+			int got = LoadFromAddress(g_pAntiRushPatchAddress + view_as<Address>(chkOff2w64[i]), NumberType_Int8);
+			if (got != chkVal2w64[i])
+			{
+				delete gc;
+				SetFailState("[BotRouteFix] [Patch 2] Template mismatch at +%d (expected %02X, got %02X), patch aborted!",
+					chkOff2w64[i], chkVal2w64[i], got);
+				return;
+			}
+		}
+	}
+	else
+	{
+		int chkOff2w32[5] = {0,1,6,7,8};
+		int chkVal2w32[5] = {0x0F,0x85,0x8B,0xCB,0xE8};
+		for (int i = 0; i < 5; i++)
+		{
+			int got = LoadFromAddress(g_pAntiRushPatchAddress + view_as<Address>(chkOff2w32[i]), NumberType_Int8);
+			if (got != chkVal2w32[i])
+			{
+				delete gc;
+				SetFailState("[BotRouteFix] [Patch 2] Template mismatch at +%d (expected %02X, got %02X), patch aborted!",
+					chkOff2w32[i], chkVal2w32[i], got);
+				return;
+			}
+		}
 	}
 
 	// Backup original 6 bytes
@@ -368,25 +429,39 @@ void PrepBombsiteLockPatch()
 		return;
 	}
 
-	// Verify expected opcodes (64-bit: 45 33, 32-bit: 6A 00)
+	// Verify the 19-byte call-sequence head (opcodes only):
+	// 64-bit: 45 33 C9 4C 8D (xor r9d,r9d; lea r8,[rsp+..])
+	// 32-bit: 6A 00 6A 02 57 FF 90 (push 0; push 2; push edi; call [eax+..])
 	if (g_bIsWin64)
 	{
-		if (firstByte != 0x45 || secondByte != 0x33)
+		int chkOff4w64[5] = {0,1,2,3,4};
+		int chkVal4w64[5] = {0x45,0x33,0xC9,0x4C,0x8D};
+		for (int i = 0; i < 5; i++)
 		{
-			delete gc;
-			SetFailState("[BotRouteFix] [Patch 4] Byte mismatch at %X (expected 45 33, got %02X %02X), patch aborted!",
-				g_pBombsiteLockPatchAddress, firstByte, secondByte);
-			return;
+			int got = LoadFromAddress(g_pBombsiteLockPatchAddress + view_as<Address>(chkOff4w64[i]), NumberType_Int8);
+			if (got != chkVal4w64[i])
+			{
+				delete gc;
+				SetFailState("[BotRouteFix] [Patch 4] Template mismatch at +%d (expected %02X, got %02X), patch aborted!",
+					chkOff4w64[i], chkVal4w64[i], got);
+				return;
+			}
 		}
 	}
 	else
 	{
-		if (firstByte != 0x6A || secondByte != 0x00)
+		int chkOff4w32[7] = {0,1,2,3,4,5,6};
+		int chkVal4w32[7] = {0x6A,0x00,0x6A,0x02,0x57,0xFF,0x90};
+		for (int i = 0; i < 7; i++)
 		{
-			delete gc;
-			SetFailState("[BotRouteFix] [Patch 4] Byte mismatch at %X (expected 6A 00, got %02X %02X), patch aborted!",
-				g_pBombsiteLockPatchAddress, firstByte, secondByte);
-			return;
+			int got = LoadFromAddress(g_pBombsiteLockPatchAddress + view_as<Address>(chkOff4w32[i]), NumberType_Int8);
+			if (got != chkVal4w32[i])
+			{
+				delete gc;
+				SetFailState("[BotRouteFix] [Patch 4] Template mismatch at +%d (expected %02X, got %02X), patch aborted!",
+					chkOff4w32[i], chkVal4w32[i], got);
+				return;
+			}
 		}
 	}
 
@@ -508,21 +583,30 @@ void PrepReloadHidePatch()
 	int firstByte = LoadFromAddress(g_pReloadHidePatchAddress, NumberType_Int8);
 	int secondByte = LoadFromAddress(g_pReloadHidePatchAddress + view_as<Address>(1), NumberType_Int8);
 
-	// Already patched (0x90 = NOP)
+	// Already patched (0x90 = NOP).
+	// Harden: adopt live bytes as the restore baseline.
 	if (firstByte == 0x90 && secondByte == 0x90)
 	{
+		for (int i = 0; i < 2; i++)
+		{
+			g_iOriginalReloadHideBytes[i] = LoadFromAddress(g_pReloadHidePatchAddress + view_as<Address>(i), NumberType_Int8);
+		}
 		LogMessage("[BotRouteFix] [Patch 5] Already patched (NOPs present @ %X), skipping", g_pReloadHidePatchAddress);
 		g_bReloadHidePatched = false;
 		delete gc;
 		return;
 	}
 
-	// Verify expected jump opcode: 32-bit 0x76 (jbe short), 64-bit 0x73 (jnb/jnc short)
+	// Verify the dice-loss jump + neighbor (rel8 drifts per build, skipped):
+	// 32-bit: 76 <rel> A1 (jbe; mov eax,[..]) | 64-bit: 73 <rel> 48 8B (jb; mov rax,[..])
 	bool isExpected = false;
 	if (g_bIsWin64)
-		isExpected = (firstByte == 0x73);
+		isExpected = (firstByte == 0x73
+			&& LoadFromAddress(g_pReloadHidePatchAddress + view_as<Address>(2), NumberType_Int8) == 0x48
+			&& LoadFromAddress(g_pReloadHidePatchAddress + view_as<Address>(3), NumberType_Int8) == 0x8B);
 	else
-		isExpected = (firstByte == 0x76);
+		isExpected = (firstByte == 0x76
+			&& LoadFromAddress(g_pReloadHidePatchAddress + view_as<Address>(2), NumberType_Int8) == 0xA1);
 
 	if (!isExpected)
 	{

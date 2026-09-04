@@ -16,15 +16,27 @@ void PrepDangerReset()
 	if (gc == null)
 		return;
 
+	// NB: the 32-bit path does not use GetRandomArea at all (own HuntState
+	// anchor + FailState chain below), so a missing GetRandomArea signature
+	// must not gate it.
 	Address sigAddr = GameConfGetAddress(gc, "CCSBotManager_GetRandomArea");
-	if (sigAddr != Address_Null)
+	if (sigAddr != Address_Null || !g_bIsWin64)
 	{
 		if (g_bIsWin64)
 		{
-			// 64-bit: mov ecx, cs:dword_1807FF970 @ sigAddr + 14 (instruction length: 6 bytes)
-			int relOffset = LoadFromAddress(sigAddr + view_as<Address>(16), NumberType_Int32);
-			g_pTheNavAreasCount = sigAddr + view_as<Address>(20 + relOffset);
-			g_pTheNavAreasBase = g_pTheNavAreasCount - view_as<Address>(16);
+			if (sigAddr == Address_Null)
+			{
+				LogMessage("[BotRouteFix] [Module 3] Warning: Failed to locate CCSBotManager_GetRandomArea signature!");
+			}
+			else
+			{
+				// 64-bit: mov ecx, cs:dword_1807FF970 @ sigAddr + 14 (instruction length: 6 bytes)
+				int relOffset = LoadFromAddress(sigAddr + view_as<Address>(16), NumberType_Int32);
+				g_pTheNavAreasCount = sigAddr + view_as<Address>(20 + relOffset);
+				g_pTheNavAreasBase = g_pTheNavAreasCount - view_as<Address>(16);
+				LogMessage("[BotRouteFix] [Module 3] Resolved TheNavAreas (Count: @%X, Base: @%X)",
+					g_pTheNavAreasCount, g_pTheNavAreasBase);
+			}
 		}
 		else
 		{
@@ -83,16 +95,11 @@ void PrepDangerReset()
 			LogMessage("[BotRouteFix] [Module 3] Resolved TheNavAreas 32-bit anchor (Base: @%X, Count: @%X, areas: %d)",
 				g_pTheNavAreasBase, g_pTheNavAreasCount, areaCount);
 		}
-
-		if (g_bIsWin64)
-		{
-			LogMessage("[BotRouteFix] [Module 3] Resolved TheNavAreas (Count: @%X, Base: @%X)",
-				g_pTheNavAreasCount, g_pTheNavAreasBase);
-		}
-		// 32-bit branch logs its own resolved line (or FailStates above).
 	}
 	else
 	{
+		// Only reachable on 64-bit with a missing GetRandomArea signature
+		// (32-bit always enters the block above): warn and run anchor-less.
 		LogMessage("[BotRouteFix] [Module 3] Warning: Failed to locate CCSBotManager_GetRandomArea signature!");
 	}
 
