@@ -296,12 +296,6 @@ bool Escort_IsCarrier(int client)
     return client > 0 && client == g_iEscortCarrier;
 }
 
-// 包匪标记遗忘：包匪阵亡时清标记（名单保留，掉包事件随后释放）
-void Escort_ForgetCarrier()
-{
-    g_iEscortCarrier = 0;
-}
-
 // 名单成员丢失（阵亡/掉线）：除名 + 按当前士气重算编制，多退少补
 void Escort_OnRosterLost(int bot, bool logIt = true)
 {

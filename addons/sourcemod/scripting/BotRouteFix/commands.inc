@@ -15,6 +15,12 @@ void InitCommands()
     RegConsoleCmd("sm_botroutefix_status", Command_Status, "View BotRouteFix module status and architecture info");
 }
 
+/**
+ * 服务端状态遥测（sm_botroutefix_status），常显 + debug 专属 [Live] 两段：
+ *   常显段 = 静态基线（版本/开关/补丁挂载态）+ 累积计数器；
+ *   [Live] 段（bDebug 开）= 瞬时战术上下文（包匪/炸弹/士气）。
+ * 口径声明：所有累积计数器自插件加载起单调递增，换图不清零（只随重载/重启清零）。
+ */
 public Action Command_Status(int client, int args)
 {
     bool bMaster = (g_cvEnable != null && g_cvEnable.BoolValue);
@@ -58,6 +64,37 @@ public Action Command_Status(int client, int args)
         (bMaster && IsInvestigateNoiseHooked()) ? "ACTIVE" : "INACTIVE", GetTotalNoiseIntercepted(), GetTotalNoiseAllowed());
     ReplyToCommand(client, "[BotRouteFix] [Module 7] Carrier Escort Roster          : %d/%d (Carrier #%d)",
         Escort_GetBodyguardCount(), Escort_GetTargetCount(), Escort_GetCarrier());
+
+    char queueStatus[64];
+    if (bMaster && IsQueueBreakerHooked())
+    {
+        Format(queueStatus, sizeof(queueStatus), "ACTIVE (%d Shattered)", GetTotalQueueShattered());
+    }
+    else
+    {
+        strcopy(queueStatus, sizeof(queueStatus), "INACTIVE (Pending Signature)");
+    }
+    ReplyToCommand(client, "[BotRouteFix] [Module 8] Polite Queue Breaker (1.2s)    : %s", queueStatus);
+    if (bDebug)
+    {
+        int liveCarrier = Escort_GetCarrier();
+        if (liveCarrier > 0)
+        {
+            char liveMoraleStr[16];
+            int liveMorale = GetBotMorale(liveCarrier);
+            GetMoraleName(liveMorale, liveMoraleStr, sizeof(liveMoraleStr));
+            ReplyToCommand(client, "[BotRouteFix] [Live] T Carrier: %N (Morale: %d %s) | Escorts %d/%d | Plant %.1fs",
+                liveCarrier, liveMorale, liveMoraleStr, Escort_GetBodyguardCount(), Escort_GetTargetCount(), GetCurrentPlantDelay());
+        }
+        else
+        {
+            ReplyToCommand(client, "[BotRouteFix] [Live] T Carrier: -- (no C4 in play)");
+        }
+        ReplyToCommand(client, "[BotRouteFix] [Live] Bomb: %s | Morale AVG T %d / CT %d",
+            g_bBombPlanted ? "PLANTED" : "NOT PLANTED", GetTeamAverageBotMorale(2), GetTeamAverageBotMorale(3));
+        ReplyToCommand(client, "[BotRouteFix] [Live] CT Guard AVG: %.0f%% (70-10*M)",
+            CalculateGuardBombsiteChance(GetTeamAverageBotMorale(3)));
+    }
     ReplyToCommand(client, "[BotRouteFix] ============================================================");
     return Plugin_Handled;
 }

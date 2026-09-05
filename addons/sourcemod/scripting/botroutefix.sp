@@ -15,6 +15,7 @@
 //   - BotRouteFix/module5_combat.inc  : [模块 5] 战斗决策重构 (AttackState 闪避 100% 强制与换弹进掩体 100% 强制)
 //   - BotRouteFix/module6_tmorale.inc : [模块 6] T 阵营士气接战策略与守包听觉出击梯度 (TMorale)
 //   - BotRouteFix/module7_escort.inc  : [模块 7] T 包匪贴身保镖花名册 (Carrier Escort Roster)
+//   - BotRouteFix/module8_queue.inc   : [模块 8] 礼貌排队打碎与门口掉头 (Queue Breaker, UpdatePathMovement Post)
 //========================================================================================
 
 #pragma semicolon 1
@@ -37,6 +38,7 @@
 #include "BotRouteFix/module5_combat"
 #include "BotRouteFix/module6_tmorale"
 #include "BotRouteFix/module7_escort"
+#include "BotRouteFix/module8_queue"
 #include "BotRouteFix/events"
 #include "BotRouteFix/commands"
 
@@ -59,6 +61,8 @@ public Plugin myinfo =
 
 public void OnPluginStart()
 {
+    LogMessage("[BotRouteFix] ============== Initialization Start ==============");
+
     // 1. Register core ConVars
     CreateConVar("sm_botroutefix_version", PLUGIN_VERSION, "BotRouteFix plugin version", FCVAR_NOTIFY | FCVAR_DONTRECORD);
     g_cvEnable = CreateConVar("sm_botroutefix_enable", "1", "Enable or disable BotRouteFix core tactical overhaul", FCVAR_NOTIFY, true, 0.0, true, 1.0);
@@ -92,7 +96,7 @@ public void OnPluginStart()
     // 5. Initialize business modules (fail-fast: abort startup if any module fails)
     if (!InitModule1_Defense() || !InitModule2_Bombsite() || !InitModule3_Danger()
         || !InitModule4_Hunt() || !InitModule5_Combat() || !InitModule6_TMorale()
-        || !InitModule7_Escort())
+        || !InitModule7_Escort() || !InitModule8_Queue())
     {
         SetFailState("[BotRouteFix] One or more core tactical modules failed to initialize! Aborting plugin startup.");
         return;
@@ -112,6 +116,7 @@ public void OnPluginStart()
 public void OnPluginEnd()
 {
     // Safely restore business modules in reverse order
+    RestoreModule8_Queue();
     RestoreModule7_Escort();
     RestoreModule6_TMorale();
     RestoreModule5_Combat();
@@ -145,6 +150,7 @@ public void OnConVarChange_Enable(ConVar convar, const char[] oldValue, const ch
     EnableModule5_Combat(bEnable);
     EnableModule6_TMorale(bEnable);
     EnableModule7_Escort(bEnable);
+    EnableModule8_Queue(bEnable);
 }
 
 public void OnMapStart()
