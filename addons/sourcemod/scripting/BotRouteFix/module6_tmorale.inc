@@ -208,7 +208,7 @@ void Module6_OnBombExploded()
 void ApplyCarrierMoraleDisposition()
 {
     int carrier = GetC4Carrier();
-    if (carrier <= 0 || !IsPlayerAlive(carrier) || !IsFakeClient(carrier))
+    if (!IsBot(carrier, true))
     {
         return;
     }
@@ -241,7 +241,7 @@ void ApplyPlantedBombTMoraleDisposition()
 {
     for (int i = 1; i <= MaxClients; i++)
     {
-        if (IsClientInGame(i) && IsPlayerAlive(i) && GetClientTeam(i) == 2 && IsFakeClient(i))
+        if (IsTeamBot(i, 2, true))
         {
             Address pBot = GetEntityAddress(i);
             if (pBot == Address_Null || g_iOffset_Morale <= 0 || g_iOffset_Disposition <= 0)
@@ -312,12 +312,7 @@ public MRESReturn Hook_InvestigateNoise_Pre(int client, DHookParam hParams)
         return MRES_Ignored;
     }
 
-    if (client <= 0 || client > MaxClients || !IsClientInGame(client) || !IsPlayerAlive(client))
-    {
-        return MRES_Ignored;
-    }
-
-    if (GetClientTeam(client) != 2 || !IsFakeClient(client))
+    if (!IsTeamBot(client, 2, true))
     {
         return MRES_Ignored;
     }

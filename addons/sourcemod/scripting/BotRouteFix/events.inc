@@ -54,6 +54,7 @@ public void Event_RoundStart(Event event, const char[] name, bool dontBroadcast)
     Module2_OnRoundStart();
     Module3_OnRoundStart();
     Module6_OnRoundStart();
+    Module7_OnRoundStart();
 }
 
 public void Event_RoundFreezeEnd(Event event, const char[] name, bool dontBroadcast)
@@ -66,6 +67,7 @@ public void Event_RoundFreezeEnd(Event event, const char[] name, bool dontBroadc
     // 冻结时间结束，Bot 决策树正式激活
     Module2_OnRoundFreezeEnd();
     Module6_OnRoundFreezeEnd();
+    Module7_OnRoundFreezeEnd();
 }
 
 public void Event_ItemPickup(Event event, const char[] name, bool dontBroadcast)
@@ -86,6 +88,7 @@ public void Event_ItemPickup(Event event, const char[] name, bool dontBroadcast)
 
     Module2_OnItemPickup(client, item);
     Module6_OnItemPickup(client, item);
+    Module7_OnItemPickup(client, item);
 }
 
 public void Event_BombDropped(Event event, const char[] name, bool dontBroadcast)
@@ -96,6 +99,7 @@ public void Event_BombDropped(Event event, const char[] name, bool dontBroadcast
     }
 
     Module2_OnBombDropped();
+    Module7_OnBombDropped();
 }
 
 public void Event_PlayerDeath(Event event, const char[] name, bool dontBroadcast)
@@ -106,9 +110,10 @@ public void Event_PlayerDeath(Event event, const char[] name, bool dontBroadcast
     }
 
     int victim = GetClientOfUserId(event.GetInt("userid"));
-    if (victim > 0)
+    if (IsValidClient(victim, false))
     {
         Module2_OnPlayerDeath(victim);
+        Module7_OnPlayerDeath(victim);
     }
 }
 
@@ -122,6 +127,7 @@ public void Event_BombPlanted(Event event, const char[] name, bool dontBroadcast
     // C4 已安放，拆包/守包决策链激活
     Module2_OnBombPlanted();
     Module6_OnBombPlanted();
+    Module7_OnBombPlanted();
 }
 
 public void Event_BombDefused(Event event, const char[] name, bool dontBroadcast)
@@ -132,6 +138,7 @@ public void Event_BombDefused(Event event, const char[] name, bool dontBroadcast
     }
 
     Module6_OnBombDefused();
+    Module7_OnBombDefused();
 }
 
 public void Event_BombExploded(Event event, const char[] name, bool dontBroadcast)
@@ -142,4 +149,5 @@ public void Event_BombExploded(Event event, const char[] name, bool dontBroadcas
     }
 
     Module6_OnBombExploded();
+    Module7_OnBombExploded();
 }

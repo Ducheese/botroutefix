@@ -56,6 +56,8 @@ public Action Command_Status(int client, int args)
         (bMaster && IsAttackRetreatHooked()) ? "ACTIVE" : "INACTIVE", GetTotalRetreatTriggered());
     ReplyToCommand(client, "[BotRouteFix] [Module 6] InvestigateNoise Audio Intercept  : %s (%d Blocked / %d Allowed)",
         (bMaster && IsInvestigateNoiseHooked()) ? "ACTIVE" : "INACTIVE", GetTotalNoiseIntercepted(), GetTotalNoiseAllowed());
+    ReplyToCommand(client, "[BotRouteFix] [Module 7] Carrier Escort Roster          : %d/%d (Carrier #%d)",
+        Escort_GetBodyguardCount(), Escort_GetTargetCount(), Escort_GetCarrier());
     ReplyToCommand(client, "[BotRouteFix] ============================================================");
     return Plugin_Handled;
 }

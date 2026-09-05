@@ -237,23 +237,15 @@ void Module2_OnRoundStart()
 void Module2_OnRoundFreezeEnd()
 {
     int carrier = GetC4Carrier();
-    if (carrier <= 0 || !IsPlayerAlive(carrier))
+    if (!IsValidClient(carrier, true))
     {
         return;
     }
 
     g_iOpeningCarrier = carrier;
 
-    // 1. 读取持包者士气（人类玩家采用存活 T 阵营 Bot 平均士气，若无则默认 +1 POSITIVE）
-    int carrierMorale = 1;
-    if (IsBot(carrier))
-    {
-        carrierMorale = GetBotMorale(carrier);
-    }
-    else
-    {
-        carrierMorale = GetTeamAverageBotMorale(2);
-    }
+    // 1. 读取持包者士气（调用 helpers 标准封装：Bot 读自身，人类读存活 T 均值）
+    int carrierMorale = GetEffectiveCarrierMorale(carrier);
 
     // 2. 士气线性映射: 30.0 + 10.0 * Morale (0.0s ~ 60.0s)
     g_fCurrentPlantDelay = CalculatePlantDelay(carrierMorale);

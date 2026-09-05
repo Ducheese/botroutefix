@@ -275,7 +275,7 @@ public MRESReturn Hook_HuntState_OnUpdate_Pre(Address pThis, DHookParam hParams)
     }
 
     int client = hParams.Get(1);
-    if (!IsValidClient(client, true) || !IsFakeClient(client))
+    if (!IsBot(client, true))
     {
         return MRES_Ignored;
     }
@@ -304,7 +304,7 @@ public MRESReturn Hook_HuntState_OnUpdate_Post(Address pThis, DHookParam hParams
     }
 
     int client = hParams.Get(1);
-    if (!IsValidClient(client, true))
+    if (!IsBot(client, true))
     {
         return MRES_Ignored;
     }

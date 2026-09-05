@@ -14,6 +14,7 @@
 //   - BotRouteFix/module4_hunt.inc    : [模块 4] HuntState 搜敌机制重构 (45秒老家破除、时间戳认领与随机覆盖 NOP)
 //   - BotRouteFix/module5_combat.inc  : [模块 5] 战斗决策重构 (AttackState 闪避 100% 强制与换弹进掩体 100% 强制)
 //   - BotRouteFix/module6_tmorale.inc : [模块 6] T 阵营士气接战策略与守包听觉出击梯度 (TMorale)
+//   - BotRouteFix/module7_escort.inc  : [模块 7] T 包匪贴身保镖花名册 (Carrier Escort Roster)
 //========================================================================================
 
 #pragma semicolon 1
@@ -35,6 +36,7 @@
 #include "BotRouteFix/module4_hunt"
 #include "BotRouteFix/module5_combat"
 #include "BotRouteFix/module6_tmorale"
+#include "BotRouteFix/module7_escort"
 #include "BotRouteFix/events"
 #include "BotRouteFix/commands"
 
@@ -80,12 +82,17 @@ public void OnPluginStart()
     InitCommands();
     InitEvents();
 
-    // 4. Initialize reverse engineering infrastructure
-    InitSDKCalls();
+    // 4. Initialize reverse engineering infrastructure (fail-fast: escort needs Follow calls)
+    if (!InitSDKCalls())
+    {
+        SetFailState("[BotRouteFix] Core SDKCall table failed to initialize! Aborting plugin startup.");
+        return;
+    }
 
     // 5. Initialize business modules (fail-fast: abort startup if any module fails)
     if (!InitModule1_Defense() || !InitModule2_Bombsite() || !InitModule3_Danger()
-        || !InitModule4_Hunt() || !InitModule5_Combat() || !InitModule6_TMorale())
+        || !InitModule4_Hunt() || !InitModule5_Combat() || !InitModule6_TMorale()
+        || !InitModule7_Escort())
     {
         SetFailState("[BotRouteFix] One or more core tactical modules failed to initialize! Aborting plugin startup.");
         return;
@@ -105,6 +112,7 @@ public void OnPluginStart()
 public void OnPluginEnd()
 {
     // Safely restore business modules in reverse order
+    RestoreModule7_Escort();
     RestoreModule6_TMorale();
     RestoreModule5_Combat();
     RestoreModule4_Hunt();
@@ -136,6 +144,7 @@ public void OnConVarChange_Enable(ConVar convar, const char[] oldValue, const ch
     EnableModule4_Hunt(bEnable);
     EnableModule5_Combat(bEnable);
     EnableModule6_TMorale(bEnable);
+    EnableModule7_Escort(bEnable);
 }
 
 public void OnMapStart()
@@ -150,5 +159,6 @@ public void OnClientPutInServer(int client)
 
 public void OnClientDisconnect(int client)
 {
-    // 客户端离线清理
+    // 游戏事件 Hub 到不了 forward，直调模块 7 花名册除名/释放
+    Module7_OnClientDisconnect(client);
 }

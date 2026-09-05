@@ -42,13 +42,38 @@ stock bool IsBot(int client, bool checkAlive = false)
 }
 
 /**
+ * 校验实体是否为指定阵营的有效 CSBot
+ *
+ * @param client        客户端索引
+ * @param team          阵营索引 (2: T, 3: CT)
+ * @param checkAlive    是否必须处于存活状态
+ * @return              是否为指定阵营的有效 Bot
+ */
+stock bool IsTeamBot(int client, int team, bool checkAlive = false)
+{
+    return IsBot(client, checkAlive) && GetClientTeam(client) == team;
+}
+
+/**
+ * 校验实体是否为真实人类玩家 (非 Bot)
+ *
+ * @param client        客户端索引
+ * @param checkAlive    是否必须处于存活状态
+ * @return              是否为真实人类玩家
+ */
+stock bool IsHumanPlayer(int client, bool checkAlive = false)
+{
+    return IsValidClient(client, checkAlive) && !IsFakeClient(client);
+}
+
+/**
  * 获取指定 Bot 的当前士气值 (Morale)
  * 士气值范围在 [-3, +3]：
  *   -3: TERRIBLE, -2: BAD, -1: NEGATIVE, 0: NEUTRAL
  *   +1: POSITIVE, +2: GOOD, +3: EXCELLENT
  *
  * @param client        客户端索引
- * @return              士气值 (若无效或未就绪返回 0)
+ * @return              士气值 (若无效或未就绪返回默认 +1 POSITIVE)
  */
 stock int GetBotMorale(int client)
 {
@@ -79,7 +104,7 @@ stock int GetTeamAverageBotMorale(int team)
 
     for (int i = 1; i <= MaxClients; i++)
     {
-        if (IsClientInGame(i) && IsPlayerAlive(i) && GetClientTeam(i) == team && IsFakeClient(i))
+        if (IsTeamBot(i, team, true))
         {
             sum += GetBotMorale(i);
             count++;
@@ -92,6 +117,24 @@ stock int GetTeamAverageBotMorale(int team)
     }
 
     return 1; // 默认 +1 (POSITIVE)
+}
+
+/**
+ * 获取持包者的等效士气值 (Effective Carrier Morale)
+ * - 若持包者为 Bot：直接读取其自身士气；
+ * - 若持包者为人类玩家：由于人类无士气属性，为保证战术逻辑自洽，统一取当前存活 T 阵营 Bot 的平均士气；
+ * - 若全队无存活 Bot，则兜底为默认 +1 (POSITIVE)。
+ *
+ * @param carrier       持包者客户端索引
+ * @return              等效士气值 [-3, +3]
+ */
+stock int GetEffectiveCarrierMorale(int carrier)
+{
+    if (IsBot(carrier, false))
+    {
+        return GetBotMorale(carrier);
+    }
+    return GetTeamAverageBotMorale(2);
 }
 
 /**
@@ -117,7 +160,7 @@ stock void GetMoraleName(int morale, char[] buffer, int maxlen)
 }
 
 /**
- * 获取当前手持或携带 C4 的 T 阵营玩家实体索引
+ * 获取当前手持或携带 C4 的 T 阵营存活玩家实体索引
  *
  * @return              玩家客户端索引 (若无返回 0)
  */
@@ -125,7 +168,7 @@ stock int GetC4Carrier()
 {
     for (int i = 1; i <= MaxClients; i++)
     {
-        if (IsClientInGame(i) && IsPlayerAlive(i) && GetClientTeam(i) == 2)
+        if (IsValidClient(i, true) && GetClientTeam(i) == 2)
         {
             int c4 = GetPlayerWeaponSlot(i, 4);
             if (c4 != -1 && IsValidEntity(c4))
