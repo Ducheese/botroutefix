@@ -16,6 +16,8 @@
 //   - BotRouteFix/module6_tmorale.inc : [模块 6] T 阵营士气接战策略与守包听觉出击梯度 (TMorale)
 //   - BotRouteFix/module7_escort.inc  : [模块 7] T 包匪贴身保镖花名册 (Carrier Escort Roster)
 //   - BotRouteFix/module8_queue.inc   : [模块 8] 礼貌排队打碎与门口掉头 (Queue Breaker, UpdatePathMovement Post)
+//   - BotRouteFix/module9_loot.inc    : [模块 9] 掉包 Top3 抢包花名册 (Loot Roster, NoticeLooseBomb Pre)
+//   - BotRouteFix/module10_defuse.inc : [模块 10] CT 首席拆包员 (Chief Defuser, IsDoingScenario Pre)
 //========================================================================================
 
 #pragma semicolon 1
@@ -39,6 +41,8 @@
 #include "BotRouteFix/module6_tmorale"
 #include "BotRouteFix/module7_escort"
 #include "BotRouteFix/module8_queue"
+#include "BotRouteFix/module9_loot"
+#include "BotRouteFix/module10_defuse"
 #include "BotRouteFix/events"
 #include "BotRouteFix/commands"
 
@@ -96,7 +100,8 @@ public void OnPluginStart()
     // 5. Initialize business modules (fail-fast: abort startup if any module fails)
     if (!InitModule1_Defense() || !InitModule2_Bombsite() || !InitModule3_Danger()
         || !InitModule4_Hunt() || !InitModule5_Combat() || !InitModule6_TMorale()
-        || !InitModule7_Escort() || !InitModule8_Queue())
+        || !InitModule7_Escort() || !InitModule8_Queue()
+        || !InitModule9_Loot() || !InitModule10_Defuse())
     {
         SetFailState("[BotRouteFix] One or more core tactical modules failed to initialize! Aborting plugin startup.");
         return;
@@ -116,6 +121,8 @@ public void OnPluginStart()
 public void OnPluginEnd()
 {
     // Safely restore business modules in reverse order
+    RestoreModule10_Defuse();
+    RestoreModule9_Loot();
     RestoreModule8_Queue();
     RestoreModule7_Escort();
     RestoreModule6_TMorale();
@@ -151,20 +158,33 @@ public void OnConVarChange_Enable(ConVar convar, const char[] oldValue, const ch
     EnableModule6_TMorale(bEnable);
     EnableModule7_Escort(bEnable);
     EnableModule8_Queue(bEnable);
+    EnableModule9_Loot(bEnable);
+    EnableModule10_Defuse(bEnable);
 }
 
 public void OnMapStart()
 {
-    // 地图重置逻辑
+    // 换图 = 实体索引全废 + nav 重建 + curtime 归零：各模块清脏状态（不清即跨图污染）
+    // M1/M4/M8 无状态，M3 重解容器，M5 清时间数组，其余清名单/旗帜（与 round_start 同语义但独立命名）
+    Module2_OnMapStart();
+    Module3_OnMapStart();
+    Module5_OnMapStart();
+    Module6_OnMapStart();
+    Module7_OnMapStart();
+    Module9_OnMapStart();
+    Module10_OnMapStart();
 }
 
 public void OnClientPutInServer(int client)
 {
-    // 客户端进服初始化
+    // 槽位复用：目前只有模块 5 持有 per-client 时间戳
+    Module5_OnClientPutInServer(client);
 }
 
 public void OnClientDisconnect(int client)
 {
-    // 游戏事件 Hub 到不了 forward，直调模块 7 花名册除名/释放
+    // 游戏事件 Hub 到不了 forward，直调各花名册除名/释放/接力
     Module7_OnClientDisconnect(client);
+    Module9_OnClientDisconnect(client);
+    Module10_OnClientDisconnect(client);
 }

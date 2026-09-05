@@ -202,6 +202,28 @@ void EnableModule5_Combat(bool enable)
 }
 
 /**
+ * 地图加载 (OnMapStart)：curtime 归零，旧未来时间戳会误节流新图后撤，清节流数组
+ */
+void Module5_OnMapStart()
+{
+    for (int i = 0; i <= MaxClients; i++)
+    {
+        g_flNextForcedRetreat[i] = 0.0;
+    }
+}
+
+/**
+ * 客户端进服 (OnClientPutInServer)：槽位复用，旧主人的节流时间戳不能留给新人
+ */
+void Module5_OnClientPutInServer(int client)
+{
+    if (client > 0 && client <= MaxClients)
+    {
+        g_flNextForcedRetreat[client] = 0.0;
+    }
+}
+
+/**
  * 查询换弹进掩体补丁是否生效
  */
 bool IsReloadHidePatched()

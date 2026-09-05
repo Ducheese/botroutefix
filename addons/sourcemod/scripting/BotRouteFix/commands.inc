@@ -75,6 +75,36 @@ public Action Command_Status(int client, int args)
         strcopy(queueStatus, sizeof(queueStatus), "INACTIVE (Pending Signature)");
     }
     ReplyToCommand(client, "[BotRouteFix] [Module 8] Polite Queue Breaker (1.2s)    : %s", queueStatus);
+
+    char lootStatus[64];
+    if (bMaster && IsLootHooked())
+    {
+        Format(lootStatus, sizeof(lootStatus), "ACTIVE (%d/3 roster, %d elections, %d gated)", Loot_GetRosterCount(), GetTotalLootElections(), GetTotalLootGated());
+    }
+    else
+    {
+        strcopy(lootStatus, sizeof(lootStatus), "INACTIVE (Hook Missing)");
+    }
+    ReplyToCommand(client, "[BotRouteFix] [Module 9] T Loose-Bomb Fetch Roster (Top3): %s", lootStatus);
+
+    char defuseStatus[64];
+    if (bMaster && IsDefuseHooked())
+    {
+        int chief = GetChiefDefuser();
+        if (chief != -1)
+        {
+            Format(defuseStatus, sizeof(defuseStatus), "ACTIVE (Chief %N, %d chiefs, %d gated)", chief, GetTotalChiefs(), GetTotalScenarioGated());
+        }
+        else
+        {
+            Format(defuseStatus, sizeof(defuseStatus), "ACTIVE (no chief, %d chiefs, %d gated)", GetTotalChiefs(), GetTotalScenarioGated());
+        }
+    }
+    else
+    {
+        strcopy(defuseStatus, sizeof(defuseStatus), "INACTIVE (Pending Signature)");
+    }
+    ReplyToCommand(client, "[BotRouteFix] [Module 10] CT Chief Defuser (Scenario)    : %s", defuseStatus);
     if (bDebug)
     {
         int liveCarrier = Escort_GetCarrier();

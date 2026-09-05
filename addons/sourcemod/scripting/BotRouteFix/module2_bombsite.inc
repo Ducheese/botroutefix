@@ -231,6 +231,16 @@ void Module2_OnRoundStart()
 }
 
 /**
+ * 地图加载 (OnMapStart)： stale 锁定不能漏进新图（补丁字节跨换图常驻内存）
+ */
+void Module2_OnMapStart()
+{
+    RestoreBombsiteLockPatch();
+    g_iOpeningCarrier = 0;
+    g_fCurrentPlantDelay = 0.0;
+}
+
+/**
  * 冻结时间结束 (round_freeze_end)
  * 核心决策点：确定开局包匪、计算士气运包时钟、随机锁定目标包点
  */

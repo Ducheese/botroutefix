@@ -55,6 +55,8 @@ public void Event_RoundStart(Event event, const char[] name, bool dontBroadcast)
     Module3_OnRoundStart();
     Module6_OnRoundStart();
     Module7_OnRoundStart();
+    Module9_OnRoundStart();
+    Module10_OnRoundStart();
 }
 
 public void Event_RoundFreezeEnd(Event event, const char[] name, bool dontBroadcast)
@@ -89,6 +91,7 @@ public void Event_ItemPickup(Event event, const char[] name, bool dontBroadcast)
     Module2_OnItemPickup(client, item);
     Module6_OnItemPickup(client, item);
     Module7_OnItemPickup(client, item);
+    Module9_OnItemPickup(client, item);
 }
 
 public void Event_BombDropped(Event event, const char[] name, bool dontBroadcast)
@@ -100,6 +103,7 @@ public void Event_BombDropped(Event event, const char[] name, bool dontBroadcast
 
     Module2_OnBombDropped();
     Module7_OnBombDropped();
+    Module9_OnBombDropped();
 }
 
 public void Event_PlayerDeath(Event event, const char[] name, bool dontBroadcast)
@@ -114,6 +118,8 @@ public void Event_PlayerDeath(Event event, const char[] name, bool dontBroadcast
     {
         Module2_OnPlayerDeath(victim);
         Module7_OnPlayerDeath(victim);
+        Module9_OnPlayerDeath(victim);
+        Module10_OnPlayerDeath(victim);
     }
 }
 
@@ -128,6 +134,7 @@ public void Event_BombPlanted(Event event, const char[] name, bool dontBroadcast
     Module2_OnBombPlanted();
     Module6_OnBombPlanted();
     Module7_OnBombPlanted();
+    Module10_OnBombPlanted();
 }
 
 public void Event_BombDefused(Event event, const char[] name, bool dontBroadcast)
@@ -139,6 +146,7 @@ public void Event_BombDefused(Event event, const char[] name, bool dontBroadcast
 
     Module6_OnBombDefused();
     Module7_OnBombDefused();
+    Module10_OnBombDefused();
 }
 
 public void Event_BombExploded(Event event, const char[] name, bool dontBroadcast)
@@ -150,4 +158,5 @@ public void Event_BombExploded(Event event, const char[] name, bool dontBroadcas
 
     Module6_OnBombExploded();
     Module7_OnBombExploded();
+    Module10_OnBombExploded();
 }

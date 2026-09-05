@@ -104,6 +104,21 @@ void Module3_OnRoundStart()
 }
 
 /**
+ * 地图加载 (OnMapStart)：nav 网格重建地址全变，必须重解 TheNavAreas 容器
+ * （拿旧指针 decay 等于往释放过的内存写；不清零只重解，danger 本就全零无需衰减）
+ */
+void Module3_OnMapStart()
+{
+    g_pTheNavAreasCount = Address_Null;
+    g_pTheNavAreasBase = Address_Null;
+
+    if (!ResolveTheNavAreas())
+    {
+        LogError("[BotRouteFix] [Module 3] Failed to re-resolve TheNavAreas on map start!");
+    }
+}
+
+/**
  * 全图 NavArea 危险度 80% 软衰减结算
  */
 void DecayAllNavAreaDanger()

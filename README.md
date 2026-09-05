@@ -54,7 +54,7 @@
   - 在 Post 钩子中读取最终选定的 `m_huntArea`，并将其所属阵营的 `m_clearedTimestamp[teamIdx]` 盖上当前游戏时间 `curtime`（`teamIdx = (team - 1) % 2`）。
   - 刚被选取的区域其 age 瞬间归零，同队其他 Bot 在后续扫描时绝不会二次选中，达成天然、无死锁的战术多路分散搜敌！
 
-### 模块 5：战斗态规避机动与掩体换弹 (Combat Overhaul: 100% Dodge & Reload Hide)
+### 模块 5：战斗态规避机动、掩体换弹与残血后撤 (Combat Overhaul: Dodge, Reload Hide & Low-HP Retreat)
 - **闪避判定 100% 强制 (AttackState Dodge Forced)**：
   - 原生引擎在 `AttackState::OnEnter` 中根据 `dodgeChance = 80.0f * profile->GetSkill()` 掷骰判定是否闪避（`cs_bot_attack.cpp:115-130`），普通与低难度 Bot 极少闪避，对枪如同呆立木桩。
   - 本模块通过 DHook 拦截 `AttackState::OnEnter` 的 Post 阶段，直接将 `m_shouldDodge` 字段强制写为 `1`（32位 +50，64位 +58），确保全员交火时必进 `Dodge()` 规避机动，后续动作灵敏度交由 `Dodge()` 内部按 skill 分化。
@@ -63,7 +63,7 @@
   - 本模块将掷骰失败跳过掩体的条件短跳转指令（32位 2字节 `76 ??`，64位 2字节 `73 ??`）NOP 穿透为 `90 90`，抹去开阔地看脸原地换弹的弊端，只要满足前置条件（附近有敌且 5s 内见敌）换弹必进掩体！
 - **残血强制后撤 (Low-Health Forced Retreat via PinnedDown)**：
   - 原生引擎在 `AttackState::OnUpdate` 撤退段中受 `isPinnedDown`（交火持续 7~10 秒）与自带 3~15 秒冷却约束，导致残血 Bot 往往死战至死。
-  - 本模块通过 DHook 拦截 `AttackState::OnUpdate` 的 Pre 阶段，当检测到 Bot 血量 $< 35\text{ HP}$ 时，直接将 `m_pinnedDownTimestamp` 写为 `0.0`（使 `isPinnedDown` 恒真）并清空撤退计时器冷却；下一帧引擎原生立即触发 `TryToRetreat()` 寻找就近掩体撤退并转入 `HideState`，显著提升竞技残局生存率！
+  - 本模块通过 DHook 拦截 `AttackState::OnUpdate` 的 Pre 阶段，当检测到 Bot 血量 $< 35\text{ HP}$ 时，直接将 `m_pinnedDownTimestamp` 写为 `0.0`（使 `isPinnedDown` 恒真）并清空撤退计时器冷却；下一帧引擎原生撤退段在满足其余门控（有敌人正瞄着自己、掩体可达，1.5 秒节流）时触发 `TryToRetreat()` 寻找就近掩体撤退并转入 `HideState`，显著提升竞技残局生存率！
 
 ### 模块 6：T 阵营士气接战策略与守包听觉出击梯度 (Morale Disposition & Audio Interception)
 - **下包前 T 包匪行为 (Pre-Plant Carrier Morale Disposition)**：
@@ -83,6 +83,40 @@
       - 士气 +2 $\rightarrow$ 最大 2000.0 码
       - 士气 +3 $\rightarrow$ 最大 3000.0 码
     - 超距或线性概率衰减（$1.0 - \text{dist} / \text{maxDist}$）未命中时，清空声音时间戳并直接 `MRES_Supercede` 拦截状态切换，原地保持架枪，彻底瓦解战火黑洞效应！
+
+### 模块 7：T 包匪贴身保镖花名册 (Carrier Escort Roster)
+- **编制随士气浮动 (Morale-Scaled Roster)**：
+  - 原生引擎没有包匪专职护送概念，持包者与单打独斗无异。
+  - 本模块按持包者士气配给保镖：`保镖数 = 3 - Morale`（钳制在 0~6 名）。士气 -3（绝境）：6 名抱团强推；士气 +1（常规）：2 名随行；士气 +3（大优）：0 名，全员放飞控图。
+- **欧氏 2D 选人与差量刷新 (Euclidean Pick & Diff Refresh)**：
+  - 保镖人选按包匪坐标欧氏 2D 距离（只比 X/Y，不看 Z）取最近者；用 A* 真实距离精度更高，但在 10v10 开局每回合 O(N) 次寻路是可观卡顿，故以欧氏换零开销（多层地图隔墙误选为已知代价）。
+  - 名单只做差量更新：换包匪才解散重配；保镖阵亡/掉线/转队只除名并按实时士气多退少补，不抖散整条跟随链。
+- **包离手即解散 (Release on Loose)**：
+  - 掉包、下包、拆包、爆炸、包匪阵亡/掉线时全体解散（发 `StopFollowing` 恢复自由身，可就近捡包或转入守点）；回合开始静默清零。
+  - 冻结期内不接管（跟随会打断买枪），中途捡包递延一帧等槽位归属落定。
+
+### 模块 8：门口礼貌排队打碎与掉头 (Polite Queue Breaker)
+- **原生排队过久 (Over-Polite Waiting)**：
+  - 门口/路口被队友挡路时，原生礼貌等待要 2~5 秒（`5 - 3 * aggression`）才散，且散开后可能一头再扎回同一个堵点。
+- **Post 钩子当 think 打碎 (Break on Post Hook)**：
+  - 本模块在 `CCSBot::UpdatePathMovement` 的 Post 阶段介入（与引擎评估等待同一位置，无 timer 轮询）：等待超过 1.2 秒（人类犹豫极限）即清等待旗；被堵 node 与下一个 node 各钉 `+0.8` 危险度（封顶 2.5，沉降契约照旧），A* 立即绕开，下次重算不走回头路；随后手工碎路径逼立即重算。
+  - 原生 2~5 秒机制保留在后兜底：我们先清了它到点就跳过，我们没赶上它照旧散，双向交接。
+  - 危险度下标与模块 3 同约定：`teamID % 2`（T=0/CT=1），切勿与模块 4 的 `(team-1)%2` 混淆。
+
+### 模块 9：掉包 Top3 抢包花名册 (Loose-Bomb Fetch Roster)
+- **原生全员哄抢 (Swarm on Loose Bomb)**：
+  - `CCSBot::NoticeLooseBomb()` 只要地上有包即对全队 T 返回 true（`cs_bot.cpp:428`），`Idle` 与 `Hunt` 两条路闻到就 `FetchBomb()`，掉包即全员送死。
+- **Pre 门控 + 事件花名册 (Pre Gate & Event Roster)**：
+  - 本模块 Pre 钩上述查询函数，非名册成员直接回 false（CT 走另一函数 `CanSeeLooseBomb`，碰不到）；名册为空时全部放行回原生（fail-open）。
+  - 掉包事件递延一帧（等 C4 归属落定，当场查恒为"人手里"）后，以无主 `weapon_c4` 坐标为圆心欧氏取最近 3 存活 T；成员阵亡/掉线按掉包点就近回补，全灭则解散回原生（防"包烂地上没人捡"死锁）；有人捡包/回合开始/换图即清。
+
+### 模块 10：CT 首席拆包员 (Chief Defuser)
+- **原生全员撞包 (Swarm on Planted Bomb)**：
+  - 下包后在首人读条前，`IsDoingScenario()` 为真的 CT 全员拿 `DEFUSE_BOMB` 往雷包上撞，撞墙窗口等于全员旅行时间（`cs_bot_idle.cpp:250-281`）。
+- **Scenario 门控 + 首席选举 (Scenario Gate & Chief Election)**：
+  - 本模块 Pre 钩 `CCSBot::IsDoingScenario()`：下包后非首席一律回 false，掉进原生"不让拆就守包点"分支（`GUARD_BOMB_ZONE` + 包点掩体 + 自由开火），掩护组由引擎自建；首席直通原生拿 `DEFUSE_BOMB`，读上条后引擎再把众人翻成 `GUARD_BOMB_DEFUSER`。字面"提前转守拆包员"不可行（`HideState` 在无人读条时每拍弹回，会自旋），故掩护组拿 ZONE 等价任务。
+  - 首席选举：下包瞬间选距 `planted_c4` 最近存活 CT（欧氏距离 − 持钳 500，钳子 5 秒读条差的等效让分）；首席阵亡/掉线按缓存包坐标立即选下一顺位；拆掉/炸掉/开局/换图即清。
+  - 与真人玩家的关系：选举不数真人玩家（`IsBot` 限定），出动尊重原生 `bot_defer_to_human`——默认开且 CT 有活人时首席坐板凳、bot 全员掩护；真人玩家死光原生翻 true，首席自动上，无需重选；defer 置 0 则全程按设计走，真人玩家抢拆时首席在原生让路逻辑下搁置，不打架。
 
 ---
 
@@ -107,8 +141,12 @@ addons\sourcemod\
         ├── module2_bombsite.inc      [模块 2] T 运包时钟士气映射与开局包点随机锁定 (Bombsite & Plant Clock)
         ├── module3_danger.inc        [模块 3] CNavArea 危险度开局软衰减 (NavArea Danger Soft-Decay)
         ├── module4_hunt.inc          [模块 4] HuntState 搜敌机制重构 (45秒老家破除、时间戳认领与随机覆盖 NOP)
-        ├── module5_combat.inc        [模块 5] 战斗决策重构 (AttackState 闪避 100% 强制与换弹进掩体 100% 强制)
-        └── module6_tmorale.inc       [模块 6] T 阵营士气接战策略与守包听觉出击梯度 (TMorale)
+        ├── module5_combat.inc        [模块 5] 战斗决策重构 (AttackState 闪避 100% 强制、换弹进掩体 100% 强制与残血后撤)
+        ├── module6_tmorale.inc       [模块 6] T 阵营士气接战策略与守包听觉出击梯度 (TMorale)
+        ├── module7_escort.inc        [模块 7] T 包匪贴身保镖花名册 (Carrier Escort Roster)
+        ├── module8_queue.inc         [模块 8] 门口礼貌排队打碎与掉头 (Polite Queue Breaker)
+        ├── module9_loot.inc          [模块 9] 掉包 Top3 抢包花名册 (Loose-Bomb Fetch Roster)
+        └── module10_defuse.inc       [模块 10] CT 首席拆包员 (Chief Defuser)
 ```
 
 ---
@@ -125,7 +163,7 @@ addons\sourcemod\
 ### 控制台指令
 | 指令 | 权限 | 说明 |
 | :--- | :--- | :--- |
-| `sm_botroutefix_status` | 所有人 | 查看当前系统运行架构 (32/64位)、Gamedata 状态及各模块补丁生效情况 |
+| `sm_botroutefix_status` | 所有人 | 10 模块健康行（ACTIVE/INACTIVE，缺签名显示待机原因）+ 累积计数器（认领/闪避/后撤/拦截/打碎/选举/首席，单调递增、换图不清零）+ debug 专属 `[Live]` 段（活包匪士气、glBomb 状态、T/CT 平均士气与守点率，需 `sm_botroutefix_debug 1`） |
 
 ---
 
@@ -156,9 +194,9 @@ addons\sourcemod\
   - 此行为保证了绝对零崩服，且该状态在换图或重启服务器后自动彻底清除，行为完全安全可接受。
 
 ### 掉线自愈与残局热重载说明 (Disconnect & Mid-Round Hot-Reload Parity)
-- **掉线机制**：`OnClientDisconnect` 目前保持空实现。若开局持包者意外掉线，CS:S 引擎原生逻辑会将 C4 强制掉落并触发 `bomb_dropped`，模块 2 藉此无缝完成换人自愈并恢复原生就近选点。
-- **残局热重载状态同步（已显式移除）**：旧版曾在 `OnPluginStart` 中使用 `SyncMidRoundState` 探查当前残局下包与地面 C4 状态。模块化重构时已正式移除该复杂检测。若管理员在下包残局中途热重载插件，新插件实例不会在中途补发守点姿态，将在下一回合 `round_start` 时完全自然自愈。
+- **掉线机制**：`OnClientDisconnect` 直调三家花名册——模块 7（包匪掉线全放、保镖掉线除名递补）、模块 9（队员掉线按掉包点回补）、模块 10（首席掉线按包坐标接力）。开局持包者意外掉线时，引擎原生还会将 C4 强制掉落触发 `bomb_dropped`，模块 2 藉此换人自愈并恢复原生就近选点，双保险。
+- **残局热重载状态同步（已显式移除）**：旧版曾在 `OnPluginStart` 中使用 `SyncMidRoundState` 探查当前残局下包与地面 C4 状态。模块化重构时已正式移除该复杂检测。若管理员在下包残局中途热重载插件，新插件实例不会在中途补发决策状态，将在下一回合 `round_start` 时完全自然自愈。
 
 ### 模块启动刚性容错策略 (Fail-Fast Startup Contract)
-- 主插件入口（`botroutefix.sp`）对全部 6 个业务模块的 `InitModule*()` 实施严格的刚性链式返回值检查。
-- 若因 Gamedata 签名失效、偏移未命中或二进制模板不匹配导致任何一个核心模块初始化失败，插件将立即调用 `SetFailState` 终止启动并报错，坚决杜绝“带病运行”导致的隐蔽战术逻辑割裂。
+- 主插件入口（`botroutefix.sp`）对全部 10 个业务模块的 `InitModule*()` 实施严格的刚性链式返回值检查。
+- 若因 Gamedata 签名失效、偏移未命中或二进制模板不匹配导致任何一个核心模块初始化失败，插件将立即调用 `SetFailState` 终止启动并报错，坚决杜绝“带病运行”导致的隐蔽战术逻辑割裂。例外：模块 8/10 在签名缺失时优雅待机（`INACTIVE (Pending Signature)`，不阻断全库启动）；模块 9 名册为空时行为回退原生（fail-open）。

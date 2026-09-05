@@ -148,6 +148,14 @@ void Module6_OnRoundStart()
 }
 
 /**
+ * 地图加载 (OnMapStart)：planted 旗不能跨图（否则模块 10 钩子首回合前误动）
+ */
+void Module6_OnMapStart()
+{
+    g_bBombPlanted = false;
+}
+
+/**
  * 冻结结束 (round_freeze_end): 配置开局包匪接战策略
  */
 void Module6_OnRoundFreezeEnd()

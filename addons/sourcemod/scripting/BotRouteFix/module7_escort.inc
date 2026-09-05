@@ -393,6 +393,14 @@ void Module7_OnRoundStart()
 }
 
 /**
+ * 地图加载 (OnMapStart)：名单索引随实体全废，新 bot 复用索引会被误认，必须清
+ */
+void Module7_OnMapStart()
+{
+    Escort_Reset();
+}
+
+/**
  * 冻结时间结束 (round_freeze_end)：开局配一次保镖（时钟归 module2，本模块不碰）
  */
 void Module7_OnRoundFreezeEnd()

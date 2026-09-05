@@ -1,0 +1,395 @@
+#if defined _botroutefix_module9_loot_included
+    #endinput
+#endif
+#define _botroutefix_module9_loot_included
+
+//========================================================================================
+// MODULE 9: LOOSE-BOMB TOP3 FETCH ROSTER (NoticeLooseBomb pre-hook)
+//
+// 业务背景与引擎逆向分析：
+//
+// 1. 原生缺陷 (cs_bot.cpp:428-444):
+//    NoticeLooseBomb() = GetLooseBomb() != NULL 即对全队 T 返回 true。两个调用点
+//    （IdleState:228、HuntState:74）闻到就 FetchBomb()——掉包即全员哄抢送死。
+// 2. 卡门：只钩这一个查询函数，两条路全堵。CT 走 CanSeeLooseBomb（另一个函数），碰不到。
+// 3. 花名册（与模块 7 同构，全事件驱动，无 timer）：
+//    - bomb_dropped：递延一帧（等归属落定）后以掉包点（无主 weapon_c4 实体坐标，零耦合不读模块 7）为圆心，
+//      欧氏取最近 3 存活 T bot；选举失败（找不到掉包）→ 空名册 = 全体放行回原生；
+//    - player_death / client_disconnect：除名 + 按掉包点就近回补（共用同一函数；名单有效时 C4 必躺掉包点，
+//      按掉包点招人即按 C4 位置招人）——必选项，否则减员到全灭即全员 false，包烂地上没人捡（比原版更糟的死锁）；
+//    - item_pickup(c4)/round_start：清（FetchBombState:58 有人捡包自己散伙）。
+// 4. fail-open 原则：钩子只会把 true 掐成 false，且仅在名册有效时掐；名册空即原生。
+// 全程事件驱动，无 timer 轮询。
+//========================================================================================
+
+#define LOOT_ROSTER_SIZE 3
+
+// 本模块私有状态（static，名册与句柄不出本文件）
+static Handle g_hLooseDetour = null;
+static int g_iLootRoster[LOOT_ROSTER_SIZE] = {-1, -1, -1};
+static bool g_bHasRoster = false;
+static float g_fDropPos[3];
+
+// 遥测统计计数器
+static int g_iTotalLootGated = 0;
+static int g_iTotalLootElections = 0;
+
+// 名册内查找（-1 槽位跳过）
+static bool Loot_IsInRoster(int client)
+{
+    for (int i = 0; i < LOOT_ROSTER_SIZE; i++)
+    {
+        if (g_iLootRoster[i] == client)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// 清空名册（fail-open：无名册 = 全体放行回原生）
+static void Loot_ClearRoster()
+{
+    for (int i = 0; i < LOOT_ROSTER_SIZE; i++)
+    {
+        g_iLootRoster[i] = -1;
+    }
+    g_bHasRoster = false;
+}
+
+// 找无主掉包坐标（m_hOwnerEntity == -1 的 weapon_c4）
+static bool Loot_FindDropPos(float dropPos[3])
+{
+    int ent = -1;
+    while ((ent = FindEntityByClassname(ent, "weapon_c4")) != -1)
+    {
+        if (GetEntPropEnt(ent, Prop_Send, "m_hOwnerEntity") == -1)
+        {
+            GetEntPropVector(ent, Prop_Send, "m_vecOrigin", dropPos);
+            return true;
+        }
+    }
+    return false;
+}
+
+// 选举：掉包点欧氏最近 3 存活 T bot
+static void Loot_ElectRoster()
+{
+    Loot_ClearRoster();
+
+    float dropPos[3];
+    if (!Loot_FindDropPos(dropPos))
+    {
+        DebugLog("[BotRouteFix] [Module 9] Bomb dropped but loose C4 not found, fail-open to native");
+        return;
+    }
+    g_fDropPos = dropPos;
+
+    float bestDist[LOOT_ROSTER_SIZE];
+    for (int i = 0; i < LOOT_ROSTER_SIZE; i++)
+    {
+        bestDist[i] = 9999999.0;
+    }
+
+    for (int i = 1; i <= MaxClients; i++)
+    {
+        if (!IsBot(i, true) || GetClientTeam(i) != 2)
+        {
+            continue;
+        }
+
+        float pos[3];
+        GetClientAbsOrigin(i, pos);
+        float dist = GetVectorDistance(pos, dropPos);
+
+        for (int slot = 0; slot < LOOT_ROSTER_SIZE; slot++)
+        {
+            if (dist < bestDist[slot])
+            {
+                for (int shift = LOOT_ROSTER_SIZE - 1; shift > slot; shift--)
+                {
+                    g_iLootRoster[shift] = g_iLootRoster[shift - 1];
+                    bestDist[shift] = bestDist[shift - 1];
+                }
+                g_iLootRoster[slot] = i;
+                bestDist[slot] = dist;
+                break;
+            }
+        }
+    }
+
+    if (g_iLootRoster[0] == -1)
+    {
+        DebugLog("[BotRouteFix] [Module 9] No alive T bots to elect, fail-open to native");
+        return;
+    }
+
+    g_bHasRoster = true;
+    g_iTotalLootElections++;
+    DebugLog("[BotRouteFix] [Module 9] Elected fetch roster: %N / %N / %N",
+        g_iLootRoster[0],
+        (g_iLootRoster[1] != -1) ? g_iLootRoster[1] : g_iLootRoster[0],
+        (g_iLootRoster[2] != -1) ? g_iLootRoster[2] : g_iLootRoster[0]);
+}
+
+public MRESReturn Hook_NoticeLooseBomb_Pre(int client, DHookParam hParams)
+{
+    if (g_cvEnable != null && !g_cvEnable.BoolValue)
+    {
+        return MRES_Ignored;
+    }
+
+    if (!IsBot(client, true) || GetClientTeam(client) != 2)
+    {
+        return MRES_Ignored;
+    }
+
+    if (!g_bHasRoster || Loot_IsInRoster(client))
+    {
+        return MRES_Ignored;
+    }
+
+    DHookSetReturn(hParams, false);
+    g_iTotalLootGated++;
+    // DebugLog("[BotRouteFix] [Module 9] Bot %N denied loose-bomb fetch (off-roster)", client);
+    return MRES_Supercede;
+}
+
+/**
+ * 查询掉包感知 Detour 是否处于就绪/已挂载状态
+ */
+bool IsLootHooked()
+{
+    return (g_hLooseDetour != null);
+}
+
+/**
+ * 获取当前名册有效人数
+ */
+int Loot_GetRosterCount()
+{
+    int count = 0;
+    for (int i = 0; i < LOOT_ROSTER_SIZE; i++)
+    {
+        if (g_iLootRoster[i] != -1 && IsBot(g_iLootRoster[i], true))
+        {
+            count++;
+        }
+    }
+    return count;
+}
+
+/**
+ * 获取累计选举次数
+ */
+int GetTotalLootElections()
+{
+    return g_iTotalLootElections;
+}
+
+/**
+ * 获取累计拦截非名册哄抢次数
+ */
+int GetTotalLootGated()
+{
+    return g_iTotalLootGated;
+}
+
+/**
+ * 初始化模块 9（挂 NoticeLooseBomb Pre）
+ * 签名双架构现成，缺失即 fail-fast（与待机模块不同：这里缺 = gamedata 坏了）
+ */
+bool InitModule9_Loot()
+{
+    g_hLooseDetour = DHookCreateDetour(Address_Null, CallConv_THISCALL, ReturnType_Bool, ThisPointer_CBaseEntity);
+    if (g_hLooseDetour == null)
+    {
+        LogError("[BotRouteFix] [Module 9] Failed to create DHook detour instance for NoticeLooseBomb!");
+        return false;
+    }
+
+    if (!DHookSetFromConf(g_hLooseDetour, g_hGameConf, SDKConf_Signature, "CCSBot_NoticeLooseBomb"))
+    {
+        LogError("[BotRouteFix] [Module 9] Failed to set NoticeLooseBomb signature from gamedata!");
+        delete g_hLooseDetour;
+        g_hLooseDetour = null;
+        return false;
+    }
+
+    // NoticeLooseBomb(void)：无参数，this 即 bot 本体
+    if (!DHookEnableDetour(g_hLooseDetour, false, Hook_NoticeLooseBomb_Pre))
+    {
+        LogError("[BotRouteFix] [Module 9] Failed to enable NoticeLooseBomb Pre detour!");
+        delete g_hLooseDetour;
+        g_hLooseDetour = null;
+        return false;
+    }
+
+    LogMessage("[BotRouteFix] [Module 9] Loose-bomb Top3 roster online (NoticeLooseBomb Pre hook)");
+    return true;
+}
+
+/**
+ * 还原模块 9（摘钩子 + 清名册）
+ */
+void RestoreModule9_Loot()
+{
+    if (g_hLooseDetour != null)
+    {
+        DHookDisableDetour(g_hLooseDetour, false, Hook_NoticeLooseBomb_Pre);
+        delete g_hLooseDetour;
+        g_hLooseDetour = null;
+    }
+    Loot_ClearRoster();
+}
+
+/**
+ * 动态启用或停用模块 9
+ */
+void EnableModule9_Loot(bool enable)
+{
+    if (g_hLooseDetour == null)
+    {
+        return;
+    }
+
+    if (enable)
+    {
+        DHookEnableDetour(g_hLooseDetour, false, Hook_NoticeLooseBomb_Pre);
+    }
+    else
+    {
+        DHookDisableDetour(g_hLooseDetour, false, Hook_NoticeLooseBomb_Pre);
+    }
+}
+
+/**
+ * 掉包事件：递延一帧再选举（等 C4 归属落定，模块 7 FrameRefresh 同款；直接查必 miss）
+ */
+void Module9_OnBombDropped()
+{
+    RequestFrame(Module9_FrameElect);
+}
+
+/**
+ * 递延选举帧（RequestFrame 回调）
+ */
+public void Module9_FrameElect(any data)
+{
+    Loot_ElectRoster();
+}
+
+/**
+ * 死亡事件：成员阵亡递补下家（防死锁必选项）
+ */
+void Module9_OnPlayerDeath(int victim)
+{
+    Loot_RemoveAndBackfill(victim, "fallen member");
+}
+
+/**
+ * 客户端掉线 (OnClientDisconnect)：无死亡事件，槽位会烂掉——同递补逻辑
+ */
+void Module9_OnClientDisconnect(int client)
+{
+    Loot_RemoveAndBackfill(client, "disconnect");
+}
+
+/**
+ * 除名 + 按掉包点就近回补 + 全灭 fail-open（死亡与掉线共用）
+ * 名单有效时 C4 必躺在掉包点（谁捡起名单即散），按掉包点招人即按 C4 位置招人
+ */
+static void Loot_RemoveAndBackfill(int client, const char[] reason)
+{
+    if (!g_bHasRoster || !Loot_IsInRoster(client))
+    {
+        return;
+    }
+
+    // 腾出槽位
+    for (int i = 0; i < LOOT_ROSTER_SIZE; i++)
+    {
+        if (g_iLootRoster[i] == client)
+        {
+            g_iLootRoster[i] = -1;
+        }
+    }
+
+    int best = -1;
+    float bestDist = 9999999.0;
+    for (int i = 1; i <= MaxClients; i++)
+    {
+        if (!IsBot(i, true) || GetClientTeam(i) != 2 || Loot_IsInRoster(i))
+        {
+            continue;
+        }
+
+        float pos[3];
+        GetClientAbsOrigin(i, pos);
+        float dist = GetVectorDistance(pos, g_fDropPos);
+        if (dist < bestDist)
+        {
+            bestDist = dist;
+            best = i;
+        }
+    }
+
+    if (best != -1)
+    {
+        for (int i = 0; i < LOOT_ROSTER_SIZE; i++)
+        {
+            if (g_iLootRoster[i] == -1)
+            {
+                g_iLootRoster[i] = best;
+                break;
+            }
+        }
+        DebugLog("[BotRouteFix] [Module 9] Roster backfill (%s): %N joins", reason, best);
+    }
+
+    // 全灭则解散回原生（fail-open）
+    if (Loot_GetRosterCount() == 0)
+    {
+        Loot_ClearRoster();
+        DebugLog("[BotRouteFix] [Module 9] Roster wiped, fail-open to native");
+    }
+}
+
+/**
+ * 捡包事件：有人捡起 C4 即解散（FetchBombState 自己散伙）
+ */
+void Module9_OnItemPickup(int client, const char[] item)
+{
+    if (!g_bHasRoster)
+    {
+        return;
+    }
+
+    // 冻结期系统发包不触发（与 module2/6/7 同守卫；此时名册恒空，本是 no-op，防后人加逻辑踩坑）
+    if (GameRules_GetProp("m_bFreezePeriod") != 0)
+    {
+        return;
+    }
+
+    if (StrEqual(item, "c4") || StrEqual(item, "weapon_c4"))
+    {
+        Loot_ClearRoster();
+        DebugLog("[BotRouteFix] [Module 9] Bomb picked up by %N, roster disbanded", client);
+    }
+}
+
+/**
+ * 回合开始：清名册
+ */
+void Module9_OnRoundStart()
+{
+    Loot_ClearRoster();
+}
+
+/**
+ * 地图加载 (OnMapStart)：名单索引随实体全废，必须清（round_start 也会清，显式正确）
+ */
+void Module9_OnMapStart()
+{
+    Loot_ClearRoster();
+}
