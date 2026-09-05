@@ -43,6 +43,7 @@
 #include "BotRouteFix/module8_queue"
 #include "BotRouteFix/module9_loot"
 #include "BotRouteFix/module10_defuse"
+#include "BotRouteFix/module11_sniper"
 #include "BotRouteFix/events"
 #include "BotRouteFix/commands"
 
@@ -70,7 +71,7 @@ public void OnPluginStart()
     // 1. Register core ConVars
     CreateConVar("sm_botroutefix_version", PLUGIN_VERSION, "BotRouteFix plugin version", FCVAR_NOTIFY | FCVAR_DONTRECORD);
     g_cvEnable = CreateConVar("sm_botroutefix_enable", "1", "Enable or disable BotRouteFix core tactical overhaul", FCVAR_NOTIFY, true, 0.0, true, 1.0);
-    g_cvDebug  = CreateConVar("sm_botroutefix_debug",  "0", "Enable or disable verbose debug telemetry output", FCVAR_NONE, true, 0.0, true, 1.0);
+    g_cvDebug  = CreateConVar("sm_botroutefix_debug",  "1", "Enable or disable verbose debug telemetry output", FCVAR_NONE, true, 0.0, true, 1.0);
 
     // 2. Load Gamedata and detect architecture
     g_hGameConf = LoadGameConfigFile(GAMEDATA);
@@ -101,7 +102,8 @@ public void OnPluginStart()
     if (!InitModule1_Defense() || !InitModule2_Bombsite() || !InitModule3_Danger()
         || !InitModule4_Hunt() || !InitModule5_Combat() || !InitModule6_TMorale()
         || !InitModule7_Escort() || !InitModule8_Queue()
-        || !InitModule9_Loot() || !InitModule10_Defuse())
+        || !InitModule9_Loot() || !InitModule10_Defuse()
+        || !InitModule11_Sniper())
     {
         SetFailState("[BotRouteFix] One or more core tactical modules failed to initialize! Aborting plugin startup.");
         return;
@@ -121,6 +123,7 @@ public void OnPluginStart()
 public void OnPluginEnd()
 {
     // Safely restore business modules in reverse order
+    RestoreModule11_Sniper();
     RestoreModule10_Defuse();
     RestoreModule9_Loot();
     RestoreModule8_Queue();
@@ -160,6 +163,7 @@ public void OnConVarChange_Enable(ConVar convar, const char[] oldValue, const ch
     EnableModule8_Queue(bEnable);
     EnableModule9_Loot(bEnable);
     EnableModule10_Defuse(bEnable);
+    EnableModule11_Sniper(bEnable);
 }
 
 public void OnMapStart()
@@ -177,13 +181,14 @@ public void OnMapStart()
 
 public void OnClientPutInServer(int client)
 {
-    // 槽位复用：目前只有模块 5 持有 per-client 时间戳
+    // 槽位复用：重置 per-client 时间戳
     Module5_OnClientPutInServer(client);
 }
 
 public void OnClientDisconnect(int client)
 {
-    // 游戏事件 Hub 到不了 forward，直调各花名册除名/释放/接力
+    // 游戏事件 Hub 到不了 forward，直调各花名册除名/释放/接力与状态重置
+    Module5_OnClientDisconnect(client);
     Module7_OnClientDisconnect(client);
     Module9_OnClientDisconnect(client);
     Module10_OnClientDisconnect(client);

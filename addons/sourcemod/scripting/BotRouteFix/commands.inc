@@ -105,6 +105,18 @@ public Action Command_Status(int client, int args)
         strcopy(defuseStatus, sizeof(defuseStatus), "INACTIVE (Pending Signature)");
     }
     ReplyToCommand(client, "[BotRouteFix] [Module 10] CT Chief Defuser (Scenario)    : %s", defuseStatus);
+
+    char sniperStatus[64];
+    if (bMaster && IsSniperDeterrenceHooked())
+    {
+        Format(sniperStatus, sizeof(sniperStatus), "ACTIVE (%d deterred)", GetTotalSniperDeterred());
+    }
+    else
+    {
+        strcopy(sniperStatus, sizeof(sniperStatus), "INACTIVE (Pending Signature)");
+    }
+    ReplyToCommand(client, "[BotRouteFix] [Module 11] Sniper Corridor Danger & Retreat: %s", sniperStatus);
+
     if (bDebug)
     {
         int liveCarrier = Escort_GetCarrier();

@@ -46,7 +46,19 @@ bool InitSDKCalls()
         return false;
     }
 
-    LogMessage("[BotRouteFix] [SDKCalls] Follow & StopFollowing ready (carrier escort transport online)");
+    StartPrepSDKCall(SDKCall_Entity);
+    PrepSDKCall_SetFromConf(g_hGameConf, SDKConf_Signature, "CCSBot_ComputePath");
+    PrepSDKCall_AddParameter(SDKType_Vector, SDKPass_ByRef);
+    PrepSDKCall_AddParameter(SDKType_PlainOldData, SDKPass_Plain);
+    PrepSDKCall_SetReturnInfo(SDKType_Bool, SDKPass_Plain);
+    g_hSDKCall_ComputePath = EndPrepSDKCall();
+    if (g_hSDKCall_ComputePath == null)
+    {
+        LogError("[BotRouteFix] [SDKCalls] Failed to create SDKCall for CCSBot_ComputePath!");
+        return false;
+    }
+
+    LogMessage("[BotRouteFix] [SDKCalls] Core SDKCall table ready (Follow, StopFollowing, ComputePath)");
     return true;
 }
 
@@ -123,4 +135,22 @@ stock bool BotStopFollowing(int bot)
 
     SDKCall(g_hSDKCall_StopFollowing, bot);
     return true;
+}
+
+/**
+ * 计算指定 Bot 通往目标坐标的导航路径
+ *
+ * @param bot       Bot 客户端索引 (必须为存活有效 Bot)
+ * @param goal      目标世界坐标
+ * @param routeType 寻路策略 (0 = FASTEST_ROUTE, 1 = SAFEST_ROUTE)
+ * @return          是否成功生成路径
+ */
+stock bool BotComputePath(int bot, const float goal[3], int routeType = 0)
+{
+    if (g_hSDKCall_ComputePath == null || !IsBot(bot, true))
+    {
+        return false;
+    }
+
+    return SDKCall(g_hSDKCall_ComputePath, bot, goal, routeType);
 }

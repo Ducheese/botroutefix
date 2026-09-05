@@ -118,6 +118,26 @@
   - 首席选举：下包瞬间选距 `planted_c4` 最近存活 CT（欧氏距离 − 持钳 500，钳子 5 秒读条差的等效让分）；首席阵亡/掉线按缓存包坐标立即选下一顺位；拆掉/炸掉/开局/换图即清。
   - 与真人玩家的关系：选举不数真人玩家（`IsBot` 限定），出动尊重原生 `bot_defer_to_human`——默认开且 CT 有活人时首席坐板凳、bot 全员掩护；真人玩家死光原生翻 true，首席自动上，无需重选；defer 置 0 则全程按设计走，真人玩家抢拆时首席在原生让路逻辑下搁置，不打架。
 
+### 模块 11：狙击手威慑与走廊加压 (Sniper Deterrence & Corridor Danger)
+- **原生缺陷 (Sniper Peeking & Retreat Lockout)**：
+  - 当 Bot 遭遇敌方狙击手（`AWP` / `Scout` / `G3SG1` / `SG550`）时，原生仅通过 Chatter 报点（`SpottedSniper`），本体仍沿原生路径继续前推送命。
+  - 即使想要后撤，也受限于 `AttackState` 的 `< 35 HP` 残血门控、交火 7~10 秒 `isPinnedDown` 门控以及 3~15 秒撤退冷却限制，无法在满血或半血时及时避险。
+- **触发契约与武器豁免 (Trigger & Weapon Exemption)**：
+  - 挂载 `BotChatterInterface::SpottedSniper` Post 钩子，纯事件驱动，0 每帧扫描，0 模拟视觉与 Raycast 开销。
+  - 自身对狙豁免：若目击 Bot 自身主武器为狙击枪（`Sniper_IsSniper` 双重校验当前手持与 Slot 0 主武器），则放行原生逻辑，允许对位架枪反打。
+  - 原生上游节流保护：依托引擎底层 `BotChatterInterface` 内置的 Chatter 报点冷却，天然规避密集触发，杜绝短时间频繁重算与重复走廊钉刺。
+- **双轨目标定位与逆序回溯 (Dual-Path Threat Resolution)**：
+  - **路径 1（优先交火目标）**：直接读取 `m_enemy` 句柄（$O(1)$ 查找），若已锁定且为主武器持狙的敌方，即刻确立目标。
+  - **路径 2（瞬时感知队列回溯）**：若目击 Bot 尚未进入交火态（`m_enemy == 0xFFFFFFFF`），直接深入引擎内部感知队列 `m_enemyQueue`（由 `CCSBot::FindMostDangerousThreat` 每帧感知刷新），从 `m_enemyQueueIndex` 逆序回溯最近 20 帧的历史威胁实体，提取瞬间闪现的狙击手。
+  - **Slot 0 主武器双重校验**：不仅检查狙击手当前手持武器（`m_hActiveWeapon`），还穿透检查 Slot 0（主武器槽），杜绝敌方狙击手因切手枪、切刀或掏雷导致的威慑漏判。
+- **走廊加压与碎步打碎 (Corridor Danger & Route Shatter)**：
+  - 定位到狙击手后，调用引擎底层寻路函数 `CCSBot::ComputePath(spotter, sniperPos, 0)` 计算目击者直面狙击手的视线走廊。
+  - 遍历沿途前 10 个 NavArea 节点（从脚底起步），严格遵守 `1.0 / 120.0s` 自然衰减沉降契约，各钉刺 `+0.8f` 危险度（封顶 `2.5f`）并同步刷新时间戳，迫使后续全队寻路 A* 天然规避该交火走廊。
+  - 碎步打碎冲锋：清空 `m_pathLength = 0`、`m_pathIndex = 0`、`m_isStopping = 0`、`m_pathLadder = NULL`，强行截断当前面向狙击手的送命路线。
+- **脱战特权通道 (Forced Disengage Bypass)**：
+  - 联动模块 5 调用 `Combat_RequestSniperRetreat(spotter)`，开启单拍后撤特权通道。
+  - 穿透原生 `< 35 HP` 残血门控、清空 `m_pinnedDownTimestamp` 与 `m_retreatTimer` 冷却，使目击 Bot 在下一拍 `AttackState::OnUpdate` 时必走 `TryToRetreat()` 躲入掩体，实现“见狙立缩、封锁走廊、绕路迂回”的高拟真竞技战术行为！
+
 ---
 
 ## 目录结构
@@ -146,7 +166,8 @@ addons\sourcemod\
         ├── module7_escort.inc        [模块 7] T 包匪贴身保镖花名册 (Carrier Escort Roster)
         ├── module8_queue.inc         [模块 8] 门口礼貌排队打碎与掉头 (Polite Queue Breaker)
         ├── module9_loot.inc          [模块 9] 掉包 Top3 抢包花名册 (Loose-Bomb Fetch Roster)
-        └── module10_defuse.inc       [模块 10] CT 首席拆包员 (Chief Defuser)
+        ├── module10_defuse.inc       [模块 10] CT 首席拆包员 (Chief Defuser)
+        └── module11_sniper.inc       [模块 11] 狙击手威慑与走廊加压 (Sniper Deterrence & Corridor Danger)
 ```
 
 ---
@@ -163,7 +184,7 @@ addons\sourcemod\
 ### 控制台指令
 | 指令 | 权限 | 说明 |
 | :--- | :--- | :--- |
-| `sm_botroutefix_status` | 所有人 | 10 模块健康行（ACTIVE/INACTIVE，缺签名显示待机原因）+ 累积计数器（认领/闪避/后撤/拦截/打碎/选举/首席，单调递增、换图不清零）+ debug 专属 `[Live]` 段（活包匪士气、glBomb 状态、T/CT 平均士气与守点率，需 `sm_botroutefix_debug 1`） |
+| `sm_botroutefix_status` | 所有人 | 11 模块健康行（ACTIVE/INACTIVE，缺签名显示待机原因）+ 累积计数器（认领/闪避/后撤/拦截/打碎/选举/首席/狙击撤退，单调递增、换图不清零）+ debug 专属 `[Live]` 段（活包匪士气、glBomb 状态、T/CT 平均士气与守点率，需 `sm_botroutefix_debug 1`） |
 
 ---
 
@@ -198,5 +219,5 @@ addons\sourcemod\
 - **残局热重载状态同步（已显式移除）**：旧版曾在 `OnPluginStart` 中使用 `SyncMidRoundState` 探查当前残局下包与地面 C4 状态。模块化重构时已正式移除该复杂检测。若管理员在下包残局中途热重载插件，新插件实例不会在中途补发决策状态，将在下一回合 `round_start` 时完全自然自愈。
 
 ### 模块启动刚性容错策略 (Fail-Fast Startup Contract)
-- 主插件入口（`botroutefix.sp`）对全部 10 个业务模块的 `InitModule*()` 实施严格的刚性链式返回值检查。
-- 若因 Gamedata 签名失效、偏移未命中或二进制模板不匹配导致任何一个核心模块初始化失败，插件将立即调用 `SetFailState` 终止启动并报错，坚决杜绝“带病运行”导致的隐蔽战术逻辑割裂。例外：模块 8/10 在签名缺失时优雅待机（`INACTIVE (Pending Signature)`，不阻断全库启动）；模块 9 名册为空时行为回退原生（fail-open）。
+- 主插件入口（`botroutefix.sp`）对全部 11 个业务模块的 `InitModule*()` 实施严格的刚性链式返回值检查。
+- 若因 Gamedata 签名失效、偏移未命中或二进制模板不匹配导致任何一个核心模块初始化失败，插件将立即调用 `SetFailState` 终止启动并报错，坚决杜绝“带病运行”导致的隐蔽战术逻辑割裂。例外：模块 8/10/11 在签名缺失时优雅待机（`INACTIVE (Pending Signature)`，不阻断全库启动）；模块 9 名册为空时行为回退原生（fail-open）。

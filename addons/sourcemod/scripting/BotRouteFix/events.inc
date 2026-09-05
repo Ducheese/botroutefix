@@ -53,6 +53,7 @@ public void Event_RoundStart(Event event, const char[] name, bool dontBroadcast)
     // 回合重置，通知各模块执行新回合初始化
     Module2_OnRoundStart();
     Module3_OnRoundStart();
+    Module5_OnRoundStart();
     Module6_OnRoundStart();
     Module7_OnRoundStart();
     Module9_OnRoundStart();
@@ -117,6 +118,7 @@ public void Event_PlayerDeath(Event event, const char[] name, bool dontBroadcast
     if (IsValidClient(victim, false))
     {
         Module2_OnPlayerDeath(victim);
+        Module5_OnPlayerDeath(victim);
         Module7_OnPlayerDeath(victim);
         Module9_OnPlayerDeath(victim);
         Module10_OnPlayerDeath(victim);

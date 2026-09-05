@@ -201,6 +201,43 @@ void EnableModule5_Combat(bool enable)
     }
 }
 
+static bool g_bSniperRetreatWanted[MAXPLAYERS + 1];
+
+/**
+ * 模块 11 联动接口：请求对指定 Bot 发起狙击手强制撤退
+ */
+void Combat_RequestSniperRetreat(int client)
+{
+    if (client > 0 && client <= MaxClients)
+    {
+        g_bSniperRetreatWanted[client] = true;
+        g_flNextForcedRetreat[client] = 0.0;
+    }
+}
+
+/**
+ * 回合开始 (OnRoundStart)：新回合清空残留后撤请求与节流时间戳
+ */
+void Module5_OnRoundStart()
+{
+    for (int i = 0; i <= MaxClients; i++)
+    {
+        g_flNextForcedRetreat[i] = 0.0;
+        g_bSniperRetreatWanted[i] = false;
+    }
+}
+
+/**
+ * 玩家阵亡 (OnPlayerDeath)：阵亡玩家清空后撤请求
+ */
+void Module5_OnPlayerDeath(int victim)
+{
+    if (victim > 0 && victim <= MaxClients)
+    {
+        g_bSniperRetreatWanted[victim] = false;
+    }
+}
+
 /**
  * 地图加载 (OnMapStart)：curtime 归零，旧未来时间戳会误节流新图后撤，清节流数组
  */
@@ -209,6 +246,7 @@ void Module5_OnMapStart()
     for (int i = 0; i <= MaxClients; i++)
     {
         g_flNextForcedRetreat[i] = 0.0;
+        g_bSniperRetreatWanted[i] = false;
     }
 }
 
@@ -220,6 +258,19 @@ void Module5_OnClientPutInServer(int client)
     if (client > 0 && client <= MaxClients)
     {
         g_flNextForcedRetreat[client] = 0.0;
+        g_bSniperRetreatWanted[client] = false;
+    }
+}
+
+/**
+ * 客户端断开 (OnClientDisconnect)：清空玩家状态
+ */
+void Module5_OnClientDisconnect(int client)
+{
+    if (client > 0 && client <= MaxClients)
+    {
+        g_flNextForcedRetreat[client] = 0.0;
+        g_bSniperRetreatWanted[client] = false;
     }
 }
 
@@ -454,15 +505,21 @@ public MRESReturn Hook_AttackState_OnUpdate_Pre(Address pThis, DHookParam hParam
         return MRES_Ignored;
     }
 
-    // 检测血量是否低于阈值 (< 35 HP)
-    if (GetClientHealth(client) >= HEALTH_RETREAT_THRESHOLD)
+    bool bSniperRetreat = g_bSniperRetreatWanted[client];
+    if (bSniperRetreat)
+    {
+        g_bSniperRetreatWanted[client] = false;
+    }
+
+    // 检测血量是否低于阈值 (< 35 HP)，若收到狙击手强制撤退请求则直接放行进入撤退
+    if (!bSniperRetreat && GetClientHealth(client) >= HEALTH_RETREAT_THRESHOLD)
     {
         return MRES_Ignored;
     }
 
-    // 节流阀：防范无掩体死角反复失败导致每 Tick 暴力清零触发昂贵 A* 寻路尖峰
+    // 节流阀：防范无掩体死角反复失败导致每 Tick 暴力清零触发昂贵 A* 寻路尖峰（狙击手撤退优先放行）
     float curtime = GetGameTime();
-    if (curtime < g_flNextForcedRetreat[client])
+    if (!bSniperRetreat && curtime < g_flNextForcedRetreat[client])
     {
         return MRES_Ignored;
     }

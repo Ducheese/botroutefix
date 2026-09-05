@@ -310,6 +310,21 @@
 				"windows"	"4"
 				"windows64"	"8"
 			}
+			"CCSBot_Enemy_Offset"
+			{
+				"windows"	"15152"
+				"windows64"	"19208"
+			}
+			"CCSBot_EnemyQueue_Offset"
+			{
+				"windows"	"15804"
+				"windows64"	"19864"
+			}
+			"CCSBot_EnemyQueueIndex_Offset"
+			{
+				"windows"	"15964"
+				"windows64"	"20024"
+			}
 		}
 	}
 }
