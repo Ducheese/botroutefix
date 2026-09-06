@@ -7,7 +7,7 @@
 // MODULE 7: T C4 CARRIER ESCORT & BODYGUARD ROSTER
 //
 // 花名册制贴身保镖：按士气配 3-Morale 名保镖 Follow 包匪，绝境抱团、顺风放飞。
-//   - 距离一律欧氏 2D 平方（只比 X/Y，不看 Z）
+//   - 距离一律欧氏 3D 平方（含 Z，跨楼层天然排后）
 //   - 全量重算只做 diff；减员按调用时实时士气重算编制，多退少补
 //   - 纯事件驱动，无 timer；运包时钟归 module2，本模块永不写时钟
 //========================================================================================
@@ -85,12 +85,13 @@ static void Escort_RemoveFromRoster(int bot)
     }
 }
 
-// 欧氏 2D 平方距离（只比 X/Y；排序用途，与 GetVectorDistance(..., true) 的相对顺序一致）
-static float Escort_FlatDistSq(float a[3], float b[3])
+// 欧氏 3D 平方距离（含 Z，跨楼层保镖天然排后；排序用途）
+static float Escort_DistSq(float a[3], float b[3])
 {
     float dx = a[0] - b[0];
     float dy = a[1] - b[1];
-    return dx * dx + dy * dy;
+    float dz = a[2] - b[2];
+    return dx * dx + dy * dy + dz * dz;
 }
 
 // 在名单之外按 anchor（排序基准，一般取包匪坐标）挑最近的 need 个写入 result[]，
@@ -111,7 +112,7 @@ static int Escort_PickClosest(float anchor[3], int carrier, int need, int result
         GetClientAbsOrigin(i, pos);
 
         pool[poolCount].client = i;
-        pool[poolCount].dist = Escort_FlatDistSq(pos, anchor);
+        pool[poolCount].dist = Escort_DistSq(pos, anchor);
         poolCount++;
     }
 
@@ -158,7 +159,7 @@ static void Escort_TrimToTarget(float anchor[3], int desired)
 
             float pos[3];
             GetClientAbsOrigin(bot, pos);
-            float d = Escort_FlatDistSq(pos, anchor);
+            float d = Escort_DistSq(pos, anchor);
             if (d > farD)
             {
                 farD = d;

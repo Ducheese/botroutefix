@@ -34,6 +34,7 @@
 #include "BotRouteFix/memory"
 #include "BotRouteFix/helpers"
 #include "BotRouteFix/sdkcalls"
+#include "BotRouteFix/nav_measure"
 #include "BotRouteFix/module1_defense"
 #include "BotRouteFix/module2_bombsite"
 #include "BotRouteFix/module3_danger"
@@ -98,6 +99,9 @@ public void OnPluginStart()
         SetFailState("[BotRouteFix] Core SDKCall table failed to initialize! Aborting plugin startup.");
         return;
     }
+
+    // 4b. NavMeasure soft init (standby on missing offsets, never fail-fast)
+    InitNavMeasure();
 
     // 5. Initialize business modules (fail-fast: abort startup if any module fails)
     if (!InitModule1_Defense() || !InitModule2_Bombsite() || !InitModule3_Danger()

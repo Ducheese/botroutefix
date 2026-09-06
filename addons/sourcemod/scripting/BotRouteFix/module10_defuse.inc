@@ -21,7 +21,7 @@
 //    - Hide:337 → 纯 Encourage 喊话（3-15 秒节流），进就进了；
 //    - Idle:775 → 人质图分支，de_ 图 planted 为真时到不了；
 //    - 其余（Hunt:102/MoveTo:170/Hide:147）只读 true 分支做退出，false 即"继续蹲"，正是要的。
-// 5. 首席选举（全事件，无 timer）：bomb_planted 选距包最近存活 CT bot（欧氏 − 持钳）；player_death 首席倒地
+// 5. 首席选举（全事件，无 timer）：bomb_planted 选距包最近存活 CT bot（行走距离 − 持钳）；player_death 首席倒地
 //    立即按缓存包坐标重选（planted_c4 实体下包后一直在）；defused/exploded/round_start 清。
 //    选举无视 bot_defer_to_human，出动尊重原生：首席在钩子里直通——defer 关照去，真人玩家抢拆则
 //    原生让路；defer 开且有真人玩家，首席坐板凳，真人玩家死光原生翻 true 自动上，无需重选。
@@ -52,11 +52,18 @@ static bool Defuse_ReadBombPos()
     return false;
 }
 
-// 在存活 CT bot 里选首席：欧氏距离 − 持钳加成（选举与接力共用；无视真人玩家，见文件头 §5）
+// 在存活 CT bot 里选首席：真实地面行走距离 − 持钳加成（选举与接力共用；无视真人玩家，见文件头 §5）
+// 无损实测（备份/还原移动状态），跨楼层不可达跳过不参评，全员不可达则无首席全员放行；测距未就绪直接无首席回原生
 static int Defuse_SelectBest()
 {
+    if (!BotNavReady())
+    {
+        return -1;
+    }
+
     int best = -1;
     float bestScore = 9999999.0;
+    bool anyReachable = false;
     for (int i = 1; i <= MaxClients; i++)
     {
         if (!IsBot(i, true) || GetClientTeam(i) != 3)
@@ -64,9 +71,15 @@ static int Defuse_SelectBest()
             continue;
         }
 
-        float pos[3];
-        GetClientAbsOrigin(i, pos);
-        float score = GetVectorDistance(pos, g_fBombPos);
+        // 寻路不可达直接跳过不参评（持钳也不加分，避免到不了的人靠钳当选）
+        float walk = BotNavWalkDistance(i, g_fBombPos);
+        if (walk < 0.0)
+        {
+            continue;
+        }
+        anyReachable = true;
+
+        float score = walk;
         if (GetEntProp(i, Prop_Send, "m_bHasDefuser") == 1)
         {
             score -= DEFUSE_KIT_BONUS;
@@ -76,6 +89,12 @@ static int Defuse_SelectBest()
             bestScore = score;
             best = i;
         }
+    }
+
+    // 全员不可达：无首席，全员放行回原生（不断谁的 scenario 逻辑）
+    if (!anyReachable)
+    {
+        return -1;
     }
     return best;
 }
