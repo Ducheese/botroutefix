@@ -16,6 +16,7 @@
 //    - 触发源：挂载 BotChatterInterface::SpottedSniper Post 钩子，纯事件驱动，0 模拟视觉开销；
 //    - 自身校验：若目击者自己持有狙击枪（AWP/Scout/连狙），放行对狙博弈；
 //    - 战术豁免：下包后 CT 见狙禁撤（争分夺秒回防拆包），T 进包点后见狙禁撤（坚守包点与强行下包）；
+//    - 贴脸不撤：距狙 < 265 units 只钉走廊不请求撤退（近距离跑路等于送背）；
 //    - 敌方狙击手定位：双轨确定性解析（0 Raycast、0 全图盲搜）：
 //      1) 优先读取 spotter 的 m_enemy 句柄（处于交火态时直接锁定目标）；
 //      2) 路径 2：若 m_enemy 尚未锁定（如移动/非交火状态），直接从 CCSBot::UpdateReactionQueue
@@ -29,6 +30,9 @@
 #define SNIPER_NAIL_DANGER      0.8
 #define SNIPER_NAIL_MAX         2.5
 #define SNIPER_MAX_STEPS        20
+
+// 贴脸不撤距离（units）：距狙小于此值只钉走廊不请求撤退（近距离跑路等于送背）
+#define SNIPER_NO_RETREAT_DIST  265.0
 
 // 本模块私有状态
 static Handle g_hSpottedSniperDetour = null;
@@ -302,6 +306,11 @@ public MRESReturn Hook_SpottedSniper_Post(Address pThis, DHookParam hParams)
 
     int teamIdx = spotterTeam - 2;
 
+    // 4b. 贴脸不撤：距狙 265 内跑路等于送背，只钉走廊（团队情报）不请求撤退
+    float spotterPos[3];
+    GetClientAbsOrigin(spotter, spotterPos);
+    bool tooClose = (GetVectorDistance(spotterPos, sniperPos) < SNIPER_NO_RETREAT_DIST);
+
     Address pBot = GetEntityAddress(spotter);
     if (pBot == Address_Null)
     {
@@ -346,11 +355,21 @@ public MRESReturn Hook_SpottedSniper_Post(Address pThis, DHookParam hParams)
         StoreAddressToAddress(pBot + view_as<Address>(g_iOffset_PathLadder), Address_Null);
     }
 
-    // 7. 联动模块 5 机制：穿透撤退冷却，迫使下一拍立即执行 TryToRetreat 进掩体
-    Combat_RequestSniperRetreat(spotter);
+    // 7. 联动模块 5 机制：穿透撤退冷却，迫使下一拍立即执行 TryToRetreat 进掩体（贴脸不撤）
+    if (!tooClose)
+    {
+        Combat_RequestSniperRetreat(spotter);
+    }
 
     g_iTotalSniperDeterred++;
-    DebugLog("[BotRouteFix] [Module 11] Bot %N spotted sniper %N, nailed corridor danger and retreated", spotter, sniper);
+    if (tooClose)
+    {
+        DebugLog("[BotRouteFix] [Module 11] Bot %N spotted sniper %N at close range, nailed corridor danger (no retreat)", spotter, sniper);
+    }
+    else
+    {
+        DebugLog("[BotRouteFix] [Module 11] Bot %N spotted sniper %N, nailed corridor danger and retreated", spotter, sniper);
+    }
     return MRES_Ignored;
 }
 

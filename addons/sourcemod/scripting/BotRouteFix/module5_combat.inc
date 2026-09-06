@@ -4,7 +4,7 @@
 #define _botroutefix_module5_combat_included
 
 //========================================================================================
-// [模块 5] 战斗决策重构 (AttackState 闪避 100% 强制与换弹进掩体 100% 强制)
+// [模块 5] 战斗决策重构 (AttackState 闪避 100% 强制、换弹进掩体 100% 强制、残血/一打多强制后撤)
 //
 // 业务背景与引擎逆向分析：
 //
@@ -61,6 +61,12 @@
 //        * 将 `m_retreatTimer` 冷却清空，使 `IsElapsed()` 立即成立；
 //        强行撕开原版交火时长与退避冷却的硬性封锁，促使下一帧引擎原生撤退段立即执行 `TryToRetreat()` 尝试后撤，
 //        成功即转入 `HideState`，杜绝残血时因计时器死锁而在开阔地白给。
+//
+// 4. 孤身一打多强制后撤 (Outnumbered Forced Retreat via SDKCall):
+//    - 源码逻辑 (cs_bot.cpp:606-621): `IsOutnumbered() = 友 < 敌-1`（自己不占名额，1v2 起算），
+//      计数读 3 秒视觉记忆表 `m_nearbyFriendCount/m_nearbyEnemyCount`，非距离圈；原生走 c 支骰子/aggr 全绕过。
+//    - 解决机制: 同一 Pre 钩子里直调 `CCSBot::IsOutnumbered`，确认被包后再读原生 `m_nearbyFriendCount`，
+//      视野内有队友（2v3/2v4）放行交火，仅计数为 0 的真 1v 多才写同一两处焊门内存；与残血共用 1.5 秒节流阀。
 //========================================================================================
 
 #define HEALTH_RETREAT_THRESHOLD 35

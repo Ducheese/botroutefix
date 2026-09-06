@@ -14,7 +14,8 @@
 // 2. 卡门：只钩这一个查询函数，两条路全堵。CT 走 CanSeeLooseBomb（另一个函数），碰不到。
 // 3. 花名册（与模块 7 同构，全事件驱动，无 timer）：
 //    - bomb_dropped：递延一帧（等归属落定）后以掉包点（无主 weapon_c4 实体坐标，零耦合不读模块 7）为圆心，
-//      欧氏取最近 3 存活 T bot；选举失败（找不到掉包）→ 空名册 = 全体放行回原生；
+ //      真实地面行走距离（BotNavWalkDistance 无损实测）取最近 3 存活 T bot，不可达跳过；
+ //      选举失败（找不到掉包）或测距未就绪 → 空名册 = 全体放行回原生；
 //    - player_death / client_disconnect：除名 + 按掉包点就近回补（共用同一函数；名单有效时 C4 必躺掉包点，
 //      按掉包点招人即按 C4 位置招人）——必选项，否则减员到全灭即全员 false，包烂地上没人捡（比原版更糟的死锁）；
 //    - item_pickup(c4)/round_start：清（FetchBombState:58 有人捡包自己散伙）。
@@ -85,6 +86,14 @@ static void Loot_ElectRoster()
     }
     g_fDropPos = dropPos;
 
+    // 测距未就绪：无名单，全员放行回原生（不拿欧氏混分）
+    if (!BotNavReady())
+    {
+        Loot_ClearRoster();
+        DebugLog("[BotRouteFix] [Module 9] NavMeasure standby, fail-open to native");
+        return;
+    }
+
     float bestDist[LOOT_ROSTER_SIZE];
     for (int i = 0; i < LOOT_ROSTER_SIZE; i++)
     {
@@ -98,9 +107,12 @@ static void Loot_ElectRoster()
             continue;
         }
 
-        float pos[3];
-        GetClientAbsOrigin(i, pos);
-        float dist = GetVectorDistance(pos, dropPos);
+        // 真实地面行走距离选人；不可达跳过（跨楼层够不着的不选）
+        float dist = BotNavWalkDistance(i, dropPos);
+        if (dist < 0.0)
+        {
+            continue;
+        }
 
         for (int slot = 0; slot < LOOT_ROSTER_SIZE; slot++)
         {
@@ -324,9 +336,11 @@ static void Loot_RemoveAndBackfill(int client, const char[] reason)
             continue;
         }
 
-        float pos[3];
-        GetClientAbsOrigin(i, pos);
-        float dist = GetVectorDistance(pos, g_fDropPos);
+        float dist = BotNavWalkDistance(i, g_fDropPos);
+        if (dist < 0.0)
+        {
+            continue;
+        }
         if (dist < bestDist)
         {
             bestDist = dist;
