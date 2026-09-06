@@ -58,7 +58,7 @@ public Action Command_Status(int client, int args)
         (bMaster && IsAttackDodgeHooked()) ? "ACTIVE" : "INACTIVE", GetTotalDodgeForced());
     ReplyToCommand(client, "[BotRouteFix] [Module 5] Reload Hide 100%% Patch           : %s",
         (bMaster && IsReloadHidePatched()) ? "ACTIVE" : "INACTIVE");
-    ReplyToCommand(client, "[BotRouteFix] [Module 5] Attack Low-HP Retreat (<35 HP)    : %s (%d Retreats)",
+    ReplyToCommand(client, "[BotRouteFix] [Module 5] Attack Forced Retreat (Low-HP/Outnumbered): %s (%d Retreats)",
         (bMaster && IsAttackRetreatHooked()) ? "ACTIVE" : "INACTIVE", GetTotalRetreatTriggered());
     ReplyToCommand(client, "[BotRouteFix] [Module 6] InvestigateNoise Audio Intercept  : %s (%d Blocked / %d Allowed)",
         (bMaster && IsInvestigateNoiseHooked()) ? "ACTIVE" : "INACTIVE", GetTotalNoiseIntercepted(), GetTotalNoiseAllowed());

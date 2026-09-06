@@ -13,7 +13,7 @@
 // 原生 2~5 秒那套还在后面兜底：我们先清了它到点就跳过；我们没赶上它照旧散。双向交接，无 timer 轮询。
 //========================================================================================
 
-#define QUEUE_BREAKER_TIMEOUT 1.2
+#define QUEUE_BREAKER_TIMEOUT 2.0
 #define QUEUE_NAIL_DANGER 0.8
 #define QUEUE_NAIL_MAX 2.5
 

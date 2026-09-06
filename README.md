@@ -126,6 +126,9 @@
   - 挂载 `BotChatterInterface::SpottedSniper` Post 钩子，纯事件驱动，0 每帧扫描，0 模拟视觉与 Raycast 开销。
   - 自身对狙豁免：若目击 Bot 自身主武器为狙击枪（`Sniper_IsSniper` 双重校验当前手持与 Slot 0 主武器），则放行原生逻辑，允许对位架枪反打。
   - 原生上游节流保护：依托引擎底层 `BotChatterInterface` 内置的 Chatter 报点冷却，天然规避密集触发，杜绝短时间频繁重算与重复走廊钉刺。
+- **核心战术豁免 (Tactical Retreat Exemptions)**：
+  - **下包后 CT 见狙禁撤**：C4 成功安放后（`g_bBombPlanted`），CT 阵营 Bots 见狙击手绝对不可后撤逃跑，必须争分夺秒回防进点拆包，杜绝因掩体寻路掉头跑回老家送掉对局。
+  - **T 进包点后见狙禁撤**：T 阵营 Bots 进入包点范围后（`m_bInBombZone` 为真），见狙击手绝对不可后撤逃跑，必须坚守包点掩体、压制点内敌人或强行下包，杜绝拿包进点后因受击掉头缩回包点外通道。
 - **双轨目标定位与逆序回溯 (Dual-Path Threat Resolution)**：
   - **路径 1（优先交火目标）**：直接读取 `m_enemy` 句柄（$O(1)$ 查找），若已锁定且为主武器持狙的敌方，即刻确立目标。
   - **路径 2（瞬时感知队列回溯）**：若目击 Bot 尚未进入交火态（`m_enemy == 0xFFFFFFFF`），直接深入引擎内部感知队列 `m_enemyQueue`（由 `CCSBot::FindMostDangerousThreat` 每帧感知刷新），从 `m_enemyQueueIndex` 逆序回溯最近 20 帧的历史威胁实体，提取瞬间闪现的狙击手。

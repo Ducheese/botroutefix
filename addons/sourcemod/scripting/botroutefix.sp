@@ -12,12 +12,13 @@
 //   - BotRouteFix/module2_bombsite.inc: [模块 2] T 运包时钟士气映射与开局包点随机锁定 (Bombsite & Plant Clock)
 //   - BotRouteFix/module3_danger.inc  : [模块 3] CNavArea 危险度开局软衰减 (NavArea Danger Soft-Decay)
 //   - BotRouteFix/module4_hunt.inc    : [模块 4] HuntState 搜敌机制重构 (45秒老家破除、时间戳认领与随机覆盖 NOP)
-//   - BotRouteFix/module5_combat.inc  : [模块 5] 战斗决策重构 (AttackState 闪避 100% 强制与换弹进掩体 100% 强制)
+//   - BotRouteFix/module5_combat.inc  : [模块 5] 战斗决策重构 (AttackState 闪避 100% 强制、换弹进掩体 100% 强制与残血后撤)
 //   - BotRouteFix/module6_tmorale.inc : [模块 6] T 阵营士气接战策略与守包听觉出击梯度 (TMorale)
 //   - BotRouteFix/module7_escort.inc  : [模块 7] T 包匪贴身保镖花名册 (Carrier Escort Roster)
 //   - BotRouteFix/module8_queue.inc   : [模块 8] 礼貌排队打碎与门口掉头 (Queue Breaker, UpdatePathMovement Post)
 //   - BotRouteFix/module9_loot.inc    : [模块 9] 掉包 Top3 抢包花名册 (Loot Roster, NoticeLooseBomb Pre)
 //   - BotRouteFix/module10_defuse.inc : [模块 10] CT 首席拆包员 (Chief Defuser, IsDoingScenario Pre)
+//   - BotRouteFix/module11_sniper.inc : [模块 11] 狙击手威慑与走廊加压 (Sniper Deterrence & Corridor Danger)
 //========================================================================================
 
 #pragma semicolon 1

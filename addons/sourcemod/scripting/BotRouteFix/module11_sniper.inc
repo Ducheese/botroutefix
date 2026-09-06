@@ -15,6 +15,7 @@
 // 2. 战术闭环设计：
 //    - 触发源：挂载 BotChatterInterface::SpottedSniper Post 钩子，纯事件驱动，0 模拟视觉开销；
 //    - 自身校验：若目击者自己持有狙击枪（AWP/Scout/连狙），放行对狙博弈；
+//    - 战术豁免：下包后 CT 见狙禁撤（争分夺秒回防拆包），T 进包点后见狙禁撤（坚守包点与强行下包）；
 //    - 敌方狙击手定位：双轨确定性解析（0 Raycast、0 全图盲搜）：
 //      1) 优先读取 spotter 的 m_enemy 句柄（处于交火态时直接锁定目标）；
 //      2) 路径 2：若 m_enemy 尚未锁定（如移动/非交火状态），直接从 CCSBot::UpdateReactionQueue
@@ -269,10 +270,28 @@ public MRESReturn Hook_SpottedSniper_Post(Address pThis, DHookParam hParams)
         return MRES_Ignored;
     }
 
+    int spotterTeam = GetClientTeam(spotter);
+    if (spotterTeam != 2 && spotterTeam != 3)
+    {
+        return MRES_Ignored;
+    }
+
+    // 2. 下包后，CT 见狙击手不可以撤（争分夺秒回防拆包）
+    if (g_bBombPlanted && spotterTeam == 3)
+    {
+        return MRES_Ignored;
+    }
+
+    // 3. T 进包点后，见狙击手不可以撤（坚守包点阵地与强行下包）
+    if (spotterTeam == 2 && GetEntProp(spotter, Prop_Send, "m_bInBombZone") != 0)
+    {
+        return MRES_Ignored;
+    }
+
     // 原生 20 秒节流在上游按人头卡着，per-bot 节流永远轮不到，直接走
     float curtime = GetGameTime();
 
-    // 2. 锁定敌方狙击手坐标
+    // 4. 锁定敌方狙击手坐标
     float sniperPos[3];
     int sniper = Sniper_FindTargetSniper(spotter, sniperPos);
     if (sniper == -1)
@@ -281,11 +300,6 @@ public MRESReturn Hook_SpottedSniper_Post(Address pThis, DHookParam hParams)
         return MRES_Ignored;
     }
 
-    int spotterTeam = GetClientTeam(spotter);
-    if (spotterTeam != 2 && spotterTeam != 3)
-    {
-        return MRES_Ignored;
-    }
     int teamIdx = spotterTeam - 2;
 
     Address pBot = GetEntityAddress(spotter);
@@ -294,7 +308,7 @@ public MRESReturn Hook_SpottedSniper_Post(Address pThis, DHookParam hParams)
         return MRES_Ignored;
     }
 
-    // 3. 计算到狙击手的走廊路径，并为沿途 NavArea 钉上 +0.8f 危险度
+    // 5. 计算到狙击手的走廊路径，并为沿途 NavArea 钉上 +0.8f 危险度
     if (BotComputePath(spotter, sniperPos, 0))
     {
         if (g_iOffset_PathLength > 0 && g_iOffset_Path > 0 && g_iPathStride > 0)
@@ -314,7 +328,7 @@ public MRESReturn Hook_SpottedSniper_Post(Address pThis, DHookParam hParams)
         }
     }
 
-    // 4. 立即打碎前进路径，迫使 Bot 停步并重新评估
+    // 6. 立即打碎前进路径，迫使 Bot 停步并重新评估
     if (g_iOffset_IsStopping > 0)
     {
         StoreToAddress(pBot + view_as<Address>(g_iOffset_IsStopping), 0, NumberType_Int8);
@@ -332,7 +346,7 @@ public MRESReturn Hook_SpottedSniper_Post(Address pThis, DHookParam hParams)
         StoreAddressToAddress(pBot + view_as<Address>(g_iOffset_PathLadder), Address_Null);
     }
 
-    // 5. 联动模块 5 机制：穿透撤退冷却，迫使下一拍立即执行 TryToRetreat 进掩体
+    // 7. 联动模块 5 机制：穿透撤退冷却，迫使下一拍立即执行 TryToRetreat 进掩体
     Combat_RequestSniperRetreat(spotter);
 
     g_iTotalSniperDeterred++;

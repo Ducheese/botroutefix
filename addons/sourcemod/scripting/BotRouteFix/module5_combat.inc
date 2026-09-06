@@ -80,6 +80,7 @@ static int g_iOffset_PinnedDownTimestamp = -1;
 static int g_iOffset_MRetreatTimer = -1;
 static int g_iOffset_TimerTimestamp = -1;
 static int g_iOffset_TimerDuration = -1;
+static int g_iOffset_NearbyFriendCount = -1;
 
 /**
  * 初始化模块 5 所需的偏移、内存补丁与 DHook Detour
@@ -100,9 +101,11 @@ bool InitModule5_Combat()
     g_iOffset_MRetreatTimer       = GameConfGetOffset(g_hGameConf, "AttackState_MRetreatTimer_Offset");
     g_iOffset_TimerTimestamp      = GameConfGetOffset(g_hGameConf, "CountdownTimer_Timestamp_Offset");
     g_iOffset_TimerDuration       = GameConfGetOffset(g_hGameConf, "CountdownTimer_Duration_Offset");
+    g_iOffset_NearbyFriendCount   = GameConfGetOffset(g_hGameConf, "CCSBot_NearbyFriendCount_Offset");
 
     if (g_iOffset_AttackShouldDodge == -1 || g_iOffset_PinnedDownTimestamp == -1 ||
-        g_iOffset_MRetreatTimer == -1 || g_iOffset_TimerTimestamp == -1 || g_iOffset_TimerDuration == -1)
+        g_iOffset_MRetreatTimer == -1 || g_iOffset_TimerTimestamp == -1 || g_iOffset_TimerDuration == -1 ||
+        g_iOffset_NearbyFriendCount == -1)
     {
         LogError("[BotRouteFix] [Module 5] Failed to read one or more combat/retreat offsets from gamedata!");
         return false;
@@ -129,7 +132,7 @@ bool InitModule5_Combat()
         return false;
     }
 
-    LogMessage("[BotRouteFix] [Module 5] Combat overhaul active (Dodge 100%% + Reload Hide 100%% + Low-HP Retreat @ %d HP) [%s]",
+    LogMessage("[BotRouteFix] [Module 5] Combat overhaul active (Dodge 100%% + Reload Hide 100%% + Low-HP Retreat @ %d HP + Outnumbered Retreat) [%s]",
         HEALTH_RETREAT_THRESHOLD, g_bIsWin64 ? "64-bit" : "32-bit");
     return true;
 }
@@ -494,7 +497,7 @@ public MRESReturn Hook_AttackState_OnUpdate_Pre(Address pThis, DHookParam hParam
         return MRES_Ignored;
     }
 
-    if (g_iOffset_PinnedDownTimestamp <= 0 || g_iOffset_MRetreatTimer <= 0)
+    if (g_iOffset_PinnedDownTimestamp <= 0 || g_iOffset_MRetreatTimer <= 0 || g_iOffset_NearbyFriendCount <= 0)
     {
         return MRES_Ignored;
     }
@@ -511,10 +514,29 @@ public MRESReturn Hook_AttackState_OnUpdate_Pre(Address pThis, DHookParam hParam
         g_bSniperRetreatWanted[client] = false;
     }
 
-    // 检测血量是否低于阈值 (< 35 HP)，若收到狙击手强制撤退请求则直接放行进入撤退
+    // 检测血量是否低于阈值 (< 35 HP)，若收到狙击手强制撤退请求则直接放行进入撤退；
+    // 血量不低时直调原生 IsOutnumbered 确认是否被包围（读视觉记忆表，不经过原生骰子/aggr），
+    // 再读原生 m_nearbyFriendCount：视野内有队友（2v3/2v4）不撤，只在真正 1v多（计数为 0）时撤
+    bool bOutnumbered = false;
     if (!bSniperRetreat && GetClientHealth(client) >= HEALTH_RETREAT_THRESHOLD)
     {
-        return MRES_Ignored;
+        if (!BotIsOutnumbered(client))
+        {
+            return MRES_Ignored;
+        }
+
+        Address pBot = GetEntityAddress(client);
+        if (pBot == Address_Null)
+        {
+            return MRES_Ignored;
+        }
+        int nearbyFriends = LoadFromAddress(pBot + view_as<Address>(g_iOffset_NearbyFriendCount), NumberType_Int32);
+        if (nearbyFriends > 0)
+        {
+            return MRES_Ignored;
+        }
+
+        bOutnumbered = true;
     }
 
     // 节流阀：防范无掩体死角反复失败导致每 Tick 暴力清零触发昂贵 A* 寻路尖峰（狙击手撤退优先放行）
@@ -543,5 +565,9 @@ public MRESReturn Hook_AttackState_OnUpdate_Pre(Address pThis, DHookParam hParam
     g_iTotalRetreatTriggered++;
     // DebugLog("[BotRouteFix] [Module 5] Low-HP bot %N (HP: %d) forced retreat via pinnedDown",
     //     client, GetClientHealth(client));
+    if (bOutnumbered)
+    {
+        // DebugLog("[BotRouteFix] [Module 5] Outnumbered bot %N forced retreat via confirm (no dice)", client);
+    }
     return MRES_Ignored;
 }

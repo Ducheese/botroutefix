@@ -14,11 +14,10 @@
 Handle g_hSDKCall_Follow           = null;
 Handle g_hSDKCall_StopFollowing    = null;
 Handle g_hSDKCall_ComputePath      = null;
-Handle g_hSDKCall_Hide             = null;
-Handle g_hSDKCall_GetRandomArea    = null;
+Handle g_hSDKCall_IsOutnumbered    = null;
 
 /**
- * 初始化底层 SDKCall 调用表（保镖随行先行；Hide/ComputePath 随拆包/捡包模块落地）
+ * 初始化底层 SDKCall 调用表
  */
 bool InitSDKCalls()
 {
@@ -58,7 +57,18 @@ bool InitSDKCalls()
         return false;
     }
 
-    LogMessage("[BotRouteFix] [SDKCalls] Core SDKCall table ready (Follow, StopFollowing, ComputePath)");
+    LogMessage("[BotRouteFix] [SDKCalls] Core SDKCall table ready (Follow, StopFollowing, ComputePath, IsOutnumbered)");
+
+    StartPrepSDKCall(SDKCall_Entity);
+    PrepSDKCall_SetFromConf(g_hGameConf, SDKConf_Signature, "CCSBot_IsOutnumbered");
+    PrepSDKCall_SetReturnInfo(SDKType_Bool, SDKPass_Plain);
+    g_hSDKCall_IsOutnumbered = EndPrepSDKCall();
+    if (g_hSDKCall_IsOutnumbered == null)
+    {
+        LogError("[BotRouteFix] [SDKCalls] Failed to create SDKCall for CCSBot_IsOutnumbered!");
+        return false;
+    }
+
     return true;
 }
 
@@ -85,16 +95,10 @@ void CleanupSDKCalls()
         g_hSDKCall_ComputePath = null;
     }
 
-    if (g_hSDKCall_Hide != null)
+    if (g_hSDKCall_IsOutnumbered != null)
     {
-        delete g_hSDKCall_Hide;
-        g_hSDKCall_Hide = null;
-    }
-
-    if (g_hSDKCall_GetRandomArea != null)
-    {
-        delete g_hSDKCall_GetRandomArea;
-        g_hSDKCall_GetRandomArea = null;
+        delete g_hSDKCall_IsOutnumbered;
+        g_hSDKCall_IsOutnumbered = null;
     }
 }
 
@@ -153,4 +157,20 @@ stock bool BotComputePath(int bot, const float goal[3], int routeType = 0)
     }
 
     return SDKCall(g_hSDKCall_ComputePath, bot, goal, routeType);
+}
+
+/**
+ * 直调原生一打多判定（CCSBot::IsOutnumbered，友 < 敌-1，读视觉记忆表计数值）
+ *
+ * @param bot       Bot 客户端索引 (必须为存活有效 Bot)
+ * @return          是否被包围（句柄无效一律按未包围处理，fail-open）
+ */
+stock bool BotIsOutnumbered(int bot)
+{
+    if (g_hSDKCall_IsOutnumbered == null || !IsBot(bot, true))
+    {
+        return false;
+    }
+
+    return SDKCall(g_hSDKCall_IsOutnumbered, bot);
 }
