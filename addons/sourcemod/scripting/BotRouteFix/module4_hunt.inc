@@ -217,6 +217,38 @@ static bool PrepHuntRandomBypassPatch()
 
     if (!isExpected)
     {
+        // 主偏移模板失配时试备用偏移（v91/v92 同函数差 3 字节：1241/1238），命中即迁址
+        int altOffset = GameConfGetOffset(g_hGameConf, "HuntState_RandomBypass_PatchOffset_Alt");
+        if (altOffset != -1 && altOffset != patchOffset)
+        {
+            Address altAddr = sigAddr + view_as<Address>(altOffset);
+            bool altExpected = false;
+            if (g_bIsWin64)
+            {
+                altExpected = (LoadFromAddress(altAddr, NumberType_Int8) == 0x49
+                    && LoadFromAddress(altAddr + view_as<Address>(1), NumberType_Int8) == 0x89
+                    && LoadFromAddress(altAddr + view_as<Address>(2), NumberType_Int8) == 0x56
+                    && LoadFromAddress(altAddr + view_as<Address>(3), NumberType_Int8) == 0x08);
+            }
+            else
+            {
+                altExpected = (LoadFromAddress(altAddr, NumberType_Int8) == 0x89
+                    && LoadFromAddress(altAddr + view_as<Address>(1), NumberType_Int8) == 0x4B
+                    && LoadFromAddress(altAddr + view_as<Address>(2), NumberType_Int8) == 0x04);
+            }
+
+            if (altExpected)
+            {
+                LogMessage("[BotRouteFix] [Module 4] Random bypass relocated to alt offset %d @ %X", altOffset, altAddr);
+                targetAddr = altAddr;
+                g_PatchHuntRandomBypass.Init("HuntRandom_NOP", targetAddr, patchSize);
+                isExpected = true;
+            }
+        }
+    }
+
+    if (!isExpected)
+    {
         LogMessage("[BotRouteFix] [Module 4] Warning: Random bypass template mismatch @ %X, bypass skipped (flush-only mode)!", targetAddr);
         return false;
     }

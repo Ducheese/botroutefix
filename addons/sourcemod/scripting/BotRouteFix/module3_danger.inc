@@ -306,7 +306,13 @@ static bool ResolveTheNavAreas()
             return false;
         }
 
+        LogMessage("[BotRouteFix] [Module 3] Hunt anchor @ %X, scanning nav-array pairs...", huntAddr);
+
+        // 逐个验候选 pair：base 先过邻近性检查（相对 anchor ±8MB，防野地址读崩服；
+        // 不写死 0x10000000 基址——某些加载器会把 server.dll 重定基到 0x65 等他址），
+        // 再验 count 是否 sane；首个全过即用；全灭则报错供诊断。
         Address pairAddr = Address_Null;
+        int seenPairs = 0;
         for (int off = 0; off < 0x700; off++)
         {
             if (LoadFromAddress(huntAddr + view_as<Address>(off), NumberType_Int8) == 0x8B
@@ -315,23 +321,50 @@ static bool ResolveTheNavAreas()
                 && LoadFromAddress(huntAddr + view_as<Address>(off + 7), NumberType_Int8) == 0x0C
                 && LoadFromAddress(huntAddr + view_as<Address>(off + 8), NumberType_Int8) == 0x91)
             {
-                pairAddr = huntAddr + view_as<Address>(off);
+                seenPairs++;
+                Address candAddr = huntAddr + view_as<Address>(off);
+                int candBase = LoadFromAddress(candAddr + view_as<Address>(2), NumberType_Int32);
+
+                int baseDelta = candBase - view_as<int>(huntAddr);
+                if (baseDelta < 0)
+                {
+                    baseDelta = -baseDelta;
+                }
+                if (baseDelta > 0x800000)
+                {
+                    LogMessage("[BotRouteFix] [Module 3] Candidate pair @ %X skipped (base %X too far from anchor)",
+                        candAddr, candBase);
+                    continue;
+                }
+
+                int candCount = LoadFromAddress(view_as<Address>(candBase + 12), NumberType_Int32);
+                if (candCount < 0 || candCount > 100000)
+                {
+                    LogMessage("[BotRouteFix] [Module 3] Candidate pair @ %X skipped (count %d insane)",
+                        candAddr, candCount);
+                    continue;
+                }
+
+                pairAddr = candAddr;
                 break;
             }
         }
 
         if (pairAddr == Address_Null)
         {
-            LogError("[BotRouteFix] [Module 3] Nav-array pair pattern not found in HuntState::OnUpdate!");
+            if (seenPairs == 0)
+            {
+                LogError("[BotRouteFix] [Module 3] Nav-array pair pattern not found in HuntState::OnUpdate!");
+            }
+            else
+            {
+                LogError("[BotRouteFix] [Module 3] %d nav-array pair(s) seen from anchor @ %X but none validated!",
+                    seenPairs, huntAddr);
+            }
             return false;
         }
 
         int baseAddr = LoadFromAddress(pairAddr + view_as<Address>(2), NumberType_Int32);
-        if (baseAddr < 0x10000000 || baseAddr >= 0x20000000)
-        {
-            LogError("[BotRouteFix] [Module 3] Nav-array base address out of range (%X)!", baseAddr);
-            return false;
-        }
 
         g_pTheNavAreasBase  = view_as<Address>(baseAddr);
         g_pTheNavAreasCount = view_as<Address>(baseAddr + 12);

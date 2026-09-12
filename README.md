@@ -108,9 +108,9 @@
 
 ### 模块 9：掉包 Top3 抢包花名册 (Loose-Bomb Fetch Roster)
 - **原生全员哄抢 (Swarm on Loose Bomb)**：
-  - `CCSBot::NoticeLooseBomb()` 只要地上有包即对全队 T 返回 true（`cs_bot.cpp:428`），`Idle` 与 `Hunt` 两条路闻到就 `FetchBomb()`，掉包即全员送死。
+  - `CCSBot::NoticeLooseBomb()` 只要地上有包即返回 true（`cs_bot.cpp:428`），注释写 "for T's only" 但实现漏了阵营门控——CT 同样中招（`Hunt` 里拐去蹲守掉包，真人 CT 雷达看不见掉落 C4，属透视）。`Idle` 与 `Hunt` 两条路闻到就 `FetchBomb()`，掉包即全员送死。
 - **Pre 门控 + 事件花名册 (Pre Gate & Event Roster)**：
-  - 本模块 Pre 钩上述查询函数，非名册成员直接回 false（CT 走另一函数 `CanSeeLooseBomb`，碰不到）；名册为空时全部放行回原生（fail-open）。
+  - 本模块 Pre 钩上述查询函数：CT 一律回 false 补阵营门（视力 `CanSeeLooseBomb` 与捡包听觉不受影响）；T 非名册成员直接回 false；名册为空时全部放行回原生（fail-open）。
    - 掉包事件递延一帧（等 C4 归属落定，当场查恒为"人手里"）后，以无主 `weapon_c4` 坐标为圆心、无损实测（`BotNavWalkDistance`：备份移动状态→解 repath 节流→`ComputePath` 实测→逐段累加→全量还原，调用方零副作用）真实地面行走距离取最近 3 存活 T，不可达跳过；测距未就绪则无名单直接放行（不拿欧氏混分）。成员阵亡/掉线按掉包点真实距离回补，全灭则解散回原生（防"包烂地上没人捡"死锁）；有人捡包/回合开始/换图即清。
 
 ### 模块 10：CT 首席拆包员 (Chief Defuser)

@@ -76,10 +76,10 @@ public Action Command_Status(int client, int args)
     }
     ReplyToCommand(client, "[BotRouteFix] [Module 8] Polite Queue Breaker (1.2s)    : %s", queueStatus);
 
-    char lootStatus[64];
+    char lootStatus[96];
     if (bMaster && IsLootHooked())
     {
-        Format(lootStatus, sizeof(lootStatus), "ACTIVE (%d/3 roster, %d elections, %d gated)", Loot_GetRosterCount(), GetTotalLootElections(), GetTotalLootGated());
+        Format(lootStatus, sizeof(lootStatus), "ACTIVE (%d/3 roster, %d elections, %d gated, %d CT-denied)", Loot_GetRosterCount(), GetTotalLootElections(), GetTotalLootGated(), GetTotalCTDenied());
     }
     else
     {

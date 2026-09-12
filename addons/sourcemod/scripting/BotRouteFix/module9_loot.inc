@@ -9,9 +9,11 @@
 // 业务背景与引擎逆向分析：
 //
 // 1. 原生缺陷 (cs_bot.cpp:428-444):
-//    NoticeLooseBomb() = GetLooseBomb() != NULL 即对全队 T 返回 true。两个调用点
-//    （IdleState:228、HuntState:74）闻到就 FetchBomb()——掉包即全员哄抢送死。
-// 2. 卡门：只钩这一个查询函数，两条路全堵。CT 走 CanSeeLooseBomb（另一个函数），碰不到。
+//    NoticeLooseBomb() = GetLooseBomb() != NULL 即返回 true，注释写 "for T's only"
+//    但实现漏了阵营门控——CT 同样返回 true（HuntState:74 连 CT 一起拐去蹲守掉包，
+//    真人 CT 雷达看不见掉落 C4，这是透视）。两个调用点（IdleState:228、HuntState:74）。
+// 2. 卡门：只钩这一个查询函数，两条路全堵；本钩顺带补阵营门：CT 一律 Supercede + false。
+//    CT 剩余感知（视力 CanSeeLooseBomb、捡包 1000 听觉）均在其它函数，不受影响。
 // 3. 花名册（与模块 7 同构，全事件驱动，无 timer）：
 //    - bomb_dropped：递延一帧（等归属落定）后以掉包点（无主 weapon_c4 实体坐标，零耦合不读模块 7）为圆心，
  //      真实地面行走距离（BotNavWalkDistance 无损实测）取最近 3 存活 T bot，不可达跳过；
@@ -34,6 +36,7 @@ static float g_fDropPos[3];
 // 遥测统计计数器
 static int g_iTotalLootGated = 0;
 static int g_iTotalLootElections = 0;
+static int g_iTotalCTDenied = 0;
 
 // 名册内查找（-1 槽位跳过）
 static bool Loot_IsInRoster(int client)
@@ -151,9 +154,19 @@ public MRESReturn Hook_NoticeLooseBomb_Pre(int client, DHookParam hParams)
         return MRES_Ignored;
     }
 
-    if (!IsBot(client, true) || GetClientTeam(client) != 2)
+    if (!IsBot(client, true))
     {
         return MRES_Ignored;
+    }
+
+    // 阵营门补漏：原生 NoticeLooseBomb 注释写 "for T's only" 但实现无门控，CT 蹭雷达 ESP。
+    // CT 一律否决（Supercede + false），与其真人雷达看不见掉落 C4 对齐；
+    // CT 靠视力（CanSeeLooseBomb）与捡包听觉照常感知，不变聋。
+    if (GetClientTeam(client) != 2)
+    {
+        DHookSetReturn(hParams, false);
+        g_iTotalCTDenied++;
+        return MRES_Supercede;
     }
 
     if (!g_bHasRoster || Loot_IsInRoster(client))
@@ -205,6 +218,14 @@ int GetTotalLootElections()
 int GetTotalLootGated()
 {
     return g_iTotalLootGated;
+}
+
+/**
+ * 获取累计补阵营门次数（CT 蹭雷达 ESP 被否决，Hunt 每拍都调，涨得快属正常）
+ */
+int GetTotalCTDenied()
+{
+    return g_iTotalCTDenied;
 }
 
 /**
