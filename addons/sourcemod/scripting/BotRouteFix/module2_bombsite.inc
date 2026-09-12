@@ -25,7 +25,7 @@
 //               获取几何距离最近的包点，导致 100% 的局数 Bot 只冲固定最近包点（如 de_dust2 永远只冲 A）。
 //    - 补丁方案: 将 GetClosestZone 虚函数调用替换为直接赋值汇编:
 //               - 64 位: `mov rax, <目标Zone指针>` + 9x NOP (共 19 字节)
-//               - 32 位: `mov eax, <目标Zone指针>` + 6x NOP (共 11 字节)
+//               - 32 位: `mov eax, <目标Zone指针>` + 14x NOP (共 19 字节)
 //               在 `round_freeze_end` 随机选取全图可用包点之一并锁定；
 //               ★ 换人自愈机制: 一旦开局包主掉包 (`bomb_dropped`)、包主死亡 (`player_death`)
 //               或新队友捡包 (`item_pickup`)，立即解除内存锁定，无缝恢复原生动态 `GetClosestZone`，
@@ -93,7 +93,7 @@ bool InitModule2_Bombsite()
     }
 
     Address targetAddr = sigAddr + view_as<Address>(patchOffset);
-    int patchSize = g_bIsWin64 ? 19 : 11;
+    int patchSize = 19;
     g_PatchBombsiteLock.Init("PlantBombClosestZone_Lock", targetAddr, patchSize);
 
     int firstByte  = LoadFromAddress(targetAddr, NumberType_Int8);
@@ -129,9 +129,9 @@ bool InitModule2_Bombsite()
     }
     else
     {
-        int chkOff32[7] = {0, 1, 2, 3, 4, 5, 6};
-        int chkVal32[7] = {0x6A, 0x00, 0x6A, 0x02, 0x57, 0xFF, 0x90}; // push 0; push 2; push edi; call [eax+..]
-        for (int i = 0; i < 7; i++)
+        int chkOff32[10] = {0, 1, 2, 3, 4, 5, 6, 11, 12, 14};
+        int chkVal32[10] = {0x6A, 0x00, 0x6A, 0x02, 0x57, 0xFF, 0x90, 0x50, 0x8B, 0xE8}; // push 0; push 2; push edi; call [eax+..]; push eax; mov ecx, esi; call GetClosestZone
+        for (int i = 0; i < 10; i++)
         {
             int got = LoadFromAddress(targetAddr + view_as<Address>(chkOff32[i]), NumberType_Int8);
             if (got != chkVal32[i])
@@ -143,7 +143,7 @@ bool InitModule2_Bombsite()
         }
     }
 
-    // 备份原始指令现场 (64位 19字节, 32位 11字节)
+    // 备份原始指令现场 (均为 19 字节)
     g_PatchBombsiteLock.BackupOriginal();
     LogMessage("[BotRouteFix] [Module 2] PlantBombClosestZone block verified @ %X [%s]",
         targetAddr, g_bIsWin64 ? "64-bit" : "32-bit");
@@ -166,9 +166,14 @@ void RestoreModule2_Bombsite()
  */
 void EnableModule2_Bombsite(bool enable)
 {
-    if (!enable && g_bBombsiteLocked)
+    if (!enable)
     {
-        RestoreBombsiteLockPatch();
+        if (g_bBombsiteLocked)
+        {
+            RestoreBombsiteLockPatch();
+        }
+        g_iOpeningCarrier = 0;
+        g_fCurrentPlantDelay = 0.0;
     }
 }
 
@@ -458,13 +463,15 @@ static void ApplyLockedBombsitePatch(int zoneIndex)
     }
     else
     {
-        // 32-bit: mov eax, [imm32] (B8 [4-byte imm32]) + 6x NOP (total 11 bytes)
+        // 32-bit: mov eax, [imm32] (B8 [4-byte imm32]) + 14x NOP (total 19 bytes)
         StoreToAddress(patchAddr, 0xB8, NumberType_Int8, true);
         StoreAddressToAddress(patchAddr + view_as<Address>(1), targetZone, false);
 
-        // 填充 6 字节 NOP (0x90): 4 字节 + 2 字节
+        // 填充 14 字节 NOP (0x90): 4 字节 + 4 字节 + 4 字节 + 2 字节 = 14 字节
         StoreToAddress(patchAddr + view_as<Address>(5), 0x90909090, NumberType_Int32, false);
-        StoreToAddress(patchAddr + view_as<Address>(9), 0x9090, NumberType_Int16, false);
+        StoreToAddress(patchAddr + view_as<Address>(9), 0x90909090, NumberType_Int32, false);
+        StoreToAddress(patchAddr + view_as<Address>(13), 0x90909090, NumberType_Int32, false);
+        StoreToAddress(patchAddr + view_as<Address>(17), 0x9090, NumberType_Int16, false);
     }
 
     g_PatchBombsiteLock.isPatched = true;

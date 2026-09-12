@@ -34,7 +34,7 @@
   - 原版引擎在运包时硬编码调用 `TheCSBots()->GetClosestZone()`（`idle.cpp:163`），导致 Bot 局局只冲几何最近包点。
   - 本模块在开局冻结结束时，从地图所有可用包点中随机选取一个，将调用序列重写为目标包点指针的直接加载：
     - 64 位（19 字节）：`mov rax, <Zone*> + 9x NOP`
-    - 32 位（11 字节）：`mov eax, <Zone*> + 6x NOP`
+    - 32 位（19 字节）：`mov eax, <Zone*> + 14x NOP`
 ### 模块 3：CNavArea 危险度开局软衰减 (NavArea Danger Soft-Decay)
 - **危险度结算与沉降契约 (Settlement Contract)**：
   - 原生引擎危险度衰减速率为 `1.0 / 120.0s`（`nav_area.cpp:4139`），采用惰性读衰减（Lazy Decay）机制，内存裸值陈旧。
