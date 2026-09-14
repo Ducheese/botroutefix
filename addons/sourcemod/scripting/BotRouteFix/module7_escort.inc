@@ -277,7 +277,7 @@ void Escort_ReleaseAll()
     }
 }
 
-// 静默清空（bomb_planted/defused/exploded/round_start：引擎或换图已接管，不发 SDKCall）
+// 静默清空（round_start / map_start：新回合与换图实体索引重置，不发 SDKCall）
 void Escort_ClearSilent()
 {
     g_iBodyguardCount = 0;
@@ -435,7 +435,7 @@ public void Module7_FrameRefresh(any data)
 }
 
 /**
- * C4 掉落事件 (bomb_dropped)：释放名单，残局交给 module2 的原生选点与 module8 的捡包
+ * C4 掉落事件 (bomb_dropped)：释放名单，残局交给 module2 的原生选点与 module9 的捡包
  */
 void Module7_OnBombDropped()
 {

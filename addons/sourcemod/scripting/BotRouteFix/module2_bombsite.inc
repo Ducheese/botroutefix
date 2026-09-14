@@ -23,7 +23,7 @@
 //    - 源码位置: `bot/states/cs_bot_idle.cpp:163-196`
 //    - 机制分析: 当达到运包时钟且包匪不在包点内时，引擎硬编码调用 `TheCSBots()->GetClosestZone()`
 //               获取几何距离最近的包点，导致 100% 的局数 Bot 只冲固定最近包点（如 de_dust2 永远只冲 A）。
-//    - 补丁方案: 将 GetClosestZone 虚函数调用替换为直接赋值汇编:
+//    - 补丁方案: 将 GetClosestZone 成员函数调用序列替换为直接赋值汇编:
 //               - 64 位: `mov rax, <目标Zone指针>` + 9x NOP (共 19 字节)
 //               - 32 位: `mov eax, <目标Zone指针>` + 14x NOP (共 19 字节)
 //               在 `round_freeze_end` 随机选取全图可用包点之一并锁定；
@@ -31,6 +31,12 @@
 //               或新队友捡包 (`item_pickup`)，立即解除内存锁定，无缝恢复原生动态 `GetClosestZone`，
 //               使残局新持包者能够根据当前战场位置就近选择最合理的包点下包。
 //========================================================================================
+
+// 运包时钟士气映射公式宏定义 (Delay = BASE + STEP * Morale)
+#define PLANT_DELAY_BASE        30.0    // 基础运包时钟 (士气 0 时 30 秒)
+#define PLANT_DELAY_STEP        10.0    // 每级士气增减步长 (秒)
+#define PLANT_DELAY_MIN         0.0     // 运包延时下限 (大劣即刻运包)
+#define PLANT_DELAY_MAX         60.0    // 运包延时上限 (大优卡点控图)
 
 // 模块状态与补丁
 MemoryPatch g_PatchBombsiteLock;
@@ -209,14 +215,14 @@ float GetCurrentPlantDelay()
  */
 float CalculatePlantDelay(int morale)
 {
-    float delay = 30.0 + 10.0 * float(morale);
-    if (delay < 0.0)
+    float delay = PLANT_DELAY_BASE + PLANT_DELAY_STEP * float(morale);
+    if (delay < PLANT_DELAY_MIN)
     {
-        delay = 0.0;
+        delay = PLANT_DELAY_MIN;
     }
-    else if (delay > 60.0)
+    else if (delay > PLANT_DELAY_MAX)
     {
-        delay = 60.0;
+        delay = PLANT_DELAY_MAX;
     }
     return delay;
 }

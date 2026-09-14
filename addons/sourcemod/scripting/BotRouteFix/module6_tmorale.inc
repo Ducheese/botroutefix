@@ -34,6 +34,16 @@
 //      拦截状态切换，强制 Bot 保持掩体架枪，阻断战火黑洞效应。
 //========================================================================================
 
+// 守包听觉出击距离梯度宏定义 (不同士气等级下允许调查声音的最大距离，单位：单位/码)
+#define NOISE_DIST_MORALE_0     500.0   // 士气 0 (均势): 仅探查包点近身 500 码
+#define NOISE_DIST_MORALE_1     1000.0  // 士气 +1 (微优): 允许探查中近距离 1000 码
+#define NOISE_DIST_MORALE_2     2000.0  // 士气 +2 (优势): 允许探查主干道 2000 码
+#define NOISE_DIST_MORALE_3     3000.0  // 士气 +3 (大优): 全图大范围出击 3000 码
+
+// 接战策略与任务宏定义
+#define MORALE_HOLD_THRESHOLD   -1      // 保守死守掩体士气阈值 (<= -1 专注运包/死守掩体)
+#define BOT_TASK_GUARD_TICKING_BOMB 4   // 引擎原生任务枚举：GUARD_TICKING_BOMB (守已安放的雷包)
+
 // 模块 Detour 句柄与统计
 Handle g_hInvestigateNoiseDetour = null;
 bool g_bBombPlanted = false;
@@ -228,7 +238,7 @@ void ApplyCarrierMoraleDisposition()
     }
 
     int morale = GetBotMorale(carrier);
-    if (morale <= -1)
+    if (morale <= MORALE_HOLD_THRESHOLD)
     {
         StoreToAddress(pCarrier + view_as<Address>(g_iOffset_Disposition), 1, NumberType_Int32); // OPPORTUNITY_FIRE
         DebugLog("[BotRouteFix] [Module 6] C4 Carrier %N (Morale %d) set to OPPORTUNITY_FIRE (Focused Plant)", carrier, morale);
@@ -258,7 +268,7 @@ void ApplyPlantedBombTMoraleDisposition()
             }
 
             int morale = GetBotMorale(i);
-            if (morale <= -1)
+            if (morale <= MORALE_HOLD_THRESHOLD)
             {
                 StoreToAddress(pBot + view_as<Address>(g_iOffset_Disposition), 1, NumberType_Int32); // OPPORTUNITY_FIRE
                 if (g_iOffset_NoiseTimestamp > 0)
@@ -334,16 +344,16 @@ public MRESReturn Hook_InvestigateNoise_Pre(int client, DHookParam hParams)
     // 仅拦截守包任务 (Task 4: GUARD_TICKING_BOMB)
     // 逃跑任务 (Task 9: ESCAPE_FROM_BOMB) 与搜敌任务 (Task 0: SEEK_AND_DESTROY) 自然放行
     int task = LoadFromAddress(pBot + view_as<Address>(g_iOffset_Task), NumberType_Int32);
-    if (task != 4)
+    if (task != BOT_TASK_GUARD_TICKING_BOMB)
     {
         return MRES_Ignored;
     }
 
-    // 能进入此处的守包 Bot 均为保持 ENGAGE 的非负士气 T (Morale >= 0)
+    // 下包初态虽已分流，但残局士气可能动态跌落，此处获取实时士气进行严密二次校验与防御阻断
     int morale = GetBotMorale(client);
 
     // 负士气 T 直接阻断
-    if (morale < 0)
+    if (morale <= MORALE_HOLD_THRESHOLD)
     {
         if (g_iOffset_NoiseTimestamp > 0)
         {
@@ -355,13 +365,13 @@ public MRESReturn Hook_InvestigateNoise_Pre(int client, DHookParam hParams)
     }
 
     // 依据士气阶梯计算最大允许调查声音距离
-    float maxNoiseDist = 500.0;
+    float maxNoiseDist = NOISE_DIST_MORALE_0;
     switch (morale)
     {
-        case 0:  maxNoiseDist = 500.0;
-        case 1:  maxNoiseDist = 1000.0;
-        case 2:  maxNoiseDist = 2000.0;
-        default: maxNoiseDist = 3000.0; // Morale >= 3
+        case 0:  maxNoiseDist = NOISE_DIST_MORALE_0;
+        case 1:  maxNoiseDist = NOISE_DIST_MORALE_1;
+        case 2:  maxNoiseDist = NOISE_DIST_MORALE_2;
+        default: maxNoiseDist = NOISE_DIST_MORALE_3; // Morale >= 3
     }
 
     // 计算 Bot 到声源的距离

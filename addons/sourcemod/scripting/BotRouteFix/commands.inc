@@ -74,12 +74,12 @@ public Action Command_Status(int client, int args)
     {
         strcopy(queueStatus, sizeof(queueStatus), "INACTIVE (Pending Signature)");
     }
-    ReplyToCommand(client, "[BotRouteFix] [Module 8] Polite Queue Breaker (1.2s)    : %s", queueStatus);
+    ReplyToCommand(client, "[BotRouteFix] [Module 8] Polite Queue Breaker (2.0s)    : %s", queueStatus);
 
     char lootStatus[96];
     if (bMaster && IsLootHooked())
     {
-        Format(lootStatus, sizeof(lootStatus), "ACTIVE (%d/3 roster, %d elections, %d gated, %d CT-denied)", Loot_GetRosterCount(), GetTotalLootElections(), GetTotalLootGated(), GetTotalCTDenied());
+        Format(lootStatus, sizeof(lootStatus), "ACTIVE (%d/3 roster, %d elections, %d gated)", Loot_GetRosterCount(), GetTotalLootElections(), GetTotalLootGated());
     }
     else
     {
@@ -116,6 +116,14 @@ public Action Command_Status(int client, int args)
         strcopy(sniperStatus, sizeof(sniperStatus), "INACTIVE (Pending Signature)");
     }
     ReplyToCommand(client, "[BotRouteFix] [Module 11] Sniper Corridor Danger & Retreat: %s", sniperStatus);
+    ReplyToCommand(client, "[BotRouteFix] [Module 12] Sniper Camp Gate (60-10*M)         : %s (%d redirected)",
+        (bMaster && IsCamp12Armed()) ? "ACTIVE" : "INACTIVE", GetTotalCampRedirected());
+    ReplyToCommand(client, "[BotRouteFix] [Module 13] Sniper Buy Chance (50-10*M)        : %s",
+        (bMaster && IsSniperBuy13Patched()) ? "ACTIVE" : "INACTIVE");
+    ReplyToCommand(client, "[BotRouteFix] [Module 14] Defend Rush Chance (40-10*M)      : %s",
+        (bMaster && IsDefendRush14Patched()) ? "ACTIVE" : "INACTIVE");
+    ReplyToCommand(client, "[BotRouteFix] [Module 15] Hide Duration x(1-0.15*M)        : %s (%d rescaled)",
+        (bMaster && IsHideDurationHooked()) ? "ACTIVE" : "INACTIVE", GetTotalHideRescaled());
 
     if (bDebug)
     {

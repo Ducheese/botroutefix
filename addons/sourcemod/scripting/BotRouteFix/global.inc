@@ -16,7 +16,7 @@
 #define GAMEDATA                    "botroutefix.gamedata"
 
 // 补丁缓冲与模板匹配常量
-#define MAX_PATCH_SIZE              64
+#define MAX_PATCH_SIZE              128
 
 //========================================================================================
 // HANDLES & GLOBAL VARIABLES

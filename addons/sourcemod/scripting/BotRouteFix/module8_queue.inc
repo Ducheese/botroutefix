@@ -13,9 +13,10 @@
 // 原生 2~5 秒那套还在后面兜底：我们先清了它到点就跳过；我们没赶上它照旧散。双向交接，无 timer 轮询。
 //========================================================================================
 
-#define QUEUE_BREAKER_TIMEOUT 2.0
-#define QUEUE_NAIL_DANGER 0.8
-#define QUEUE_NAIL_MAX 2.5
+#define QUEUE_BREAKER_TIMEOUT   2.0
+#define QUEUE_NAIL_DANGER       0.8
+#define QUEUE_NAIL_MAX          2.5
+#define DANGER_DECAY_RATE_SEC   120.0   // 引擎原生自然沉降速率 (1.0 每 120 秒)
 
 // 本模块私有状态（static，偏移与句柄不出本文件）
 static Handle g_hUpdatePathDetour = null;
@@ -53,7 +54,7 @@ static void Queue_NailDanger(Address pArea, int teamIdx, float curtime)
         elapsed = 0.0;
     }
 
-    float effDanger = rawDanger - (elapsed / 120.0);
+    float effDanger = rawDanger - (elapsed / DANGER_DECAY_RATE_SEC);
     if (effDanger < 0.0)
     {
         effDanger = 0.0;

@@ -15,6 +15,7 @@ Handle g_hSDKCall_Follow           = null;
 Handle g_hSDKCall_StopFollowing    = null;
 Handle g_hSDKCall_ComputePath      = null;
 Handle g_hSDKCall_IsOutnumbered    = null;
+Handle g_hSDKCall_Hunt             = null;
 
 /**
  * 初始化底层 SDKCall 调用表
@@ -57,8 +58,6 @@ bool InitSDKCalls()
         return false;
     }
 
-    LogMessage("[BotRouteFix] [SDKCalls] Core SDKCall table ready (Follow, StopFollowing, ComputePath, IsOutnumbered)");
-
     StartPrepSDKCall(SDKCall_Entity);
     PrepSDKCall_SetFromConf(g_hGameConf, SDKConf_Signature, "CCSBot_IsOutnumbered");
     PrepSDKCall_SetReturnInfo(SDKType_Bool, SDKPass_Plain);
@@ -68,6 +67,17 @@ bool InitSDKCalls()
         LogError("[BotRouteFix] [SDKCalls] Failed to create SDKCall for CCSBot_IsOutnumbered!");
         return false;
     }
+
+    StartPrepSDKCall(SDKCall_Entity);
+    PrepSDKCall_SetFromConf(g_hGameConf, SDKConf_Signature, "CCSBot_Hunt");
+    g_hSDKCall_Hunt = EndPrepSDKCall();
+    if (g_hSDKCall_Hunt == null)
+    {
+        LogError("[BotRouteFix] [SDKCalls] Failed to create SDKCall for CCSBot_Hunt!");
+        return false;
+    }
+
+    LogMessage("[BotRouteFix] [SDKCalls] Core SDKCall table ready (Follow, StopFollowing, ComputePath, IsOutnumbered, Hunt)");
 
     return true;
 }
@@ -99,6 +109,12 @@ void CleanupSDKCalls()
     {
         delete g_hSDKCall_IsOutnumbered;
         g_hSDKCall_IsOutnumbered = null;
+    }
+
+    if (g_hSDKCall_Hunt != null)
+    {
+        delete g_hSDKCall_Hunt;
+        g_hSDKCall_Hunt = null;
     }
 }
 
@@ -173,4 +189,21 @@ stock bool BotIsOutnumbered(int bot)
     }
 
     return SDKCall(g_hSDKCall_IsOutnumbered, bot);
+}
+
+/**
+ * 命令指定 Bot 转入搜敌（CCSBot::Hunt，仅 SetState，无参数无返回）
+ *
+ * @param bot       Bot 客户端索引 (必须为存活有效 Bot)
+ * @return          是否成功发起 SDKCall
+ */
+stock bool BotHunt(int bot)
+{
+    if (g_hSDKCall_Hunt == null || !IsBot(bot, true))
+    {
+        return false;
+    }
+
+    SDKCall(g_hSDKCall_Hunt, bot);
+    return true;
 }

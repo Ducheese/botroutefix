@@ -22,7 +22,7 @@
 //      2) 路径 2：若 m_enemy 尚未锁定（如移动/非交火状态），直接从 CCSBot::UpdateReactionQueue
 //         每帧推入的 m_enemyQueue 瞬时感知威胁队列逆序回溯提取当帧目击的狙击手实体；
 //      3) 武器判断全面覆盖：同时检索 m_hActiveWeapon 与 Slot 0 主武器，杜绝狙击手切副手/刀具时漏判；
-//    - 走廊加压：调用 CCSBot::ComputePath 生成通往狙击手的 A* 走廊，遍历沿途 NavArea 钉刺 +0.8f 危险度
+//    - 走廊加压：调用 CCSBot::ComputePath 生成通往狙击手的 A* 走廊，最多遍历前 20 步 NavArea 钉刺 +0.8f 危险度
 //      （封顶 2.5f，严格遵循 1.0/120.0s 沉降契约），逼迫友军与自身后续 A* 绕开该走廊；
 //    - 强制后撤：立即清空前进路径碎步，并联动模块 5 机制穿透冷却，强制底层立即执行 TryToRetreat() 躲入掩体。
 //========================================================================================
@@ -30,6 +30,7 @@
 #define SNIPER_NAIL_DANGER      0.8
 #define SNIPER_NAIL_MAX         2.5
 #define SNIPER_MAX_STEPS        20
+#define DANGER_DECAY_RATE_SEC   120.0   // 引擎原生自然沉降速率 (1.0 每 120 秒)
 
 // 贴脸不撤距离（units）：距狙小于此值只钉走廊不请求撤退（近距离跑路等于送背）
 #define SNIPER_NO_RETREAT_DIST  265.0
@@ -230,7 +231,7 @@ static void Sniper_NailDanger(Address pArea, int teamIdx, float curtime)
         elapsed = 0.0;
     }
 
-    float effDanger = rawDanger - (elapsed / 120.0);
+    float effDanger = rawDanger - (elapsed / DANGER_DECAY_RATE_SEC);
     if (effDanger < 0.0)
     {
         effDanger = 0.0;

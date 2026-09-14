@@ -26,12 +26,19 @@
 //      否则读取到的是陈旧虚高数值；修改后必须将 timestamp 同步更新为 curtime，
 //      否则下一次引擎原生 GetDanger() 结算时会将写入值直接当作历史旧值扣减归零。
 //
-// 3. 回合初 80% 软衰减 (保留 20% 残余记忆):
+// 3. 回合初 80% 软衰减 (保留 20% 残余记忆) 与底噪截断:
 //    - 每回合开始 (round_start) 时，全图遍历 TheNavAreas，对所有区域危险度执行 80% 衰减:
 //        newDanger = effDanger * 0.2f
+//      衰减后若 newDanger < 0.05 则截断归零 (0.0)，消除微弱浮点底噪，确保数回合后旧战区彻底清零沉寂。
 //    - 战术价值: 既清除了大部分上一回合交火留下的过度偏见，又保留了 20% 的战场残存热点记忆，
 //      为 Bot 提供自然且富于变化的动态寻路权衡，避免死板走固定路线。
 //========================================================================================
+
+// 危险度软衰减与网格安全宏定义
+#define DANGER_DECAY_RATE_SEC   120.0   // 引擎原生自然沉降速率 (1.0 每 120 秒)
+#define DANGER_ROUND_RETENTION  0.2     // 开局危险度保留比例 (0.2 即软衰减 80%)
+#define DANGER_NOISE_THRESHOLD  0.05    // 浮点底噪截断阈值 (低于此值直接归零)
+#define NAV_AREA_MAX_SANITY     100000  // 导航网格总数安全断言上限 (防野指针读崩溃)
 
 // 模块内部专用偏移缓存
 static int g_iOffset_Danger = -1;
@@ -157,29 +164,29 @@ void DecayAllNavAreaDanger()
         float timestampT    = view_as<float>(LoadFromAddress(pArea + view_as<Address>(g_iOffset_DangerTimestamp), NumberType_Int32));
         float timestampCT   = view_as<float>(LoadFromAddress(pArea + view_as<Address>(g_iOffset_DangerTimestamp + 4), NumberType_Int32));
 
-        // 2. 沉降结算：先扣除自上次更新以来自然流逝的衰减量 (速率 1.0 / 120.0s)
-        float effDangerT = rawDangerT - ((curtime - timestampT) / 120.0);
+        // 2. 沉降结算：先扣除自上次更新以来自然流逝的衰减量 (速率 1.0 / DANGER_DECAY_RATE_SEC)
+        float effDangerT = rawDangerT - ((curtime - timestampT) / DANGER_DECAY_RATE_SEC);
         if (effDangerT < 0.0)
         {
             effDangerT = 0.0;
         }
 
-        float effDangerCT = rawDangerCT - ((curtime - timestampCT) / 120.0);
+        float effDangerCT = rawDangerCT - ((curtime - timestampCT) / DANGER_DECAY_RATE_SEC);
         if (effDangerCT < 0.0)
         {
             effDangerCT = 0.0;
         }
 
-        // 3. 软衰减：衰减 80% (保留 20% 残留记忆)
-        float newDangerT  = effDangerT * 0.2;
-        float newDangerCT = effDangerCT * 0.2;
+        // 3. 软衰减：按设定比例保留残余记忆 (默认保留 20% 即软衰减 80%)
+        float newDangerT  = effDangerT * DANGER_ROUND_RETENTION;
+        float newDangerCT = effDangerCT * DANGER_ROUND_RETENTION;
 
         // 噪声过滤截断
-        if (newDangerT < 0.05)
+        if (newDangerT < DANGER_NOISE_THRESHOLD)
         {
             newDangerT = 0.0;
         }
-        if (newDangerCT < 0.05)
+        if (newDangerCT < DANGER_NOISE_THRESHOLD)
         {
             newDangerCT = 0.0;
         }
@@ -238,13 +245,13 @@ bool GetNavAreaDanger(Address pArea, float &dangerT, float &dangerCT)
     float timestampT  = view_as<float>(LoadFromAddress(pArea + view_as<Address>(g_iOffset_DangerTimestamp), NumberType_Int32));
     float timestampCT = view_as<float>(LoadFromAddress(pArea + view_as<Address>(g_iOffset_DangerTimestamp + 4), NumberType_Int32));
 
-    dangerT = rawDangerT - ((curtime - timestampT) / 120.0);
+    dangerT = rawDangerT - ((curtime - timestampT) / DANGER_DECAY_RATE_SEC);
     if (dangerT < 0.0)
     {
         dangerT = 0.0;
     }
 
-    dangerCT = rawDangerCT - ((curtime - timestampCT) / 120.0);
+    dangerCT = rawDangerCT - ((curtime - timestampCT) / DANGER_DECAY_RATE_SEC);
     if (dangerCT < 0.0)
     {
         dangerCT = 0.0;
@@ -272,7 +279,7 @@ static bool ResolveTheNavAreas()
         // -------------------------------------------------------------------------------
         // 64-bit 实现 (Steam x64)
         // 通过 CCSBotManager::GetRandomArea 的 64 位特征指令定位 TheNavAreas
-        // 指令序列: mov ecx, cs:TheNavAreas.m_Size (44 8B 0D <rel32> @ sigAddr + 14)
+        // 指令序列: mov ecx, cs:TheNavAreas.m_Size (8B 0D <rel32> @ sigAddr + 14)
         // -------------------------------------------------------------------------------
         Address sigAddr = GameConfGetAddress(g_hGameConf, "CCSBotManager_GetRandomArea");
         if (sigAddr == Address_Null)
@@ -287,6 +294,12 @@ static bool ResolveTheNavAreas()
         g_pTheNavAreasBase = g_pTheNavAreasCount - view_as<Address>(16);
 
         int areaCount = LoadFromAddress(g_pTheNavAreasCount, NumberType_Int32);
+        if (areaCount < 0 || areaCount > NAV_AREA_MAX_SANITY)
+        {
+            LogError("[BotRouteFix] [Module 3] 64-bit areaCount (%d) out of reasonable range [0, %d]!",
+                areaCount, NAV_AREA_MAX_SANITY);
+            return false;
+        }
         LogMessage("[BotRouteFix] [Module 3] Resolved 64-bit TheNavAreas (Base: @%X, Count: @%X, Areas: %d)",
             g_pTheNavAreasBase, g_pTheNavAreasCount, areaCount);
         return true;
@@ -338,7 +351,7 @@ static bool ResolveTheNavAreas()
                 }
 
                 int candCount = LoadFromAddress(view_as<Address>(candBase + 12), NumberType_Int32);
-                if (candCount < 0 || candCount > 100000)
+                if (candCount < 0 || candCount > NAV_AREA_MAX_SANITY)
                 {
                     LogMessage("[BotRouteFix] [Module 3] Candidate pair @ %X skipped (count %d insane)",
                         candAddr, candCount);

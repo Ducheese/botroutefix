@@ -21,8 +21,9 @@
 //    - Hide:337 → 纯 Encourage 喊话（3-15 秒节流），进就进了；
 //    - Idle:775 → 人质图分支，de_ 图 planted 为真时到不了；
 //    - 其余（Hunt:102/MoveTo:170/Hide:147）只读 true 分支做退出，false 即"继续蹲"，正是要的。
-// 5. 首席选举（全事件，无 timer）：bomb_planted 选距包最近存活 CT bot（行走距离 − 持钳）；player_death 首席倒地
-//    立即按缓存包坐标重选（planted_c4 实体下包后一直在）；defused/exploded/round_start 清。
+// 5. 首席选举（全事件，无 timer）：bomb_planted 选距包最近存活 CT bot（行走距离 − 持钳）；
+//    player_death / client_disconnect 首席倒地或掉线立即按缓存包坐标重选（planted_c4 实体下包后一直在）；
+//    defused / exploded / round_start / OnMapStart 清。
 //    选举无视 bot_defer_to_human，出动尊重原生：首席在钩子里直通——defer 关照去，真人玩家抢拆则
 //    原生让路；defer 开且有真人玩家，首席坐板凳，真人玩家死光原生翻 true 自动上，无需重选。
 // 全程事件驱动，无 timer 轮询。

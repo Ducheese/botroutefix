@@ -8,19 +8,19 @@
 //
 // 业务背景与引擎逆向分析：
 //
-// 1. 原生缺陷 (cs_bot.cpp:428-444):
+// 1. 机制分析 (cs_bot.cpp:428-444):
 //    NoticeLooseBomb() = GetLooseBomb() != NULL 即返回 true，注释写 "for T's only"
-//    但实现漏了阵营门控——CT 同样返回 true（HuntState:74 连 CT 一起拐去蹲守掉包，
-//    真人 CT 雷达看不见掉落 C4，这是透视）。两个调用点（IdleState:228、HuntState:74）。
-// 2. 卡门：只钩这一个查询函数，两条路全堵；本钩顺带补阵营门：CT 一律 Supercede + false。
+//    原生虽在现有调用点做了阵营包裹，但 NoticeLooseBomb 查询原语本身缺少阵营限制。
+//    两个调用点（IdleState:228、HuntState:74）。
+// 2. 卡门：只钩这一个查询函数，两条路全堵；本钩顺带补齐阵营门控作为纵深防御兜底：CT 一律 Supercede + false。
 //    CT 剩余感知（视力 CanSeeLooseBomb、捡包 1000 听觉）均在其它函数，不受影响。
 // 3. 花名册（与模块 7 同构，全事件驱动，无 timer）：
 //    - bomb_dropped：递延一帧（等归属落定）后以掉包点（无主 weapon_c4 实体坐标，零耦合不读模块 7）为圆心，
- //      真实地面行走距离（BotNavWalkDistance 无损实测）取最近 3 存活 T bot，不可达跳过；
- //      选举失败（找不到掉包）或测距未就绪 → 空名册 = 全体放行回原生；
+//      真实地面行走距离（BotNavWalkDistance 无损实测）取最近 3 存活 T bot，不可达跳过；
+//      选举失败（找不到掉包）或测距未就绪 → 空名册 = 全体放行回原生；
 //    - player_death / client_disconnect：除名 + 按掉包点就近回补（共用同一函数；名单有效时 C4 必躺掉包点，
 //      按掉包点招人即按 C4 位置招人）——必选项，否则减员到全灭即全员 false，包烂地上没人捡（比原版更糟的死锁）；
-//    - item_pickup(c4)/round_start：清（FetchBombState:58 有人捡包自己散伙）。
+//    - item_pickup(c4) / round_start / OnMapStart：清（FetchBombState:58 有人捡包自己散伙；换图重置）。
 // 4. fail-open 原则：钩子只会把 true 掐成 false，且仅在名册有效时掐；名册空即原生。
 // 全程事件驱动，无 timer 轮询。
 //========================================================================================
@@ -36,7 +36,6 @@ static float g_fDropPos[3];
 // 遥测统计计数器
 static int g_iTotalLootGated = 0;
 static int g_iTotalLootElections = 0;
-static int g_iTotalCTDenied = 0;
 
 // 名册内查找（-1 槽位跳过）
 static bool Loot_IsInRoster(int client)
@@ -76,7 +75,7 @@ static bool Loot_FindDropPos(float dropPos[3])
     return false;
 }
 
-// 选举：掉包点欧氏最近 3 存活 T bot
+// 选举：掉包点真实地面行走距离 (NavMeasure) 最近 3 存活 T bot
 static void Loot_ElectRoster()
 {
     Loot_ClearRoster();
@@ -159,13 +158,10 @@ public MRESReturn Hook_NoticeLooseBomb_Pre(int client, DHookParam hParams)
         return MRES_Ignored;
     }
 
-    // 阵营门补漏：原生 NoticeLooseBomb 注释写 "for T's only" 但实现无门控，CT 蹭雷达 ESP。
-    // CT 一律否决（Supercede + false），与其真人雷达看不见掉落 C4 对齐；
-    // CT 靠视力（CanSeeLooseBomb）与捡包听觉照常感知，不变聋。
+    // 阵营门补漏：原生 NoticeLooseBomb 注释写 "for T's only"（虽底层调用点均有阵营包裹，此处作为纵深防御兜底）
     if (GetClientTeam(client) != 2)
     {
         DHookSetReturn(hParams, false);
-        g_iTotalCTDenied++;
         return MRES_Supercede;
     }
 
@@ -220,13 +216,6 @@ int GetTotalLootGated()
     return g_iTotalLootGated;
 }
 
-/**
- * 获取累计补阵营门次数（CT 蹭雷达 ESP 被否决，Hunt 每拍都调，涨得快属正常）
- */
-int GetTotalCTDenied()
-{
-    return g_iTotalCTDenied;
-}
 
 /**
  * 初始化模块 9（挂 NoticeLooseBomb Pre）

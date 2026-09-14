@@ -20,6 +20,10 @@
 //   - BotRouteFix/module9_loot.inc    : [模块 9] 掉包 Top3 抢包花名册 (Loot Roster, NoticeLooseBomb Pre)
 //   - BotRouteFix/module10_defuse.inc : [模块 10] CT 首席拆包员 (Chief Defuser, IsDoingScenario Pre)
 //   - BotRouteFix/module11_sniper.inc : [模块 11] 狙击手威慑与走廊加压 (Sniper Deterrence & Corridor Danger)
+//   - BotRouteFix/module12_campgate.inc : [模块 12] 狙击 camp 概率重构 (60-10*M, NOP+DHook重骰)
+//   - BotRouteFix/module13_sniperbuy.inc : [模块 13] 随机买狙概率重构 (50-10*M, sniperRifleChance)
+//   - BotRouteFix/module14_defendrush.inc : [模块 14] 开局前沿架枪概率重构 (40-10*M, defendRushChance)
+//   - BotRouteFix/module15_hideduration.inc : [模块 15] Hide 蹲守时长士气缩放 (m_duration *= 1-0.15*M)
 //========================================================================================
 
 #pragma semicolon 1
@@ -47,6 +51,10 @@
 #include "BotRouteFix/module9_loot"
 #include "BotRouteFix/module10_defuse"
 #include "BotRouteFix/module11_sniper"
+#include "BotRouteFix/module12_campgate"
+#include "BotRouteFix/module13_sniperbuy"
+#include "BotRouteFix/module14_defendrush"
+#include "BotRouteFix/module15_hideduration"
 #include "BotRouteFix/events"
 #include "BotRouteFix/commands"
 
@@ -109,7 +117,9 @@ public void OnPluginStart()
         || !InitModule4_Hunt() || !InitModule5_Combat() || !InitModule6_TMorale()
         || !InitModule7_Escort() || !InitModule8_Queue()
         || !InitModule9_Loot() || !InitModule10_Defuse()
-        || !InitModule11_Sniper())
+        || !InitModule11_Sniper() || !InitModule12_CampGate()
+        || !InitModule13_SniperBuy() || !InitModule14_DefendRush()
+        || !InitModule15_HideDuration())
     {
         SetFailState("[BotRouteFix] One or more core tactical modules failed to initialize! Aborting plugin startup.");
         return;
@@ -129,6 +139,10 @@ public void OnPluginStart()
 public void OnPluginEnd()
 {
     // Safely restore business modules in reverse order
+    RestoreModule15_HideDuration();
+    RestoreModule14_DefendRush();
+    RestoreModule13_SniperBuy();
+    RestoreModule12_CampGate();
     RestoreModule11_Sniper();
     RestoreModule10_Defuse();
     RestoreModule9_Loot();
@@ -170,6 +184,10 @@ public void OnConVarChange_Enable(ConVar convar, const char[] oldValue, const ch
     EnableModule9_Loot(bEnable);
     EnableModule10_Defuse(bEnable);
     EnableModule11_Sniper(bEnable);
+    EnableModule12_CampGate(bEnable);
+    EnableModule13_SniperBuy(bEnable);
+    EnableModule14_DefendRush(bEnable);
+    EnableModule15_HideDuration(bEnable);
 }
 
 public void OnMapStart()

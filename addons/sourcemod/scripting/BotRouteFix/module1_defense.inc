@@ -31,6 +31,12 @@
 //               - 32 位: 55 字节完整 x87 FPU 状态机重写，严格遵守跨 call 浮点栈契约。
 //========================================================================================
 
+// 守点概率公式宏定义 (Chance = BASE - STEP * Morale)
+#define GUARD_CHANCE_BASE       70.0    // 基础守点概率 (士气 0 时 70%)
+#define GUARD_CHANCE_STEP       10.0    // 每级士气增减步长 (百分比)
+#define GUARD_CHANCE_MIN        0.0     // 守点概率下限
+#define GUARD_CHANCE_MAX        100.0   // 守点概率上限
+
 // 模块内存补丁实例
 MemoryPatch g_PatchGuardBombsite;
 MemoryPatch g_PatchDefenseRush;
@@ -122,14 +128,14 @@ bool IsDefenseRushPatched()
  */
 float CalculateGuardBombsiteChance(int morale)
 {
-    float chance = 70.0 - 10.0 * float(morale);
-    if (chance > 100.0)
+    float chance = GUARD_CHANCE_BASE - GUARD_CHANCE_STEP * float(morale);
+    if (chance > GUARD_CHANCE_MAX)
     {
-        chance = 100.0;
+        chance = GUARD_CHANCE_MAX;
     }
-    if (chance < 0.0)
+    if (chance < GUARD_CHANCE_MIN)
     {
-        chance = 0.0;
+        chance = GUARD_CHANCE_MIN;
     }
     return chance;
 }
@@ -226,7 +232,7 @@ bool PrepGuardBombsitePatch()
             return true;
         }
 
-        // 预检验证：严格比对 32 位原始 56 字节模板操作码
+        // 预检验证：严格比对 32 位原始 55 字节模板操作码
         int chkOff[33] = {0,1,6,7,8,9,10,15,16,18,19,20,21,22,23,24,25,26,27,28,33,34,36,37,38,39,40,45,46,47,48,49,50};
         int chkVal[33] = {0xD9,0x05,0x83,0xEC,0x08,0x8B,0x87,0x89,0x45,0xD9,0x5C,0x24,0x04,0xD9,0xEE,0xD9,0x1C,0x24,0xFF,0x15,0xDB,0x45,0x83,0xC4,0x08,0xD8,0x0D,0xDF,0xF1,0xDD,0xD8,0x0F,0x86};
         for (int i = 0; i < 33; i++)
