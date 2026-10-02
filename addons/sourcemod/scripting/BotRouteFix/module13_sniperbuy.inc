@@ -28,13 +28,14 @@
 //      （R < chance ⟺ !(chance <= R)，浮点相等零测集也不差分毫）。
 //      edi 在窗内恒为 me（入口 mov ecx,edi 调 GetTeamNumber，此后只读；774C/9B1C 才重载），
 //      故 morale 取 [edi+g_iOffset_Morale]；eax=team（GetTeamNumber 残留）复用。
-//    - 64 位（签名 n=1 @ 0x18035EC62，comiss 在 +12）：
+//    - 64 位（签名 n=1 @ 0x18035ECA2，comiss 在 +12）：
 //      RandomFloat(0,100) → comiss xmm0, [50.0 共用常量] → setb al → randombuy OR。
-//      50.0 是 HideState  ambush 骰子共用的常量，不可直改；窗内 46 字节塞不下
+//      50.0 是 HideState ambush 骰子共用的常量，不可直改；窗内 46 字节塞不下
 //      math(20B)+6 loads(35B)+setb(3B)=58B，故用 jmp-out cave：comiss(7B) 改 E9 + 2 NOP，
-//      cave 落在 0x180424721（前驱 C3 无 fall-through，21×CC + 10B 对齐 NOP 共 31B，
-//      写前全量校验，漂移则 abort）。cave 用已死寄存器 ecx/xmm1（r11/r12d/rbx/rcx/r14/r8d
-//      在后均重载；eax 不碰，xmm0 只读），E9 回跳保留 flags 给 setb。
+//      cave 落在 0x1804247C1（前驱 C3 无 fall-through，21×CC + 10B 对齐 NOP 共 31B，
+//      由 Gamedata SniperBuy13_CaveOffset 动态配置相对位移 0xC5B13，写前全量校验，漂移则 abort）。
+//      cave 用已死寄存器 ecx/xmm1（r11/r12d/rbx/rcx/r14/r8d 在后均重载；eax 不碰，xmm0 只读），
+//      E9 回跳保留 flags 给 setb。
 //========================================================================================
 // 随机买狙击枪意愿概率公式宏定义 (Chance = BASE - STEP * Morale)
 #define SNIPER_BUY_CHANCE_BASE  50.0    // 基础买狙意愿概率 (士气 0 时 50%)
@@ -299,8 +300,13 @@ static bool PrepSniperBuy13_Cave()
         return false;
     }
 
-    // cave 地址 = comiss + 0xC5AB3（同模块相对位移，ASLR 安全），全量校验 31B 模式
-    Address caveAddr = comissAddr + view_as<Address>(0xC5AB3);
+    // cave 地址 = comiss + caveOffset（同模块相对位移，ASLR 安全；优先从 gamedata 读取，默认兜底 0xC5B13）
+    int caveOffset = GameConfGetOffset(g_hGameConf, "SniperBuy13_CaveOffset");
+    if (caveOffset <= 0)
+    {
+        caveOffset = 0xC5B13;
+    }
+    Address caveAddr = comissAddr + view_as<Address>(caveOffset);
 
     // 前驱必须是 C3（ret），排除 fall-through 落入 cave 的可能
     if (LoadFromAddress(caveAddr - view_as<Address>(1), NumberType_Int8) != 0xC3)

@@ -523,6 +523,11 @@
 				"windows"	"13"
 				"windows64"	"7"
 			}
+			"SniperBuy13_CaveOffset"
+			{
+				"windows"	"-1"
+				"windows64"	"809747"
+			}
 		}
 	}
 }
