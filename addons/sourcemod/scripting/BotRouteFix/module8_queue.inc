@@ -4,22 +4,27 @@
 #define _botroutefix_module8_queue_included
 
 //========================================================================================
-// MODULE 8: POLITE QUEUE BREAKER & DOORWAY TURNAROUND (UpdatePathMovement Post hook)
+// MODULE 8: POLITE QUEUE BREAKER & DEADLOCK HUNT TRANSITION (UpdatePathMovement Post hook)
 //
 // 门口/路口被队友挡路时的礼貌等待，原生要 2~5 秒（5-3*aggr）才散，还可能一头再扎回同一个堵点。
 // 本模块在引擎每 think 评估等待的同一位置（CCSBot::UpdatePathMovement Post）介入：
 //   - 等待超过 QUEUE_BREAKER_TIMEOUT (2.0s）即打碎排队
 //   - 被堵 node 与下一个 node 各钉 +0.8 danger（封顶 2.5），A* 立即绕开，下次重算不走回头路
+//   - 连续打碎达到 QUEUE_SHATTER_LIMIT (5次，约等待 10 秒) 判定为顽固死锁：
+//     递延一帧调用 CCSBot::Hunt 将其强切为 HuntState，彻底清空导致死锁的 Task (转为 SEEK_AND_DESTROY)，
+//     使 Bot 放弃僵尸执念，重新选路奔赴战场。
 // 原生 2~5 秒那套还在后面兜底：我们先清了它到点就跳过；我们没赶上它照旧散。双向交接，无 timer 轮询。
 //========================================================================================
 
 #define QUEUE_BREAKER_TIMEOUT   2.0
+#define QUEUE_SHATTER_LIMIT     5       // 连续打碎达到 5 次（约等待 10 秒），判定为顽固死锁
 #define QUEUE_NAIL_DANGER       0.8
 #define QUEUE_NAIL_MAX          2.5
 #define DANGER_DECAY_RATE_SEC   120.0   // 引擎原生自然沉降速率 (1.0 每 120 秒)
 
 // 本模块私有状态（static，偏移与句柄不出本文件）
 static Handle g_hUpdatePathDetour = null;
+static int g_iShatterCount[MAXPLAYERS + 1];
 static int g_iOffset_Waiting = -1;
 static int g_iOffset_PoliteTimer = -1;
 static int g_iOffset_TimerDuration = -1;
@@ -36,6 +41,7 @@ static int g_iPtrSize = 4;
 
 // 遥测统计计数器
 static int g_iTotalQueueShattered = 0;
+static int g_iTotalDeadlockHunt = 0;
 
 // 给指定 NavArea 按阵营钉 danger（先沉降再加，封顶防永久封路，刷时间戳）
 static void Queue_NailDanger(Address pArea, int teamIdx, float curtime)
@@ -68,6 +74,32 @@ static void Queue_NailDanger(Address pArea, int teamIdx, float curtime)
 
     StoreToAddress(pArea + view_as<Address>(g_iOffset_Danger + teamIdx * 4), view_as<int>(newDanger), NumberType_Int32);
     StoreToAddress(pArea + view_as<Address>(g_iOffset_DangerTimestamp + teamIdx * 4), view_as<int>(curtime), NumberType_Int32);
+}
+
+/**
+ * 回合重置：清空所有 Bot 的打碎计数
+ */
+void Module8_OnRoundStart()
+{
+    for (int i = 1; i <= MaxClients; i++)
+    {
+        g_iShatterCount[i] = 0;
+    }
+}
+
+/**
+ * 递延一帧转 Hunt（帧外切状态才安全），彻底清空导致死锁的 Task 并全局重新选路
+ */
+public void Module8_FrameHunt(any data)
+{
+    int client = GetClientOfUserId(view_as<int>(data));
+    if (!IsBot(client, true))
+    {
+        return;
+    }
+
+    BotHunt(client);
+    DebugLog("[BotRouteFix] [Module 8] Bot %N transitioned to HuntState (deadlock broken)", client);
 }
 
 public MRESReturn Hook_UpdatePathMovement_Post(int client, DHookParam hParams)
@@ -107,7 +139,8 @@ public MRESReturn Hook_UpdatePathMovement_Post(int client, DHookParam hParams)
         return MRES_Ignored;
     }
 
-    float elapsedWait = GetGameTime() - (timestamp - duration);
+    float curtime = GetGameTime();
+    float elapsedWait = curtime - (timestamp - duration);
     if (elapsedWait < QUEUE_BREAKER_TIMEOUT)
     {
         return MRES_Ignored;
@@ -126,7 +159,6 @@ public MRESReturn Hook_UpdatePathMovement_Post(int client, DHookParam hParams)
     StoreToAddress(pBot + view_as<Address>(g_iOffset_Waiting), 0, NumberType_Int8);
 
     // 2. 钉住当前被堵 node 与下一个 node，逼 A* 绕开
-    float curtime = GetGameTime();
     int pathIndex = LoadFromAddress(pBot + view_as<Address>(g_iOffset_PathIndex), NumberType_Int32);
     if (pathIndex < 0)
     {
@@ -147,7 +179,17 @@ public MRESReturn Hook_UpdatePathMovement_Post(int client, DHookParam hParams)
         Queue_NailDanger(LoadAddressFromAddress(pNextConnectInfo), teamIdx, curtime);
     }
 
-    // 3. 碎路径（引擎 DestroyPath 手工版）+ 礼貌 timer 置 -1 去残留，逼立即重算
+    // 3. 累计打碎达 5 次（每次卡 2 秒，累计 ~10 秒死锁）：递延一帧强切 HuntState 解脱死锁
+    g_iShatterCount[client]++;
+    if (g_iShatterCount[client] >= QUEUE_SHATTER_LIMIT)
+    {
+        g_iShatterCount[client] = 0; // 触发后清零
+        g_iTotalDeadlockHunt++;
+        RequestFrame(Module8_FrameHunt, GetClientUserId(client));
+        DebugLog("[BotRouteFix] [Module 8] Bot %N shattered %d times, deadlocked -> deferred Hunt state transition", client, QUEUE_SHATTER_LIMIT);
+    }
+
+    // 4. 碎路径（引擎 DestroyPath 手工版）+ 礼貌 timer 置 -1 去残留，逼立即重算
     StoreToAddress(pBot + view_as<Address>(g_iOffset_IsStopping), 0, NumberType_Int8);
     StoreToAddress(pBot + view_as<Address>(g_iOffset_PathLength), 0, NumberType_Int32);
     StoreToAddress(pBot + view_as<Address>(g_iOffset_PathIndex), 0, NumberType_Int32);
@@ -173,6 +215,14 @@ bool IsQueueBreakerHooked()
 int GetTotalQueueShattered()
 {
     return g_iTotalQueueShattered;
+}
+
+/**
+ * 获取累计死锁强切 Hunt 次数
+ */
+int GetTotalDeadlockHunt()
+{
+    return g_iTotalDeadlockHunt;
 }
 
 /**
@@ -210,6 +260,7 @@ bool InitModule8_Queue()
         return false;
     }
 
+    // 挂载 CCSBot::UpdatePathMovement Post 钩子
     g_hUpdatePathDetour = DHookCreateDetour(Address_Null, CallConv_THISCALL, ReturnType_Int, ThisPointer_CBaseEntity);
     if (g_hUpdatePathDetour == null)
     {
@@ -235,7 +286,8 @@ bool InitModule8_Queue()
         return false;
     }
 
-    LogMessage("[BotRouteFix] [Module 8] Polite queue breaker online (UpdatePathMovement Post hook)");
+    LogMessage("[BotRouteFix] [Module 8] Polite queue breaker & 10s deadlock Hunt transition online [%s]",
+        g_bIsWin64 ? "64-bit" : "32-bit");
     return true;
 }
 
@@ -250,6 +302,8 @@ void RestoreModule8_Queue()
         delete g_hUpdatePathDetour;
         g_hUpdatePathDetour = null;
     }
+
+    Module8_OnRoundStart();
 }
 
 /**
@@ -257,17 +311,20 @@ void RestoreModule8_Queue()
  */
 void EnableModule8_Queue(bool enable)
 {
-    if (g_hUpdatePathDetour == null)
+    if (g_hUpdatePathDetour != null)
     {
-        return;
+        if (enable)
+        {
+            DHookEnableDetour(g_hUpdatePathDetour, true, Hook_UpdatePathMovement_Post);
+        }
+        else
+        {
+            DHookDisableDetour(g_hUpdatePathDetour, true, Hook_UpdatePathMovement_Post);
+        }
     }
 
-    if (enable)
+    if (!enable)
     {
-        DHookEnableDetour(g_hUpdatePathDetour, true, Hook_UpdatePathMovement_Post);
-    }
-    else
-    {
-        DHookDisableDetour(g_hUpdatePathDetour, true, Hook_UpdatePathMovement_Post);
+        Module8_OnRoundStart();
     }
 }

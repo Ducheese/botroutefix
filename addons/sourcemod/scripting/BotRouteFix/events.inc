@@ -56,6 +56,7 @@ public void Event_RoundStart(Event event, const char[] name, bool dontBroadcast)
     Module5_OnRoundStart();
     Module6_OnRoundStart();
     Module7_OnRoundStart();
+    Module8_OnRoundStart();
     Module9_OnRoundStart();
     Module10_OnRoundStart();
 }

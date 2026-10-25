@@ -111,12 +111,14 @@
   - 掉包、下包、拆包、爆炸、包匪阵亡/掉线时全体解散（发 `StopFollowing` 恢复自由身，可就近捡包或转入守点）；回合开始静默清零。
   - 冻结期内不接管（跟随会打断买枪），中途捡包递延一帧等槽位归属落定。
 
-### 模块 8：门口礼貌排队打碎与掉头 (Polite Queue Breaker)
-- **原生排队过久 (Over-Polite Waiting)**：
+### 模块 8：门口礼貌排队打碎与死锁强切 Hunt (Polite Queue Breaker & Deadlock Hunt Transition)
+- **原生排队过久与顽固对冲死锁 (Over-Polite Waiting & Deadlock)**：
   - 门口/路口被队友挡路时，原生礼貌等待要 2~5 秒（`5 - 3 * aggression`）才散，且散开后可能一头再扎回同一个堵点。
-- **Post 钩子当 think 打碎 (Break on Post Hook)**：
-   - 本模块在 `CCSBot::UpdatePathMovement` 的 Post 阶段介入（与引擎评估等待同一位置，无 timer 轮询）：等待超过 2.0 秒即清等待旗；被堵 node 与下一个 node 各钉 `+0.8` 危险度（封顶 2.5，沉降契约照旧），A* 立即绕开，下次重算不走回头路；随后手工碎路径逼立即重算。
-  - 原生 2~5 秒机制保留在后兜底：我们先清了它到点就跳过，我们没赶上它照旧散，双向交接。
+  - 开局多名 Bot（如 de_dust2 CT 出生点前往 A/B 区）路线交叉迎面对冲，互相判定阻挡而陷入“礼貌互让”；即便在开阔区域，由于双方守点任务目标未变，重算路径后依然迎面相撞，极易形成长达十数秒甚至整回合的顽固死锁。
+- **Post 钩子打碎与 10 秒死锁强切 (Break on Post Hook & Hunt Transition)**：
+  - 本模块在 `CCSBot::UpdatePathMovement` 的 Post 阶段介入（与引擎评估等待同一位置，无 timer 轮询）：单次等待超过 2.0 秒即清等待旗；被堵 node 与下一个 node 各钉 `+0.8` 危险度（封顶 2.5，沉降契约照旧），A* 立即绕开，下次重算不走回头路；随后手工碎路径逼立即重算。
+  - **顽固死锁判定与强切**：累计打碎达 5 次（`QUEUE_SHATTER_LIMIT 5`，每次卡 2 秒，累计约 10 秒死锁），判定为顽固任务锁死；通过 `RequestFrame` 递延一帧安全调用 `CCSBot::Hunt` 强切至 `HuntState`（任务被引擎重置为 `SEEK_AND_DESTROY`），彻底洗掉僵尸执念任务并全局重新自主选路奔赴战场，秒级化解迎面对冲死锁。
+  - 回合重置、模块停用/卸载时自动清零计数；原生 2~5 秒机制保留在后兜底，双向交接。
   - 危险度下标与模块 3 同约定：`teamID % 2`（T=0/CT=1），切勿与模块 4 的 `(team-1)%2` 混淆。
 
 ### 模块 9：掉包 Top3 抢包花名册 (Loose-Bomb Fetch Roster)
@@ -244,7 +246,7 @@ addons\sourcemod\
         ├── module5_combat.inc        [模块 5] 战斗决策重构 (AttackState 闪避 100% 强制、换弹进掩体 100% 强制、残血/一打多强制后撤)
         ├── module6_tmorale.inc       [模块 6] T 阵营士气接战策略与守包听觉出击梯度 (TMorale)
         ├── module7_escort.inc        [模块 7] T 包匪贴身保镖花名册 (Carrier Escort Roster)
-        ├── module8_queue.inc         [模块 8] 门口礼貌排队打碎与掉头 (Polite Queue Breaker)
+        ├── module8_queue.inc         [模块 8] 门口礼貌排队打碎与死锁强切 Hunt (Polite Queue Breaker & Deadlock Hunt Transition)
         ├── module9_loot.inc          [模块 9] 掉包 Top3 抢包花名册 (Loose-Bomb Fetch Roster)
         ├── module10_defuse.inc       [模块 10] CT 首席拆包员 (Chief Defuser)
         ├── module11_sniper.inc       [模块 11] 狙击手威慑与走廊加压 (Sniper Deterrence & Corridor Danger)

@@ -58,23 +58,34 @@ public Action Command_Status(int client, int args)
         (bMaster && IsAttackDodgeHooked()) ? "ACTIVE" : "INACTIVE", GetTotalDodgeForced());
     ReplyToCommand(client, "[BotRouteFix] [Module 5] Reload Hide 100%% Patch           : %s",
         (bMaster && IsReloadHidePatched()) ? "ACTIVE" : "INACTIVE");
-    ReplyToCommand(client, "[BotRouteFix] [Module 5] Attack Forced Retreat (Low-HP/Outnumbered): %s (%d Retreats)",
+    ReplyToCommand(client, "[BotRouteFix] [Module 5] Attack Forced Retreat (Low-HP/Outnumbered/Sniper): %s (%d Retreats)",
         (bMaster && IsAttackRetreatHooked()) ? "ACTIVE" : "INACTIVE", GetTotalRetreatTriggered());
     ReplyToCommand(client, "[BotRouteFix] [Module 6] InvestigateNoise Audio Intercept  : %s (%d Blocked / %d Allowed)",
         (bMaster && IsInvestigateNoiseHooked()) ? "ACTIVE" : "INACTIVE", GetTotalNoiseIntercepted(), GetTotalNoiseAllowed());
-    ReplyToCommand(client, "[BotRouteFix] [Module 7] Carrier Escort Roster          : %d/%d (Carrier #%d)",
-        Escort_GetBodyguardCount(), Escort_GetTargetCount(), Escort_GetCarrier());
 
-    char queueStatus[64];
+    char escortStatus[64];
+    if (bMaster)
+    {
+        Format(escortStatus, sizeof(escortStatus), "ACTIVE (%d/%d, Carrier #%d)",
+            Escort_GetBodyguardCount(), Escort_GetTargetCount(), Escort_GetCarrier());
+    }
+    else
+    {
+        strcopy(escortStatus, sizeof(escortStatus), "INACTIVE");
+    }
+    ReplyToCommand(client, "[BotRouteFix] [Module 7] Carrier Escort Roster          : %s", escortStatus);
+
+    char queueStatus[80];
     if (bMaster && IsQueueBreakerHooked())
     {
-        Format(queueStatus, sizeof(queueStatus), "ACTIVE (%d Shattered)", GetTotalQueueShattered());
+        Format(queueStatus, sizeof(queueStatus), "ACTIVE (%d Shattered, %d Deadlocks Broken)",
+            GetTotalQueueShattered(), GetTotalDeadlockHunt());
     }
     else
     {
         strcopy(queueStatus, sizeof(queueStatus), "INACTIVE (Pending Signature)");
     }
-    ReplyToCommand(client, "[BotRouteFix] [Module 8] Polite Queue Breaker (2.0s)    : %s", queueStatus);
+    ReplyToCommand(client, "[BotRouteFix] [Module 8] Polite Queue & Deadlock Hunt  : %s", queueStatus);
 
     char lootStatus[96];
     if (bMaster && IsLootHooked())
