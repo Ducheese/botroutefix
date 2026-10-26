@@ -212,8 +212,10 @@ public void OnClientPutInServer(int client)
 public void OnClientDisconnect(int client)
 {
     // 游戏事件 Hub 到不了 forward，直调各花名册除名/释放/接力与状态重置
+    Module2_OnClientDisconnect(client);
     Module5_OnClientDisconnect(client);
     Module7_OnClientDisconnect(client);
+    Module8_OnClientDisconnect(client);
     Module9_OnClientDisconnect(client);
     Module10_OnClientDisconnect(client);
 }

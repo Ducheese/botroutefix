@@ -88,6 +88,17 @@ void Module8_OnRoundStart()
 }
 
 /**
+ * 客户端掉线事件：清空该槽位打碎计数，防止新 Bot 复用槽位时误继承
+ */
+void Module8_OnClientDisconnect(int client)
+{
+    if (client > 0 && client <= MaxClients)
+    {
+        g_iShatterCount[client] = 0;
+    }
+}
+
+/**
  * 递延一帧转 Hunt（帧外切状态才安全），彻底清空导致死锁的 Task 并全局重新选路
  */
 public void Module8_FrameHunt(any data)

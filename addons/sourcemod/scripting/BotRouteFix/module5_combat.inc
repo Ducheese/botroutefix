@@ -4,7 +4,7 @@
 #define _botroutefix_module5_combat_included
 
 //========================================================================================
-// [模块 5] 战斗决策重构 (AttackState 闪避 100% 强制、换弹进掩体 100% 强制、残血/一打多强制后撤)
+// [模块 5] 战斗决策重构 (身法闪避 100%、换弹进掩体 100%、残血/一打多/见狙威慑强制脱战)
 //
 // 业务背景与引擎逆向分析：
 //
@@ -62,8 +62,8 @@
 //        强行撕开原版交火时长与退避冷却的硬性封锁，促使下一帧引擎原生撤退段立即执行 `TryToRetreat()` 尝试后撤，
 //        成功即转入 `HideState`，杜绝残血时因计时器死锁而在开阔地白给。
 //    - 包匪使命特权防护 (C4 Carrier Shield):
-//        * 身边有存活保镖/队友 (`nearbyFriends > 0`)：持包者绝对禁止后撤，由保镖拉枪当肉盾，包匪维持推进；
-//        * 已处于 `PLANT_BOMB` 下包任务中 (`Task == 1`)：下包使命压倒一切，绝对禁止后撤；
+//        * 身边有存活保镖/队友 (`nearbyFriends >= CARRIER_SHIELD_MIN_FRIENDS`)：持包者绝对禁止后撤，由保镖拉枪当肉盾，包匪维持推进；
+//        * 已处于 `PLANT_BOMB` 下包任务中 (`Task == BOT_TASK_PLANT_BOMB`)：下包使命压倒一切，绝对禁止后撤；
 //        彻底终结残血包匪受击抛下保镖掉头逃跑进掩体的恶性折返跑死循环。
 //
 // 4. 孤身一打多强制后撤 (Outnumbered Forced Retreat via SDKCall):
@@ -257,6 +257,7 @@ void Module5_OnPlayerDeath(int victim)
 {
     if (victim > 0 && victim <= MaxClients)
     {
+        g_flNextForcedRetreat[victim] = 0.0;
         g_bSniperRetreatWanted[victim] = false;
     }
 }

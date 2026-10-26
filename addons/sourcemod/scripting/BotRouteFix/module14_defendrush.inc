@@ -29,8 +29,11 @@
 //      32 位：lea 末字节 FE → FC；64 位：sub 末字节 02 → 04。
 //    float 地址运行时从 Site1 的 fmul/mulss 操作数动态推导（32 位取 abs32，64 位 RIP 解算），
 //    并校验确为 -17.0f 后才写，防止常量池漂移误伤。
+//    ★ 机器码立即数与常量固化说明: 当前注入的机器码已将公式 40.0 - 10.0 * Morale (即 -10.0*(M-4))
+//      固化为底层汇编立即数 4 (sub/lea 4) 与共享只读常量池 float (-10.0f)；下方的 DEFEND_RUSH_CHANCE_*
+//      宏定义仅用于 CalculateDefendRushChance 等辅助查询与理论对齐，修改宏不会直接驱动机器码修改。
 //========================================================================================
-// 开局前沿架枪概率公式宏定义 (Chance = BASE - STEP * Morale)
+// 开局前沿架枪概率公式宏定义 (Chance = BASE - STEP * Morale，注：当前机器码内已固化立即数 4 与常量 -10.0f)
 #define DEFEND_RUSH_CHANCE_BASE 40.0    // 基础前沿架枪概率 (士气 0 时 40%)
 #define DEFEND_RUSH_CHANCE_STEP 10.0    // 每级士气增减步长 (百分比)
 #define DEFEND_RUSH_CHANCE_MIN  0.0     // 前沿架枪概率下限

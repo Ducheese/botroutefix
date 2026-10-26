@@ -353,6 +353,23 @@ void Module2_OnPlayerDeath(int victim)
 }
 
 /**
+ * 客户端掉线事件 (OnClientDisconnect)
+ * 若开局持包者断开连接，当场解除包点锁定并清空索引
+ */
+void Module2_OnClientDisconnect(int client)
+{
+    if (client > 0 && client == g_iOpeningCarrier)
+    {
+        if (g_bBombsiteLocked)
+        {
+            RestoreBombsiteLockPatch();
+            DebugLog("[BotRouteFix] [Module 2] Opening C4 carrier %d disconnected! Restored native GetClosestZone.", client);
+        }
+        g_iOpeningCarrier = 0;
+    }
+}
+
+/**
  * C4 已安放 (bomb_planted)
  * 下包完成，清理包点锁定状态
  */

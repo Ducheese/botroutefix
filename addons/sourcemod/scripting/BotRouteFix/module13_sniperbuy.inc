@@ -36,8 +36,11 @@
 //      由 Gamedata SniperBuy13_CaveOffset 动态配置相对位移 0xC5B13，写前全量校验，漂移则 abort）。
 //      cave 用已死寄存器 ecx/xmm1（r11/r12d/rbx/rcx/r14/r8d 在后均重载；eax 不碰，xmm0 只读），
 //      E9 回跳保留 flags 给 setb。
+//    ★ 机器码立即数固化说明: 当前注入的机器码已将公式 (50.0 - 10.0 * Morale)
+//      固化为底层汇编立即数 (add ecx/eax, 50 与 imul ecx/eax, -10)；下方的 SNIPER_BUY_CHANCE_*
+//      宏定义仅供 CalculateSniperBuyChance 等辅助查询与理论对齐，修改宏不会直接改变底层汇编立即数。
 //========================================================================================
-// 随机买狙击枪意愿概率公式宏定义 (Chance = BASE - STEP * Morale)
+// 随机买狙击枪意愿概率公式宏定义 (Chance = BASE - STEP * Morale，注：当前机器码内已固化立即数 50 与 -10)
 #define SNIPER_BUY_CHANCE_BASE  50.0    // 基础买狙意愿概率 (士气 0 时 50%)
 #define SNIPER_BUY_CHANCE_STEP  10.0    // 每级士气增减步长 (百分比)
 #define SNIPER_BUY_CHANCE_MIN   0.0     // 买狙意愿概率下限
