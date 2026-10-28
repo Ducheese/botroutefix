@@ -41,8 +41,12 @@ DynamicDetour g_hHideDurationDetour = null;
 int g_iOffset_HideDuration = -1;
 int g_iTotalHideRescaled = 0;
 
+// 业务开启态与 per-hook 真实启用态（DHook 状态机唯一事实来源）
+static bool g_bModule15_Active = false;
+static bool g_bHideDurationDetourEnabled = false;
+
 /**
- * 初始化并激活模块 15（DHook HideState::OnEnter post）
+ * 初始化并挂载模块 15（DHook HideState::OnEnter post 宿主）
  *
  * @return              是否成功激活
  */
@@ -61,11 +65,14 @@ bool InitModule15_HideDuration()
         return false;
     }
 
-    if (!PrepHideDurationDetour())
+    if (!MountHideDurationDetour())
     {
         LogError("[BotRouteFix] [Module 15] Failed to inject HideState::OnEnter post hook!");
         return false;
     }
+
+    // 套用业务态（借钩方模块 12 可能已先行武装：底层真实启用态统一由 Enable 内部的 Sync 裁决）
+    EnableModule15_HideDuration(true);
 
     LogMessage("[BotRouteFix] [Module 15] Hide duration morale scaling activated [%s]",
         g_bIsWin64 ? "64-bit" : "32-bit");
@@ -73,44 +80,67 @@ bool InitModule15_HideDuration()
 }
 
 /**
- * 还原模块 15（关闭 detour）
+ * 同步 HideState::OnEnter 宿主 Detour 的真实启用态（M12/M15 共用单钩的协同中枢）
+ *
+ * 模块 12（狙击 camp 门禁）不单独注册 Detour，而是借本模块的 Post Detour 作为执行宿主。
+ * 底层钩子只要任一借钩方仍在工作就必须保持启用；只有双方全部关闭才真正 Disable。
+ * 既杜绝重复 Enable/Disable 触发 "Function not detoured" 致命状态机异常，
+ * 也避免"关掉模块 15 顺带把模块 12 门禁打死"的隐性耦合一刀切。
+ */
+void SyncHideDurationDetourState()
+{
+    bool want = (IsModule12_Active() || g_bModule15_Active);
+    SyncDetourEnabled(g_hHideDurationDetour, g_bHideDurationDetourEnabled,
+        true, Hook_HideState_OnEnter_Post, want, "Module 15");
+}
+
+/**
+ * 动态启用或停用模块 15（幂等；底层钩子随借钩双方的整体需求同步收敛）
+ */
+void EnableModule15_HideDuration(bool enable)
+{
+    if (enable == g_bModule15_Active)
+    {
+        return;
+    }
+
+    g_bModule15_Active = enable;
+    SyncHideDurationDetourState();
+}
+
+/**
+ * 还原模块 15（插件卸载：强制摘钩并释放句柄）
  */
 void RestoreModule15_HideDuration()
 {
+    EnableModule15_HideDuration(false);
+
     if (g_hHideDurationDetour != null)
     {
-        DHookDisableDetour(g_hHideDurationDetour, true, Hook_HideState_OnEnter_Post);
+        // 卸载路径不看借钩方意愿，直接强制 Disable 后再释放句柄
+        SyncDetourEnabled(g_hHideDurationDetour, g_bHideDurationDetourEnabled,
+            true, Hook_HideState_OnEnter_Post, false, "Module 15");
         delete g_hHideDurationDetour;
         g_hHideDurationDetour = null;
     }
+
     LogMessage("[BotRouteFix] [Module 15] Hook safely removed.");
 }
 
 /**
- * 动态启用或停用模块 15
+ * 查询模块 15 业务开启态
  */
-void EnableModule15_HideDuration(bool enable)
+bool IsModule15_Active()
 {
-    if (g_hHideDurationDetour == null)
-    {
-        return;
-    }
-    if (enable)
-    {
-        DHookEnableDetour(g_hHideDurationDetour, true, Hook_HideState_OnEnter_Post);
-    }
-    else
-    {
-        DHookDisableDetour(g_hHideDurationDetour, true, Hook_HideState_OnEnter_Post);
-    }
+    return g_bModule15_Active;
 }
 
 /**
- * 查询模块 15 是否挂载
+ * 查询 HideState::OnEnter 宿主钩子的底层挂载态（含借钩方需求）
  */
 bool IsHideDurationHooked()
 {
-    return g_hHideDurationDetour != null;
+    return (g_hHideDurationDetour != null && g_bHideDurationDetourEnabled);
 }
 
 /**
@@ -125,7 +155,7 @@ int GetTotalHideRescaled()
 // DETOUR: HIDESTATE::ONENTER (POST HOOK FOR MORALE DURATION SCALING)
 //========================================================================================
 
-static bool PrepHideDurationDetour()
+static bool MountHideDurationDetour()
 {
     g_hHideDurationDetour = DHookCreateDetour(Address_Null, CallConv_THISCALL, ReturnType_Void, ThisPointer_Address);
     if (g_hHideDurationDetour == null)
@@ -144,24 +174,11 @@ static bool PrepHideDurationDetour()
 
     DHookAddParam(g_hHideDurationDetour, HookParamType_CBaseEntity);
 
-    if (!DHookEnableDetour(g_hHideDurationDetour, true, Hook_HideState_OnEnter_Post))
-    {
-        LogError("[BotRouteFix] [Module 15] Failed to enable HideState_OnEnter Post detour!");
-        delete g_hHideDurationDetour;
-        g_hHideDurationDetour = null;
-        return false;
-    }
-
     return true;
 }
 
 public MRESReturn Hook_HideState_OnEnter_Post(Address pThis, DHookParam hParams)
 {
-    if (g_cvEnable != null && !g_cvEnable.BoolValue)
-    {
-        return MRES_Ignored;
-    }
-
     if (pThis == Address_Null)
     {
         return MRES_Ignored;
@@ -174,7 +191,13 @@ public MRESReturn Hook_HideState_OnEnter_Post(Address pThis, DHookParam hParams)
     }
 
     // M12 camp 门禁：task 19 的 Hide 在此重骰；被重定向去 Hunt 的直接返回，不再缩放
-    if (Module12_CampGate(client))
+    if (IsModule12_Active() && Module12_CampGate(client))
+    {
+        return MRES_Ignored;
+    }
+
+    // 借钩方可能独占了本宿主（M15 关闭、M12 开启）：业务门各自独立把关
+    if (!g_bModule15_Active)
     {
         return MRES_Ignored;
     }

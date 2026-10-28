@@ -20,9 +20,11 @@
 #define QUEUE_SHATTER_LIMIT     5       // 连续打碎达到 5 次（约等待 10 秒），判定为顽固死锁
 #define QUEUE_NAIL_DANGER       0.8
 #define QUEUE_NAIL_MAX          2.5
-#define DANGER_DECAY_RATE_SEC   120.0   // 引擎原生自然沉降速率 (1.0 每 120 秒)
+// 沉降速率 DANGER_DECAY_RATE_SEC 统一定义于 global.inc
 
 // 本模块私有状态（static，偏移与句柄不出本文件）
+static bool g_bModule8_Active = false;      // 业务开启态
+static bool g_bUpdatePathHooked = false;    // per-hook 真实启用态
 static Handle g_hUpdatePathDetour = null;
 static int g_iShatterCount[MAXPLAYERS + 1];
 static int g_iOffset_Waiting = -1;
@@ -78,6 +80,9 @@ static void Queue_NailDanger(Address pArea, int teamIdx, float curtime)
 
 /**
  * 回合重置：清空所有 Bot 的打碎计数
+ *
+ * 【例外：不随业务态守卫】本函数同时被 EnableModule8_Queue(false) 作为内部重置复用，
+ *   依赖"在置假之前完成清理"的调用顺序；加守卫会让关闭流程的清理失效。
  */
 void Module8_OnRoundStart()
 {
@@ -85,6 +90,14 @@ void Module8_OnRoundStart()
     {
         g_iShatterCount[i] = 0;
     }
+}
+
+/**
+ * 地图启动重置：换图清空排队打碎计数，消除跨图槽位复用残留
+ */
+void Module8_OnMapStart()
+{
+    Module8_OnRoundStart();
 }
 
 /**
@@ -103,6 +116,12 @@ void Module8_OnClientDisconnect(int client)
  */
 public void Module8_FrameHunt(any data)
 {
+    // 递延帧可能在停用之后才到，必须二次校验业务态
+    if (!g_bModule8_Active)
+    {
+        return;
+    }
+
     int client = GetClientOfUserId(view_as<int>(data));
     if (!IsBot(client, true))
     {
@@ -115,7 +134,7 @@ public void Module8_FrameHunt(any data)
 
 public MRESReturn Hook_UpdatePathMovement_Post(int client, DHookParam hParams)
 {
-    if (g_cvEnable != null && !g_cvEnable.BoolValue)
+    if (!g_bModule8_Active)
     {
         return MRES_Ignored;
     }
@@ -213,11 +232,11 @@ public MRESReturn Hook_UpdatePathMovement_Post(int client, DHookParam hParams)
 }
 
 /**
- * 查询 UpdatePathMovement Detour 是否处于就绪/已挂载状态
+ * 查询排队化解 UpdatePathMovement Detour 与 Hunt SDKCall 是否完全就绪
  */
 bool IsQueueBreakerHooked()
 {
-    return (g_hUpdatePathDetour != null);
+    return (g_hUpdatePathDetour != null && g_bUpdatePathHooked && g_hSDKCall_Hunt != null);
 }
 
 /**
@@ -284,16 +303,18 @@ bool InitModule8_Queue()
         LogMessage("[BotRouteFix] [Module 8] Signature 'CCSBot_UpdatePathMovement' pending in gamedata (prototype mode). Module 8 is on standby.");
         delete g_hUpdatePathDetour;
         g_hUpdatePathDetour = null;
+        EnableModule8_Queue(true);  // 待机：签名缺失，业务态开启、底层缺失（状态行显示 DEGRADED）
         return true;
     }
 
     DHookAddParam(g_hUpdatePathDetour, HookParamType_Bool);
 
-    if (!DHookEnableDetour(g_hUpdatePathDetour, true, Hook_UpdatePathMovement_Post))
+    EnableModule8_Queue(true);
+    if (!g_bModule8_Active)
     {
-        LogError("[BotRouteFix] [Module 8] Failed to enable UpdatePathMovement Post detour!");
         delete g_hUpdatePathDetour;
         g_hUpdatePathDetour = null;
+        LogError("[BotRouteFix] [Module 8] Failed to enable UpdatePathMovement Post detour!");
         return false;
     }
 
@@ -303,39 +324,52 @@ bool InitModule8_Queue()
 }
 
 /**
- * 还原模块 8（摘钩子）
- */
-void RestoreModule8_Queue()
-{
-    if (g_hUpdatePathDetour != null)
-    {
-        DHookDisableDetour(g_hUpdatePathDetour, true, Hook_UpdatePathMovement_Post);
-        delete g_hUpdatePathDetour;
-        g_hUpdatePathDetour = null;
-    }
-
-    Module8_OnRoundStart();
-}
-
-/**
- * 动态启用或停用模块 8
+ * 动态启用或停用模块 8（幂等）
  */
 void EnableModule8_Queue(bool enable)
 {
-    if (g_hUpdatePathDetour != null)
+    if (enable == g_bModule8_Active)
     {
-        if (enable)
-        {
-            DHookEnableDetour(g_hUpdatePathDetour, true, Hook_UpdatePathMovement_Post);
-        }
-        else
-        {
-            DHookDisableDetour(g_hUpdatePathDetour, true, Hook_UpdatePathMovement_Post);
-        }
+        return;
     }
 
-    if (!enable)
+    if (enable)
     {
-        Module8_OnRoundStart();
+        if (g_hUpdatePathDetour == null)
+        {
+            // 待机态：签名缺失，无可挂载钩子；业务态仍记为开启
+            g_bModule8_Active = true;
+            return;
+        }
+
+        g_bModule8_Active = SyncDetourEnabled(g_hUpdatePathDetour, g_bUpdatePathHooked,
+            true, Hook_UpdatePathMovement_Post, true, "Module 8");
+        return;
     }
+
+    SyncDetourEnabled(g_hUpdatePathDetour, g_bUpdatePathHooked, true, Hook_UpdatePathMovement_Post, false, "Module 8");
+    Module8_OnRoundStart();
+    g_bModule8_Active = false;
+}
+
+/**
+ * 还原模块 8（插件卸载：摘钩并释放句柄）
+ */
+void RestoreModule8_Queue()
+{
+    EnableModule8_Queue(false);
+
+    if (g_hUpdatePathDetour != null)
+    {
+        delete g_hUpdatePathDetour;
+        g_hUpdatePathDetour = null;
+    }
+}
+
+/**
+ * 查询模块 8 业务开启态
+ */
+bool IsModule8_Active()
+{
+    return g_bModule8_Active;
 }

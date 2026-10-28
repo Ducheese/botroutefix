@@ -45,10 +45,15 @@
 #define BOT_TASK_GUARD_TICKING_BOMB 4   // 引擎原生任务枚举：GUARD_TICKING_BOMB (守已安放的雷包)
 
 // 模块 Detour 句柄与统计
+// 注：对局炸弹状态 g_bBombPlanted 已上收至 global.inc，由 events.inc 事件总线唯一维护，
+//     本模块只读消费，模块启停不再影响对局状态流转。
 Handle g_hInvestigateNoiseDetour = null;
-bool g_bBombPlanted = false;
 int g_iTotalNoiseIntercepted = 0;
 int g_iTotalNoiseAllowed = 0;
+
+// 业务开启态与 per-hook 真实启用态（DHook 状态机唯一事实来源）
+static bool g_bModule6_Active = false;
+static bool g_bNoiseDetourEnabled = false;
 
 // 模块内部专用偏移缓存
 static int g_iOffset_Disposition = -1;
@@ -82,10 +87,20 @@ bool InitModule6_TMorale()
         return false;
     }
 
-    // 2. 准备并挂载 CCSBot::InvestigateNoise Pre Detour
-    if (!PrepInvestigateNoiseDetour())
+    // 2. 挂载 CCSBot::InvestigateNoise Pre Detour
+    if (!MountInvestigateNoiseDetour())
     {
         LogError("[BotRouteFix] [Module 6] Failed to hook CCSBot::InvestigateNoise detour!");
+        return false;
+    }
+
+    // 3. 套用业务态
+    EnableModule6_TMorale(true);
+    if (!g_bModule6_Active)
+    {
+        delete g_hInvestigateNoiseDetour;
+        g_hInvestigateNoiseDetour = null;
+        LogError("[BotRouteFix] [Module 6] Failed to enable InvestigateNoise detour!");
         return false;
     }
 
@@ -95,30 +110,48 @@ bool InitModule6_TMorale()
 }
 
 /**
- * 还原模块 6 的所有动态拦截与运行时状态
+ * 动态启用或停用模块 6（幂等）
+ */
+void EnableModule6_TMorale(bool enable)
+{
+    if (enable == g_bModule6_Active)
+    {
+        return;
+    }
+
+    if (enable)
+    {
+        g_bModule6_Active = SyncDetourEnabled(g_hInvestigateNoiseDetour, g_bNoiseDetourEnabled,
+            false, Hook_InvestigateNoise_Pre, true, "Module 6");
+        return;
+    }
+
+    SyncDetourEnabled(g_hInvestigateNoiseDetour, g_bNoiseDetourEnabled, false, Hook_InvestigateNoise_Pre, false, "Module 6");
+    g_bModule6_Active = false;
+}
+
+/**
+ * 还原模块 6（插件卸载：摘钩并释放句柄）
  */
 void RestoreModule6_TMorale()
 {
+    EnableModule6_TMorale(false);
+
     if (g_hInvestigateNoiseDetour != null)
     {
-        DHookDisableDetour(g_hInvestigateNoiseDetour, false, Hook_InvestigateNoise_Pre);
         delete g_hInvestigateNoiseDetour;
         g_hInvestigateNoiseDetour = null;
     }
 
-    g_bBombPlanted = false;
     LogMessage("[BotRouteFix] [Module 6] Morale tactics hooks safely restored.");
 }
 
 /**
- * 动态启用或停用模块 6
+ * 查询模块 6 业务开启态
  */
-void EnableModule6_TMorale(bool enable)
+bool IsModule6_Active()
 {
-    if (!enable)
-    {
-        g_bBombPlanted = false;
-    }
+    return g_bModule6_Active;
 }
 
 /**
@@ -126,7 +159,7 @@ void EnableModule6_TMorale(bool enable)
  */
 bool IsInvestigateNoiseHooked()
 {
-    return (g_hInvestigateNoiseDetour != null);
+    return (g_hInvestigateNoiseDetour != null && g_bNoiseDetourEnabled);
 }
 
 /**
@@ -150,26 +183,15 @@ int GetTotalNoiseAllowed()
 //========================================================================================
 
 /**
- * 回合重置 (round_start)
- */
-void Module6_OnRoundStart()
-{
-    g_bBombPlanted = false;
-}
-
-/**
- * 地图加载 (OnMapStart)：planted 旗不能跨图（否则模块 10 钩子首回合前误动）
- */
-void Module6_OnMapStart()
-{
-    g_bBombPlanted = false;
-}
-
-/**
  * 冻结结束 (round_freeze_end): 配置开局包匪接战策略
  */
 void Module6_OnRoundFreezeEnd()
 {
+    if (!g_bModule6_Active)
+    {
+        return;
+    }
+
     ApplyCarrierMoraleDisposition();
 }
 
@@ -178,6 +200,11 @@ void Module6_OnRoundFreezeEnd()
  */
 void Module6_OnItemPickup(int client, const char[] item)
 {
+    if (!g_bModule6_Active)
+    {
+        return;
+    }
+
     if (GameRules_GetProp("m_bFreezePeriod") != 0)
     {
         return;
@@ -191,27 +218,16 @@ void Module6_OnItemPickup(int client, const char[] item)
 
 /**
  * 下包完成 (bomb_planted): 配置 T 全队守点姿态梯度
+ * （g_bBombPlanted 由事件总线在分发前置真，本模块只读）
  */
 void Module6_OnBombPlanted()
 {
-    g_bBombPlanted = true;
+    if (!g_bModule6_Active)
+    {
+        return;
+    }
+
     ApplyPlantedBombTMoraleDisposition();
-}
-
-/**
- * 拆包完成 (bomb_defused)
- */
-void Module6_OnBombDefused()
-{
-    g_bBombPlanted = false;
-}
-
-/**
- * C4 爆炸 (bomb_exploded)
- */
-void Module6_OnBombExploded()
-{
-    g_bBombPlanted = false;
 }
 
 //========================================================================================
@@ -290,7 +306,7 @@ void ApplyPlantedBombTMoraleDisposition()
 // DETOUR: CCSBOT::INVESTIGATENOISE
 //========================================================================================
 
-static bool PrepInvestigateNoiseDetour()
+static bool MountInvestigateNoiseDetour()
 {
     g_hInvestigateNoiseDetour = DHookCreateDetour(Address_Null, CallConv_THISCALL, ReturnType_Void, ThisPointer_CBaseEntity);
     if (g_hInvestigateNoiseDetour == null)
@@ -307,20 +323,12 @@ static bool PrepInvestigateNoiseDetour()
         return false;
     }
 
-    if (!DHookEnableDetour(g_hInvestigateNoiseDetour, false, Hook_InvestigateNoise_Pre))
-    {
-        LogError("[BotRouteFix] [Module 6] Failed to enable CCSBot_InvestigateNoise Pre detour!");
-        delete g_hInvestigateNoiseDetour;
-        g_hInvestigateNoiseDetour = null;
-        return false;
-    }
-
     return true;
 }
 
 public MRESReturn Hook_InvestigateNoise_Pre(int client, DHookParam hParams)
 {
-    if (g_cvEnable != null && !g_cvEnable.BoolValue)
+    if (!g_bModule6_Active)
     {
         return MRES_Ignored;
     }

@@ -45,6 +45,9 @@
 MemoryPatch g_PatchGuardBombsite;
 MemoryPatch g_PatchDefenseRush;
 
+// 业务开启态（唯一事实来源；底层 isPatched 由 MemoryPatch 自己维护）
+static bool g_bModule1_Active = false;
+
 /**
  * 初始化并激活模块 1 所有内存补丁
  *
@@ -58,54 +61,73 @@ bool InitModule1_Defense()
         return false;
     }
 
-    bool success = true;
-
-    if (!PrepGuardBombsitePatch())
+    EnableModule1_Defense(true);
+    if (!g_bModule1_Active)
     {
-        LogError("[BotRouteFix] [Module 1] Failed to inject guardBombsiteChance patch!");
-        success = false;
+        LogError("[BotRouteFix] [Module 1] Failed to inject defense patches!");
+        return false;
     }
 
-    if (!PrepDefenseRushPatch())
-    {
-        LogError("[BotRouteFix] [Module 1] Failed to inject IsDefenseRushing NOP patch!");
-        success = false;
-    }
-
-    if (success)
-    {
-        LogMessage("[BotRouteFix] [Module 1] CT guard chance & anti-rush patches activated [%s]",
-            g_bIsWin64 ? "64-bit" : "32-bit");
-    }
-
-    return success;
+    LogMessage("[BotRouteFix] [Module 1] CT guard chance & anti-rush patches activated [%s]",
+        g_bIsWin64 ? "64-bit" : "32-bit");
+    return true;
 }
 
 /**
- * 还原模块 1 的所有内存补丁
+ * 动态启用或停用模块 1（幂等：同态重复调用不重写代码段）
+ */
+void EnableModule1_Defense(bool enable)
+{
+    if (enable == g_bModule1_Active)
+    {
+        return;
+    }
+
+    if (enable)
+    {
+        bool bGuard = PrepGuardBombsitePatch();
+        bool bRush  = PrepDefenseRushPatch();
+
+        // 全成或全败：任一失败立即回滚另一条，杜绝半态驻留
+        if (!bGuard || !bRush)
+        {
+            if (bGuard)
+            {
+                RestoreGuardBombsitePatch();
+            }
+            if (bRush)
+            {
+                RestoreDefenseRushPatch();
+            }
+            g_bModule1_Active = false;
+            LogError("[BotRouteFix] [Module 1] Enable aborted (guard=%d, rush=%d), all patches rolled back!", bGuard, bRush);
+            return;
+        }
+
+        g_bModule1_Active = true;
+        return;
+    }
+
+    RestoreGuardBombsitePatch();
+    RestoreDefenseRushPatch();
+    g_bModule1_Active = false;
+}
+
+/**
+ * 还原模块 1（插件卸载：恢复原始字节并复位业务态）
  */
 void RestoreModule1_Defense()
 {
-    RestoreGuardBombsitePatch();
-    RestoreDefenseRushPatch();
+    EnableModule1_Defense(false);
     LogMessage("[BotRouteFix] [Module 1] Patches safely restored to original bytes.");
 }
 
 /**
- * 动态启用或停用模块 1 补丁
+ * 查询模块 1 业务开启态
  */
-void EnableModule1_Defense(bool enable)
+bool IsModule1_Active()
 {
-    if (enable)
-    {
-        PrepGuardBombsitePatch();
-        PrepDefenseRushPatch();
-    }
-    else
-    {
-        g_PatchGuardBombsite.Restore();
-        g_PatchDefenseRush.Restore();
-    }
+    return g_bModule1_Active;
 }
 
 /**
@@ -174,11 +196,15 @@ bool PrepGuardBombsitePatch()
         g_PatchGuardBombsite.Init("GuardBombsite_x64", targetAddr, 26);
 
         // 幂等性检测：检查是否已注入 (8B 87 50 1E 00 00 = mov eax, [rdi+1E50h])
+        // 有备份 = 自家补丁，保持 isPatched；无备份 = 外来残留，记 false（无基线可还原）
         if (LoadFromAddress(targetAddr, NumberType_Int8) == 0x8B
             && LoadFromAddress(targetAddr + view_as<Address>(1), NumberType_Int8) == 0x87
             && LoadFromAddress(targetAddr + view_as<Address>(2), NumberType_Int8) == 0x50)
         {
-            g_PatchGuardBombsite.isPatched = false;
+            if (!g_PatchGuardBombsite.hasBackup)
+            {
+                g_PatchGuardBombsite.isPatched = false;
+            }
             LogMessage("[BotRouteFix] [Module 1] Guard bombsite patch already present @ %X, skipping", targetAddr);
             return true;
         }
@@ -231,7 +257,10 @@ bool PrepGuardBombsitePatch()
             && LoadFromAddress(targetAddr + view_as<Address>(10), NumberType_Int8) == 0xC0
             && LoadFromAddress(targetAddr + view_as<Address>(11), NumberType_Int8) == 0xF6)
         {
-            g_PatchGuardBombsite.isPatched = false;
+            if (!g_PatchGuardBombsite.hasBackup)
+            {
+                g_PatchGuardBombsite.isPatched = false;
+            }
             LogMessage("[BotRouteFix] [Module 1] Guard bombsite patch already present @ %X, skipping", targetAddr);
             return true;
         }
@@ -329,7 +358,10 @@ bool PrepDefenseRushPatch()
     if (LoadFromAddress(targetAddr, NumberType_Int8) == 0x90
         && LoadFromAddress(targetAddr + view_as<Address>(1), NumberType_Int8) == 0x90)
     {
-        g_PatchDefenseRush.isPatched = false;
+        if (!g_PatchDefenseRush.hasBackup)
+        {
+            g_PatchDefenseRush.isPatched = false;
+        }
         LogMessage("[BotRouteFix] [Module 1] Anti-Rush NOP patch already present @ %X, skipping", targetAddr);
         return true;
     }

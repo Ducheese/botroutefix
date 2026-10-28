@@ -3,11 +3,11 @@
 //
 // 模块化架构：
 //   - BotRouteFix/global.inc          : 全局常量、宏定义、环境架构识别与公共状态
-//   - BotRouteFix/memory.inc          : 底层内存安全补丁抽象与字节序列写入管理 (MemoryPatch)
+//   - BotRouteFix/memory.inc          : 内存补丁抽象 (MemoryPatch) 与 DHook 启用态同步 (SyncDetourEnabled)
 //   - BotRouteFix/helpers.inc         : Bot 实体判定、Morale 属性与通用内存数据读取
 //   - BotRouteFix/sdkcalls.inc        : 引擎级虚函数/静态函数底层调用封装 (SDKCall)
 //   - BotRouteFix/nav_measure.inc     : 真实地面行走距离无损测量子系统 (NavMeasure)
-//   - BotRouteFix/events.inc          : 游戏事件监听与多模块生命周期同步分发 (Events Hub)
+//   - BotRouteFix/events.inc          : 游戏事件监听、对局炸弹状态唯一写入方与多模块分发 (Events Hub)
 //   - BotRouteFix/commands.inc        : 控制台指令、在线遥测与模块调试工具
 //   - BotRouteFix/module1_defense.inc : [模块 1] CT 守点概率重构 (70-10*M) 与防前冲 (Anti-Rush)
 //   - BotRouteFix/module2_bombsite.inc: [模块 2] T 运包时钟士气映射与开局包点随机锁定 (Bombsite & Plant Clock)
@@ -80,9 +80,10 @@ public void OnPluginStart()
     LogMessage("[BotRouteFix] ============== Initialization Start ==============");
 
     // 1. Register core ConVars
+    //    总开关 sm_botroutefix_enable 已彻底移除：模块启停统一走各模块 EnableModuleX() 业务态，
+    //    避免一刀切拦截事件总线与对局炸弹状态。
     CreateConVar("sm_botroutefix_version", PLUGIN_VERSION, "BotRouteFix plugin version", FCVAR_NOTIFY | FCVAR_DONTRECORD);
-    g_cvEnable = CreateConVar("sm_botroutefix_enable", "1", "Enable or disable BotRouteFix core tactical overhaul", FCVAR_NOTIFY, true, 0.0, true, 1.0);
-    g_cvDebug  = CreateConVar("sm_botroutefix_debug",  "1", "Enable or disable verbose debug telemetry output", FCVAR_NONE, true, 0.0, true, 1.0);
+    g_cvDebug  = CreateConVar("sm_botroutefix_debug",  "0", "Enable or disable verbose debug telemetry output", FCVAR_NONE, true, 0.0, true, 1.0);
 
     // 2. Load Gamedata and detect architecture
     g_hGameConf = LoadGameConfigFile(GAMEDATA);
@@ -125,13 +126,6 @@ public void OnPluginStart()
         return;
     }
 
-    // 6. Connect ConVar change hook and check initial state
-    g_cvEnable.AddChangeHook(OnConVarChange_Enable);
-    if (!g_cvEnable.BoolValue)
-    {
-        OnConVarChange_Enable(g_cvEnable, "1", "0");
-    }
-
     LogMessage("[BotRouteFix] ========== Initialization Complete [%s] ==========",
         g_bIsWin64 ? "64-bit (Steam x64)" : "32-bit (v91/v92)");
 }
@@ -139,10 +133,11 @@ public void OnPluginStart()
 public void OnPluginEnd()
 {
     // Safely restore business modules in reverse order
+    // 借钩宿主原则：M12 借用 M15 的 OnEnter 钩子，必须借用方 M12 先还（还原内存补丁与借用态），宿主 M15 后退（销毁 Detour 句柄）
+    RestoreModule12_CampGate();
     RestoreModule15_HideDuration();
     RestoreModule14_DefendRush();
     RestoreModule13_SniperBuy();
-    RestoreModule12_CampGate();
     RestoreModule11_Sniper();
     RestoreModule10_Defuse();
     RestoreModule9_Loot();
@@ -168,37 +163,16 @@ public void OnPluginEnd()
     LogMessage("[BotRouteFix] Plugin unloaded cleanly, all memory patches and hooks restored.");
 }
 
-public void OnConVarChange_Enable(ConVar convar, const char[] oldValue, const char[] newValue)
-{
-    bool bEnable = convar.BoolValue;
-    LogMessage("[BotRouteFix] Core tactical overhaul %s by administrator.", bEnable ? "enabled" : "disabled");
-
-    EnableModule1_Defense(bEnable);
-    EnableModule2_Bombsite(bEnable);
-    EnableModule3_Danger(bEnable);
-    EnableModule4_Hunt(bEnable);
-    EnableModule5_Combat(bEnable);
-    EnableModule6_TMorale(bEnable);
-    EnableModule7_Escort(bEnable);
-    EnableModule8_Queue(bEnable);
-    EnableModule9_Loot(bEnable);
-    EnableModule10_Defuse(bEnable);
-    EnableModule11_Sniper(bEnable);
-    EnableModule12_CampGate(bEnable);
-    EnableModule13_SniperBuy(bEnable);
-    EnableModule14_DefendRush(bEnable);
-    EnableModule15_HideDuration(bEnable);
-}
-
 public void OnMapStart()
 {
     // 换图 = 实体索引全废 + nav 重建 + curtime 归零：各模块清脏状态（不清即跨图污染）
-    // M1/M4/M8 无状态，M3 重解容器，M5 清时间数组，其余清名单/旗帜（与 round_start 同语义但独立命名）
+    // M1/M4 无状态，M3 重解容器，M5 清时间数组，M8 清打碎计数，其余清名单/旗帜（与 round_start 同语义但独立命名）
+    Events_OnMapStart();    // 对局炸弹状态唯一写入方
     Module2_OnMapStart();
     Module3_OnMapStart();
     Module5_OnMapStart();
-    Module6_OnMapStart();
     Module7_OnMapStart();
+    Module8_OnMapStart();
     Module9_OnMapStart();
     Module10_OnMapStart();
 }

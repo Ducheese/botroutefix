@@ -30,6 +30,8 @@
 //========================================================================================
 
 // 本模块私有状态（static，首席与句柄不出本文件）
+static bool g_bModule10_Active = false;     // 业务开启态
+static bool g_bScenarioHooked = false;      // per-hook 真实启用态
 static Handle g_hScenarioDetour = null;
 static int g_iChief = -1;
 static float g_fBombPos[3];
@@ -67,7 +69,7 @@ static int Defuse_SelectBest()
     bool anyReachable = false;
     for (int i = 1; i <= MaxClients; i++)
     {
-        if (!IsBot(i, true) || GetClientTeam(i) != 3)
+        if (!IsTeamBot(i, 3, true))
         {
             continue;
         }
@@ -121,12 +123,12 @@ static void Defuse_ElectChief()
 
 public MRESReturn Hook_IsDoingScenario_Pre(int client, DHookParam hParams)
 {
-    if (g_cvEnable != null && !g_cvEnable.BoolValue)
+    if (!g_bModule10_Active)
     {
         return MRES_Ignored;
     }
 
-    if (!IsBot(client, true) || GetClientTeam(client) != 3)
+    if (!IsTeamBot(client, 3, true))
     {
         return MRES_Ignored;
     }
@@ -155,7 +157,7 @@ public MRESReturn Hook_IsDoingScenario_Pre(int client, DHookParam hParams)
  */
 bool IsDefuseHooked()
 {
-    return (g_hScenarioDetour != null);
+    return (g_hScenarioDetour != null && g_bScenarioHooked);
 }
 
 /**
@@ -204,15 +206,17 @@ bool InitModule10_Defuse()
         LogMessage("[BotRouteFix] [Module 10] Signature 'CCSBot_IsDoingScenario' pending in gamedata (prototype mode). Module 10 is on standby.");
         delete g_hScenarioDetour;
         g_hScenarioDetour = null;
+        EnableModule10_Defuse(true);    // 待机：签名缺失，业务态开启、底层缺失（状态行显示 DEGRADED）
         return true;
     }
 
     // IsDoingScenario(void)：无参数，this 即 bot 本体
-    if (!DHookEnableDetour(g_hScenarioDetour, false, Hook_IsDoingScenario_Pre))
+    EnableModule10_Defuse(true);
+    if (!g_bModule10_Active)
     {
-        LogError("[BotRouteFix] [Module 10] Failed to enable IsDoingScenario Pre detour!");
         delete g_hScenarioDetour;
         g_hScenarioDetour = null;
+        LogError("[BotRouteFix] [Module 10] Failed to enable IsDoingScenario Pre detour!");
         return false;
     }
 
@@ -221,37 +225,54 @@ bool InitModule10_Defuse()
 }
 
 /**
- * 还原模块 10（摘钩子 + 清首席）
- */
-void RestoreModule10_Defuse()
-{
-    if (g_hScenarioDetour != null)
-    {
-        DHookDisableDetour(g_hScenarioDetour, false, Hook_IsDoingScenario_Pre);
-        delete g_hScenarioDetour;
-        g_hScenarioDetour = null;
-    }
-    g_iChief = -1;
-}
-
-/**
- * 动态启用或停用模块 10
+ * 动态启用或停用模块 10（幂等；停用即清首席 = 全员放行回原生）
  */
 void EnableModule10_Defuse(bool enable)
 {
-    if (g_hScenarioDetour == null)
+    if (enable == g_bModule10_Active)
     {
         return;
     }
 
     if (enable)
     {
-        DHookEnableDetour(g_hScenarioDetour, false, Hook_IsDoingScenario_Pre);
+        if (g_hScenarioDetour == null)
+        {
+            // 待机态：签名缺失，无可挂载钩子；业务态仍记为开启
+            g_bModule10_Active = true;
+            return;
+        }
+
+        g_bModule10_Active = SyncDetourEnabled(g_hScenarioDetour, g_bScenarioHooked,
+            false, Hook_IsDoingScenario_Pre, true, "Module 10");
+        return;
     }
-    else
+
+    SyncDetourEnabled(g_hScenarioDetour, g_bScenarioHooked, false, Hook_IsDoingScenario_Pre, false, "Module 10");
+    g_iChief = -1;
+    g_bModule10_Active = false;
+}
+
+/**
+ * 还原模块 10（插件卸载：摘钩并释放句柄）
+ */
+void RestoreModule10_Defuse()
+{
+    EnableModule10_Defuse(false);
+
+    if (g_hScenarioDetour != null)
     {
-        DHookDisableDetour(g_hScenarioDetour, false, Hook_IsDoingScenario_Pre);
+        delete g_hScenarioDetour;
+        g_hScenarioDetour = null;
     }
+}
+
+/**
+ * 查询模块 10 业务开启态
+ */
+bool IsModule10_Active()
+{
+    return g_bModule10_Active;
 }
 
 /**
@@ -259,6 +280,11 @@ void EnableModule10_Defuse(bool enable)
  */
 void Module10_OnBombPlanted()
 {
+    if (!g_bModule10_Active)
+    {
+        return;
+    }
+
     Defuse_ElectChief();
 }
 

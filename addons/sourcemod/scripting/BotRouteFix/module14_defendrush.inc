@@ -42,6 +42,9 @@
 MemoryPatch g_PatchDefendRush14_Lea[4];
 MemoryPatch g_PatchDefendRush14_Float;
 
+// 业务开启态
+static bool g_bModule14_Active = false;
+
 /**
  * 初始化并激活模块 14 所有内存补丁（4 lea + 1 float，全成或全败）
  *
@@ -55,27 +58,10 @@ bool InitModule14_DefendRush()
         return false;
     }
 
-    for (int i = 0; i < 4; i++)
+    EnableModule14_DefendRush(true);
+    if (!g_bModule14_Active)
     {
-        if (!PrepDefendRush14_Site(i))
-        {
-            LogError("[BotRouteFix] [Module 14] Failed to inject defendRush lea patch at site %d!", i + 1);
-            // 已驻留的 lea 必须回滚，否则与旧 float 组成 -17*(M-4) 错公式半态驻留
-            for (int j = 0; j < 4; j++)
-            {
-                g_PatchDefendRush14_Lea[j].Restore();
-            }
-            return false;
-        }
-    }
-
-    if (!PrepDefendRush14_Float())
-    {
-        LogError("[BotRouteFix] [Module 14] Failed to inject defendRush shared float patch!");
-        for (int j = 0; j < 4; j++)
-        {
-            g_PatchDefendRush14_Lea[j].Restore();
-        }
+        LogError("[BotRouteFix] [Module 14] Failed to inject defendRush patches!");
         return false;
     }
 
@@ -85,54 +71,74 @@ bool InitModule14_DefendRush()
 }
 
 /**
- * 还原模块 14 的所有内存补丁
+ * 动态启用或停用模块 14（幂等；4 lea + 1 float 全成或全败）
  */
-void RestoreModule14_DefendRush()
+void EnableModule14_DefendRush(bool enable)
 {
+    if (enable == g_bModule14_Active)
+    {
+        return;
+    }
+
+    if (enable)
+    {
+        bool ok = true;
+        for (int i = 0; i < 4; i++)
+        {
+            if (!PrepDefendRush14_Site(i))
+            {
+                LogError("[BotRouteFix] [Module 14] Failed to inject defendRush lea patch at site %d!", i + 1);
+                ok = false;
+                break;
+            }
+        }
+
+        if (ok && !PrepDefendRush14_Float())
+        {
+            LogError("[BotRouteFix] [Module 14] Failed to inject defendRush shared float patch!");
+            ok = false;
+        }
+
+        if (!ok)
+        {
+            // 全成或全败：已驻留的 lea 必须回滚，否则与旧 float 组成 -17*(M-4) 错公式半态驻留
+            for (int i = 0; i < 4; i++)
+            {
+                g_PatchDefendRush14_Lea[i].Restore();
+            }
+            RestoreDefendRush14_Float();
+            g_bModule14_Active = false;
+            LogError("[BotRouteFix] [Module 14] Enable aborted, all patches rolled back!");
+            return;
+        }
+
+        g_bModule14_Active = true;
+        return;
+    }
+
     for (int i = 0; i < 4; i++)
     {
         g_PatchDefendRush14_Lea[i].Restore();
     }
     RestoreDefendRush14_Float();
+    g_bModule14_Active = false;
+}
+
+/**
+ * 还原模块 14（插件卸载：恢复原始字节并复位业务态）
+ */
+void RestoreModule14_DefendRush()
+{
+    EnableModule14_DefendRush(false);
     LogMessage("[BotRouteFix] [Module 14] Patches safely restored to original bytes.");
 }
 
 /**
- * 动态启用或停用模块 14 补丁
+ * 查询模块 14 业务开启态
  */
-void EnableModule14_DefendRush(bool enable)
+bool IsModule14_Active()
 {
-    if (enable)
-    {
-        if (!IsDefendRush14Patched())
-        {
-            bool ok = true;
-            for (int i = 0; i < 4; i++)
-            {
-                if (!PrepDefendRush14_Site(i))
-                {
-                    ok = false;
-                    break;
-                }
-            }
-            if (ok && !PrepDefendRush14_Float())
-            {
-                ok = false;
-            }
-            if (!ok)
-            {
-                RestoreModule14_DefendRush();
-            }
-        }
-    }
-    else
-    {
-        for (int i = 0; i < 4; i++)
-        {
-            g_PatchDefendRush14_Lea[i].Restore();
-        }
-        g_PatchDefendRush14_Float.Restore();
-    }
+    return g_bModule14_Active;
 }
 
 /**

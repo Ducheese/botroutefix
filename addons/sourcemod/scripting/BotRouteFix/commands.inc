@@ -12,150 +12,243 @@
  */
 void InitCommands()
 {
-    RegConsoleCmd("sm_botroutefix_status", Command_Status, "View BotRouteFix module status and architecture info");
+    RegAdminCmd("sm_botroutefix_status", Command_Status, ADMFLAG_GENERIC, "View BotRouteFix module status and architecture info");
+}
+
+//========================================================================================
+// MODULE STATE ROUTING
+//
+// 权责分离的唯一分流点：
+//   业务开启态 -> IsModuleX_Active()
+//   底层补丁/挂载态 -> Is...Patched() / Is...Hooked()
+// 两个路由函数各自覆盖全部 15 个模块，保证每个状态接口都有确切调用点。
+//========================================================================================
+
+/**
+ * 业务开启态路由（每个 IsModuleX_Active 的确切调用点）
+ */
+static bool Module_IsBusinessActive(int index)
+{
+    switch (index)
+    {
+        case 1:  return IsModule1_Active();
+        case 2:  return IsModule2_Active();
+        case 3:  return IsModule3_Active();
+        case 4:  return IsModule4_Active();
+        case 5:  return IsModule5_Active();
+        case 6:  return IsModule6_Active();
+        case 7:  return IsModule7_Active();
+        case 8:  return IsModule8_Active();
+        case 9:  return IsModule9_Active();
+        case 10: return IsModule10_Active();
+        case 11: return IsModule11_Active();
+        case 12: return IsModule12_Active();
+        case 13: return IsModule13_Active();
+        case 14: return IsModule14_Active();
+        case 15: return IsModule15_Active();
+    }
+    return false;
 }
 
 /**
+ * 底层补丁/挂载态路由（每个 Is...Patched / Is...Hooked 的确切调用点）
+ *
+ * 准则：底层依赖齐全且可用才返回 true (ACTIVE)，任何核心缺失均返回 false (DEGRADED)。
+ * "核心" = 运行期可能变化的底层资源：补丁字节 / Detour 挂载 / SDKCall 句柄 / 全局单例指针。
+ * Init 期已 fail-fast 校验过的 gamedata 偏移不在此列（运行中不可能失效，写进判定没有信息量）。
+ */
+static bool Module_IsBackendReady(int index)
+{
+    switch (index)
+    {
+        case 1:  return IsGuardBombsitePatched() && IsDefenseRushPatched();
+        case 2:  return IsBombsitePatchReady();
+        case 3:  return IsNavDangerReady();
+        case 4:  return IsHuntStateHooked() && IsHuntRandomBypassed();
+        case 5:  return IsReloadHidePatched() && IsAttackDodgeHooked() && IsAttackRetreatHooked();
+        case 6:  return IsInvestigateNoiseHooked();
+        case 7:  return IsEscortReady();
+        case 8:  return IsQueueBreakerHooked();
+        case 9:  return IsLootHooked() && BotNavReady();
+        case 10: return IsDefuseHooked() && BotNavReady();
+        case 11: return IsSniperDeterrenceHooked();
+        case 12: return IsCamp12Ready() && IsHideDurationHooked();  // 借钩：宿主未启用则门禁无效
+        case 13: return IsSniperBuy13Patched();
+        case 14: return IsDefendRush14Patched();
+        case 15: return IsHideDurationHooked();
+    }
+    return false;
+}
+
+/**
+ * 统一模块状态行
+ *
+ *   ACTIVE   = 业务开启 + 底层补丁/钩子就绪
+ *   DEGRADED = 业务开启但底层缺失（签名待机 / 外来补丁占位 / 启用失败）
+ *   INACTIVE = 业务已关闭
+ *
+ * @param client    接收方（0 = 服务端控制台）
+ * @param index     模块编号 1-15
+ * @param label     模块名
+ * @param detail    模块专属遥测（可传空字符串）
+ */
+static void PrintModuleLine(int client, int index, const char[] label, const char[] detail)
+{
+    bool bActive  = Module_IsBusinessActive(index);
+    bool bBackend = Module_IsBackendReady(index);
+
+    char state[16];
+    if (!bActive)
+    {
+        strcopy(state, sizeof(state), "INACTIVE");
+    }
+    else if (!bBackend)
+    {
+        strcopy(state, sizeof(state), "DEGRADED");
+    }
+    else
+    {
+        strcopy(state, sizeof(state), "ACTIVE");
+    }
+
+    if (detail[0] != '\0')
+    {
+        ReplyToCommand(client, "[BotRouteFix] [Module %02d] %-8s | %s | %s", index, state, label, detail);
+    }
+    else
+    {
+        ReplyToCommand(client, "[BotRouteFix] [Module %02d] %-8s | %s", index, state, label);
+    }
+}
+
+//========================================================================================
+// COMMAND: STATUS TELEMETRY
+//========================================================================================
+
+/**
  * 服务端状态遥测（sm_botroutefix_status），常显 + debug 专属 [Live] 两段：
- *   常显段 = 静态基线（版本/开关/补丁挂载态）+ 累积计数器；
- *   [Live] 段（bDebug 开）= 瞬时战术上下文（包匪/炸弹/士气）。
+ *   常显段 = 15 模块统一状态行（业务态 + 底层态分流）+ 累积计数器；
+ *   [Live] 段（bDebug 开）= 瞬时战术上下文（包匪/炸弹/士气/三条概率公式）。
  * 口径声明：所有累积计数器自插件加载起单调递增，换图不清零（只随重载/重启清零）。
  */
 public Action Command_Status(int client, int args)
 {
-    bool bMaster = (g_cvEnable != null && g_cvEnable.BoolValue);
-    bool bDebug  = (g_cvDebug != null && g_cvDebug.BoolValue);
+    bool bDebug = (g_cvDebug != null && g_cvDebug.BoolValue);
 
-    ReplyToCommand(client, "[BotRouteFix] ==================== System Status Telemetry ====================");
+    ReplyToCommand(client, "[BotRouteFix] ================== System Status Telemetry ==================");
     ReplyToCommand(client, "[BotRouteFix] Version       : %s | Author: %s", PLUGIN_VERSION, PLUGIN_AUTHOR);
-    ReplyToCommand(client, "[BotRouteFix] Master Switch : %s | Debug : %s", bMaster ? "ENABLED" : "DISABLED", bDebug ? "ON" : "OFF");
-    ReplyToCommand(client, "[BotRouteFix] Architecture  : %s", g_bIsWin64 ? "64-bit (Steam x64)" : "32-bit (v91/v92)");
+    ReplyToCommand(client, "[BotRouteFix] Debug         : %s | Architecture: %s",
+        bDebug ? "ON" : "OFF", g_bIsWin64 ? "64-bit (Steam x64)" : "32-bit (v91/v92)");
     ReplyToCommand(client, "[BotRouteFix] Gamedata      : %s (%s)", GAMEDATA, (g_hGameConf != null) ? "Ready" : "Not Loaded");
     ReplyToCommand(client, "[BotRouteFix] ------------------------------------------------------------");
-    ReplyToCommand(client, "[BotRouteFix] [Module 1] CT Guard Site Chance (70-10*M) : %s",
-        (bMaster && IsGuardBombsitePatched()) ? "ACTIVE" : "INACTIVE");
-    ReplyToCommand(client, "[BotRouteFix] [Module 1] CT Defense Rush NOP (Anti-Rush): %s",
-        (bMaster && IsDefenseRushPatched()) ? "ACTIVE" : "INACTIVE");
 
-    char lockStatus[64];
-    if (bMaster && IsBombsiteLocked())
+    char detail[128];
+
+    PrintModuleLine(client, 1, "CT Guard Chance & Anti-Rush", "formula 70-10*M, anti-rush NOP");
+
+    if (IsBombsiteLocked())
     {
-        Format(lockStatus, sizeof(lockStatus), "LOCKED (Zone #%d)", GetLockedBombsiteIndex());
+        Format(detail, sizeof(detail), "live: LOCKED Zone #%d (delay %.1fs)", GetLockedBombsiteIndex(), GetCurrentPlantDelay());
     }
     else
     {
-        strcopy(lockStatus, sizeof(lockStatus), "NATIVE (GetClosestZone)");
+        Format(detail, sizeof(detail), "live: NATIVE GetClosestZone (delay %.1fs)", GetCurrentPlantDelay());
     }
-    ReplyToCommand(client, "[BotRouteFix] [Module 2] T Bombsite Selection Mode        : %s", lockStatus);
-    ReplyToCommand(client, "[BotRouteFix] [Module 2] T Carrier Morale Plant Delay     : %.1fs", GetCurrentPlantDelay());
-    ReplyToCommand(client, "[BotRouteFix] [Module 3] NavArea Danger 80%% Soft-Decay   : %s (%d Areas Tracked)",
-        bMaster ? "ACTIVE" : "INACTIVE", GetTotalNavAreaCount());
-    ReplyToCommand(client, "[BotRouteFix] [Module 4] Hunt Oldest-Scan (Random NOP)     : %s",
-        (bMaster && IsHuntRandomBypassed()) ? "ACTIVE" : "INACTIVE");
-    ReplyToCommand(client, "[BotRouteFix] [Module 4] Hunt Target Claim & 45s Bypass   : %s (%d Claims)",
-        bMaster ? "ACTIVE" : "INACTIVE", GetTotalHuntClaims());
-    ReplyToCommand(client, "[BotRouteFix] [Module 5] Attack Dodge 100%% Forced         : %s (%d Dodges)",
-        (bMaster && IsAttackDodgeHooked()) ? "ACTIVE" : "INACTIVE", GetTotalDodgeForced());
-    ReplyToCommand(client, "[BotRouteFix] [Module 5] Reload Hide 100%% Patch           : %s",
-        (bMaster && IsReloadHidePatched()) ? "ACTIVE" : "INACTIVE");
-    ReplyToCommand(client, "[BotRouteFix] [Module 5] Attack Forced Retreat (Low-HP/Outnumbered/Sniper): %s (%d Retreats)",
-        (bMaster && IsAttackRetreatHooked()) ? "ACTIVE" : "INACTIVE", GetTotalRetreatTriggered());
-    ReplyToCommand(client, "[BotRouteFix] [Module 6] InvestigateNoise Audio Intercept  : %s (%d Blocked / %d Allowed)",
-        (bMaster && IsInvestigateNoiseHooked()) ? "ACTIVE" : "INACTIVE", GetTotalNoiseIntercepted(), GetTotalNoiseAllowed());
+    PrintModuleLine(client, 2, "T Plant Clock & Site Lock", detail);
 
-    char escortStatus[64];
-    if (bMaster)
+    Format(detail, sizeof(detail), "live: %d areas tracked", GetTotalNavAreaCount());
+    PrintModuleLine(client, 3, "NavArea Danger Soft-Decay", detail);
+
+    Format(detail, sizeof(detail), "total: %d claims", GetTotalHuntClaims());
+    PrintModuleLine(client, 4, "Hunt Target Claim & 45s Bypass", detail);
+
+    Format(detail, sizeof(detail), "total: %d dodges, %d retreats", GetTotalDodgeForced(), GetTotalRetreatTriggered());
+    PrintModuleLine(client, 5, "Combat Dodge / Reload Hide / Retreat", detail);
+
+    Format(detail, sizeof(detail), "total: %d blocked, %d allowed", GetTotalNoiseIntercepted(), GetTotalNoiseAllowed());
+    PrintModuleLine(client, 6, "T Morale Disposition & Noise Gate", detail);
+
+    int carrier = Escort_GetCarrier();
+    if (IsValidClient(carrier, true))
     {
-        Format(escortStatus, sizeof(escortStatus), "ACTIVE (%d/%d, Carrier #%d)",
-            Escort_GetBodyguardCount(), Escort_GetTargetCount(), Escort_GetCarrier());
+        Format(detail, sizeof(detail), "live: %d/%d guards, carrier %N",
+            Escort_GetBodyguardCount(), Escort_GetTargetCount(), carrier);
     }
     else
     {
-        strcopy(escortStatus, sizeof(escortStatus), "INACTIVE");
+        Format(detail, sizeof(detail), "live: %d/%d guards, no carrier",
+            Escort_GetBodyguardCount(), Escort_GetTargetCount());
     }
-    ReplyToCommand(client, "[BotRouteFix] [Module 7] Carrier Escort Roster          : %s", escortStatus);
+    PrintModuleLine(client, 7, "Carrier Escort Roster", detail);
 
-    char queueStatus[80];
-    if (bMaster && IsQueueBreakerHooked())
+    Format(detail, sizeof(detail), "total: %d shattered, %d deadlock hunts", GetTotalQueueShattered(), GetTotalDeadlockHunt());
+    PrintModuleLine(client, 8, "Polite Queue Breaker", detail);
+
+    Format(detail, sizeof(detail), "live: %d/%d roster | total: %d elected, %d gated",
+        Loot_GetRosterCount(), Loot_GetRosterSize(), GetTotalLootElections(), GetTotalLootGated());
+    PrintModuleLine(client, 9, "T Loose-Bomb Fetch Roster", detail);
+
+    int chief = GetChiefDefuser();
+    if (chief != -1)
     {
-        Format(queueStatus, sizeof(queueStatus), "ACTIVE (%d Shattered, %d Deadlocks Broken)",
-            GetTotalQueueShattered(), GetTotalDeadlockHunt());
+        Format(detail, sizeof(detail), "live: chief %N | total: %d elected, %d gated", chief, GetTotalChiefs(), GetTotalScenarioGated());
     }
     else
     {
-        strcopy(queueStatus, sizeof(queueStatus), "INACTIVE (Pending Signature)");
+        Format(detail, sizeof(detail), "live: none | total: %d elected, %d gated", GetTotalChiefs(), GetTotalScenarioGated());
     }
-    ReplyToCommand(client, "[BotRouteFix] [Module 8] Polite Queue & Deadlock Hunt  : %s", queueStatus);
+    PrintModuleLine(client, 10, "CT Chief Defuser", detail);
 
-    char lootStatus[96];
-    if (bMaster && IsLootHooked())
-    {
-        Format(lootStatus, sizeof(lootStatus), "ACTIVE (%d/3 roster, %d elections, %d gated)", Loot_GetRosterCount(), GetTotalLootElections(), GetTotalLootGated());
-    }
-    else
-    {
-        strcopy(lootStatus, sizeof(lootStatus), "INACTIVE (Hook Missing)");
-    }
-    ReplyToCommand(client, "[BotRouteFix] [Module 9] T Loose-Bomb Fetch Roster (Top3): %s", lootStatus);
+    Format(detail, sizeof(detail), "total: %d deterred", GetTotalSniperDeterred());
+    PrintModuleLine(client, 11, "Sniper Corridor Deterrence", detail);
 
-    char defuseStatus[64];
-    if (bMaster && IsDefuseHooked())
-    {
-        int chief = GetChiefDefuser();
-        if (chief != -1)
-        {
-            Format(defuseStatus, sizeof(defuseStatus), "ACTIVE (Chief %N, %d chiefs, %d gated)", chief, GetTotalChiefs(), GetTotalScenarioGated());
-        }
-        else
-        {
-            Format(defuseStatus, sizeof(defuseStatus), "ACTIVE (no chief, %d chiefs, %d gated)", GetTotalChiefs(), GetTotalScenarioGated());
-        }
-    }
-    else
-    {
-        strcopy(defuseStatus, sizeof(defuseStatus), "INACTIVE (Pending Signature)");
-    }
-    ReplyToCommand(client, "[BotRouteFix] [Module 10] CT Chief Defuser (Scenario)    : %s", defuseStatus);
+    Format(detail, sizeof(detail), "total: %d redirected", GetTotalCampRedirected());
+    PrintModuleLine(client, 12, "Sniper Camp Gate", detail);
 
-    char sniperStatus[64];
-    if (bMaster && IsSniperDeterrenceHooked())
-    {
-        Format(sniperStatus, sizeof(sniperStatus), "ACTIVE (%d deterred)", GetTotalSniperDeterred());
-    }
-    else
-    {
-        strcopy(sniperStatus, sizeof(sniperStatus), "INACTIVE (Pending Signature)");
-    }
-    ReplyToCommand(client, "[BotRouteFix] [Module 11] Sniper Corridor Danger & Retreat: %s", sniperStatus);
-    ReplyToCommand(client, "[BotRouteFix] [Module 12] Sniper Camp Gate (60-10*M)         : %s (%d redirected)",
-        (bMaster && IsCamp12Armed()) ? "ACTIVE" : "INACTIVE", GetTotalCampRedirected());
-    ReplyToCommand(client, "[BotRouteFix] [Module 13] Sniper Buy Chance (50-10*M)        : %s",
-        (bMaster && IsSniperBuy13Patched()) ? "ACTIVE" : "INACTIVE");
-    ReplyToCommand(client, "[BotRouteFix] [Module 14] Defend Rush Chance (40-10*M)      : %s",
-        (bMaster && IsDefendRush14Patched()) ? "ACTIVE" : "INACTIVE");
-    ReplyToCommand(client, "[BotRouteFix] [Module 15] Hide Duration x(1-0.15*M)        : %s (%d rescaled)",
-        (bMaster && IsHideDurationHooked()) ? "ACTIVE" : "INACTIVE", GetTotalHideRescaled());
+    PrintModuleLine(client, 13, "Sniper Buy Chance", "formula 50-10*M, dynamic rifle dice");
+    PrintModuleLine(client, 14, "Defend Rush Chance", "formula 40-10*M, 4 lea sites patched");
+
+    Format(detail, sizeof(detail), "total: %d rescaled", GetTotalHideRescaled());
+    PrintModuleLine(client, 15, "Hide Duration x(1-0.15*M)", detail);
+
+    ReplyToCommand(client, "[BotRouteFix] ------------------------------------------------------------");
 
     if (bDebug)
     {
         int liveCarrier = Escort_GetCarrier();
-        if (liveCarrier > 0)
+        if (IsValidClient(liveCarrier, true))
         {
             char liveMoraleStr[16];
-            int liveMorale = GetBotMorale(liveCarrier);
+            int liveMorale = GetEffectiveCarrierMorale(liveCarrier);
             GetMoraleName(liveMorale, liveMoraleStr, sizeof(liveMoraleStr));
-            ReplyToCommand(client, "[BotRouteFix] [Live] T Carrier: %N (Morale: %d %s) | Escorts %d/%d | Plant %.1fs",
-                liveCarrier, liveMorale, liveMoraleStr, Escort_GetBodyguardCount(), Escort_GetTargetCount(), GetCurrentPlantDelay());
+
+            if (IsHumanPlayer(liveCarrier))
+            {
+                ReplyToCommand(client, "[BotRouteFix] [Live] T Carrier: %N (Human, Team Morale: %d %s) | Escorts %d/%d | Plant delay %.1fs",
+                    liveCarrier, liveMorale, liveMoraleStr, Escort_GetBodyguardCount(), Escort_GetTargetCount(), GetCurrentPlantDelay());
+            }
+            else
+            {
+                ReplyToCommand(client, "[BotRouteFix] [Live] T Carrier: %N (Morale: %d %s) | Escorts %d/%d | Plant delay %.1fs",
+                    liveCarrier, liveMorale, liveMoraleStr, Escort_GetBodyguardCount(), Escort_GetTargetCount(), GetCurrentPlantDelay());
+            }
         }
         else
         {
-            ReplyToCommand(client, "[BotRouteFix] [Live] T Carrier: -- (no C4 in play)");
+            ReplyToCommand(client, "[BotRouteFix] [Live] T Carrier: -- (no active carrier)");
         }
+
+        int tMorale  = GetTeamAverageBotMorale(2);
+        int ctMorale = GetTeamAverageBotMorale(3);
+
         ReplyToCommand(client, "[BotRouteFix] [Live] Bomb: %s | Morale AVG T %d / CT %d",
-            g_bBombPlanted ? "PLANTED" : "NOT PLANTED", GetTeamAverageBotMorale(2), GetTeamAverageBotMorale(3));
-        ReplyToCommand(client, "[BotRouteFix] [Live] CT Guard AVG: %.0f%% (70-10*M)",
-            CalculateGuardBombsiteChance(GetTeamAverageBotMorale(3)));
+            g_bBombPlanted ? "PLANTED" : "NOT PLANTED", tMorale, ctMorale);
+        ReplyToCommand(client, "[BotRouteFix] [Live] Dice @ AVG morale - CT Guard: %.0f%% | SniperBuy: T %.0f%% / CT %.0f%% | DefendRush: T %.0f%% / CT %.0f%%",
+            CalculateGuardBombsiteChance(ctMorale),
+            CalculateSniperBuyChance(tMorale), CalculateSniperBuyChance(ctMorale),
+            CalculateDefendRushChance(tMorale), CalculateDefendRushChance(ctMorale));
     }
+
     ReplyToCommand(client, "[BotRouteFix] ============================================================");
     return Plugin_Handled;
 }

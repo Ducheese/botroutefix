@@ -91,6 +91,11 @@ Handle g_hAttackRetreatDetour = null;
 int g_iTotalDodgeForced = 0;
 int g_iTotalRetreatTriggered = 0;
 
+// 业务开启态与 per-hook 真实启用态（DHook 状态机唯一事实来源）
+static bool g_bModule5_Active = false;
+static bool g_bDodgeHooked = false;
+static bool g_bRetreatHooked = false;
+
 // 模块内部专用冷却与偏移缓存
 static float g_flNextForcedRetreat[MAXPLAYERS + 1];
 static int g_iOffset_AttackShouldDodge = -1;
@@ -131,24 +136,31 @@ bool InitModule5_Combat()
         return false;
     }
 
-    // 2. 准备并应用换弹掩体 100% NOP 补丁
-    if (!PrepReloadHidePatch())
-    {
-        LogError("[BotRouteFix] [Module 5] Failed to inject reload hide 100%% patch!");
-        return false;
-    }
-
-    // 3. 准备并挂载 AttackState::OnEnter Post Detour (闪避 100% 强制)
-    if (!PrepAttackDodgeDetour())
+    // 2. 挂载 AttackState::OnEnter Post Detour (闪避 100% 强制)
+    if (!MountAttackDodgeDetour())
     {
         LogError("[BotRouteFix] [Module 5] Failed to hook AttackState::OnEnter detour!");
         return false;
     }
 
-    // 4. 准备并挂载 AttackState::OnUpdate Pre Detour (残血 <35 强制后撤)
-    if (!PrepAttackRetreatDetour())
+    // 3. 挂载 AttackState::OnUpdate Pre Detour (残血 <35 强制后撤)
+    if (!MountAttackRetreatDetour())
     {
         LogError("[BotRouteFix] [Module 5] Failed to hook AttackState::OnUpdate detour!");
+        delete g_hAttackDodgeDetour;
+        g_hAttackDodgeDetour = null;
+        return false;
+    }
+
+    // 4. 套用业务态（补丁 + 双钩子全成或全败）
+    EnableModule5_Combat(true);
+    if (!g_bModule5_Active)
+    {
+        delete g_hAttackDodgeDetour;
+        delete g_hAttackRetreatDetour;
+        g_hAttackDodgeDetour = null;
+        g_hAttackRetreatDetour = null;
+        LogError("[BotRouteFix] [Module 5] Failed to activate combat overhaul!");
         return false;
     }
 
@@ -158,70 +170,78 @@ bool InitModule5_Combat()
 }
 
 /**
- * 还原模块 5 的所有内存补丁与动态拦截
+ * 动态启用或停用模块 5（幂等；补丁 + 两钩子同步收敛）
+ */
+void EnableModule5_Combat(bool enable)
+{
+    if (enable == g_bModule5_Active)
+    {
+        return;
+    }
+
+    if (!enable)
+    {
+        SyncDetourEnabled(g_hAttackDodgeDetour, g_bDodgeHooked, true, Hook_AttackState_OnEnter_Post, false, "Module 5");
+        SyncDetourEnabled(g_hAttackRetreatDetour, g_bRetreatHooked, false, Hook_AttackState_OnUpdate_Pre, false, "Module 5");
+        g_PatchReloadHide.Restore();
+        for (int i = 0; i <= MaxClients; i++)
+        {
+            g_flNextForcedRetreat[i] = 0.0;
+        }
+        g_bModule5_Active = false;
+        return;
+    }
+
+    if (!PrepReloadHidePatch())
+    {
+        LogError("[BotRouteFix] [Module 5] Reload hide patch failed, combat module stays inactive!");
+        return;
+    }
+
+    bool bDodge   = SyncDetourEnabled(g_hAttackDodgeDetour, g_bDodgeHooked, true, Hook_AttackState_OnEnter_Post, true, "Module 5");
+    bool bRetreat = SyncDetourEnabled(g_hAttackRetreatDetour, g_bRetreatHooked, false, Hook_AttackState_OnUpdate_Pre, true, "Module 5");
+
+    if (!bDodge || !bRetreat)
+    {
+        SyncDetourEnabled(g_hAttackDodgeDetour, g_bDodgeHooked, true, Hook_AttackState_OnEnter_Post, false, "Module 5");
+        SyncDetourEnabled(g_hAttackRetreatDetour, g_bRetreatHooked, false, Hook_AttackState_OnUpdate_Pre, false, "Module 5");
+        g_PatchReloadHide.Restore();
+        g_bModule5_Active = false;
+        LogError("[BotRouteFix] [Module 5] Enable aborted (dodge=%d, retreat=%d), all resources rolled back!", bDodge, bRetreat);
+        return;
+    }
+
+    g_bModule5_Active = true;
+}
+
+/**
+ * 还原模块 5（插件卸载：摘钩并释放句柄）
  */
 void RestoreModule5_Combat()
 {
-    // 还原换弹进掩体内存补丁
-    g_PatchReloadHide.Restore();
+    EnableModule5_Combat(false);
 
-    // 卸载并释放 AttackState::OnEnter Detour
     if (g_hAttackDodgeDetour != null)
     {
-        DHookDisableDetour(g_hAttackDodgeDetour, true, Hook_AttackState_OnEnter_Post);
         delete g_hAttackDodgeDetour;
         g_hAttackDodgeDetour = null;
     }
 
-    // 卸载并释放 AttackState::OnUpdate Detour
     if (g_hAttackRetreatDetour != null)
     {
-        DHookDisableDetour(g_hAttackRetreatDetour, false, Hook_AttackState_OnUpdate_Pre);
         delete g_hAttackRetreatDetour;
         g_hAttackRetreatDetour = null;
-    }
-
-    for (int i = 0; i <= MaxClients; i++)
-    {
-        g_flNextForcedRetreat[i] = 0.0;
     }
 
     LogMessage("[BotRouteFix] [Module 5] Combat hooks and memory patches safely restored.");
 }
 
 /**
- * 动态启用或停用模块 5 补丁
+ * 查询模块 5 业务开启态
  */
-void EnableModule5_Combat(bool enable)
+bool IsModule5_Active()
 {
-    if (enable)
-    {
-        PrepReloadHidePatch();
-        if (g_hAttackDodgeDetour != null)
-        {
-            DHookEnableDetour(g_hAttackDodgeDetour, true, Hook_AttackState_OnEnter_Post);
-        }
-        if (g_hAttackRetreatDetour != null)
-        {
-            DHookEnableDetour(g_hAttackRetreatDetour, false, Hook_AttackState_OnUpdate_Pre);
-        }
-    }
-    else
-    {
-        g_PatchReloadHide.Restore();
-        if (g_hAttackDodgeDetour != null)
-        {
-            DHookDisableDetour(g_hAttackDodgeDetour, true, Hook_AttackState_OnEnter_Post);
-        }
-        if (g_hAttackRetreatDetour != null)
-        {
-            DHookDisableDetour(g_hAttackRetreatDetour, false, Hook_AttackState_OnUpdate_Pre);
-        }
-        for (int i = 0; i <= MaxClients; i++)
-        {
-            g_flNextForcedRetreat[i] = 0.0;
-        }
-    }
+    return g_bModule5_Active;
 }
 
 static bool g_bSniperRetreatWanted[MAXPLAYERS + 1];
@@ -311,15 +331,15 @@ bool IsReloadHidePatched()
  */
 bool IsAttackDodgeHooked()
 {
-    return (g_hAttackDodgeDetour != null);
+    return (g_hAttackDodgeDetour != null && g_bDodgeHooked);
 }
 
 /**
- * 查询残血后撤 Detour 是否已激活
+ * 查询残血/一打多后撤 Detour 与 IsOutnumbered SDKCall 是否完全就绪
  */
 bool IsAttackRetreatHooked()
 {
-    return (g_hAttackRetreatDetour != null);
+    return (g_hAttackRetreatDetour != null && g_bRetreatHooked && g_hSDKCall_IsOutnumbered != null);
 }
 
 /**
@@ -376,7 +396,11 @@ static bool PrepReloadHidePatch()
 
     if (allNop)
     {
-        g_PatchReloadHide.isPatched = false;
+        // 有备份 = 自家补丁，保持旗标；无备份 = 外来已旁路，记 false（无基线可还原）
+        if (!g_PatchReloadHide.hasBackup)
+        {
+            g_PatchReloadHide.isPatched = false;
+        }
         LogMessage("[BotRouteFix] [Module 5] Reload hide patch already present @ %X, skipping", targetAddr);
         return true;
     }
@@ -411,7 +435,7 @@ static bool PrepReloadHidePatch()
 // DETOUR: ATTACKSTATE::ONENTER (POST HOOK FOR 100% DODGE)
 //========================================================================================
 
-static bool PrepAttackDodgeDetour()
+static bool MountAttackDodgeDetour()
 {
     g_hAttackDodgeDetour = DHookCreateDetour(Address_Null, CallConv_THISCALL, ReturnType_Void, ThisPointer_Address);
     if (g_hAttackDodgeDetour == null)
@@ -430,20 +454,12 @@ static bool PrepAttackDodgeDetour()
 
     DHookAddParam(g_hAttackDodgeDetour, HookParamType_CBaseEntity);
 
-    if (!DHookEnableDetour(g_hAttackDodgeDetour, true, Hook_AttackState_OnEnter_Post))
-    {
-        LogError("[BotRouteFix] [Module 5] Failed to enable AttackState_OnEnter Post detour!");
-        delete g_hAttackDodgeDetour;
-        g_hAttackDodgeDetour = null;
-        return false;
-    }
-
     return true;
 }
 
 public MRESReturn Hook_AttackState_OnEnter_Post(Address pThis, DHookParam hParams)
 {
-    if (g_cvEnable != null && !g_cvEnable.BoolValue)
+    if (!g_bModule5_Active)
     {
         return MRES_Ignored;
     }
@@ -476,7 +492,7 @@ public MRESReturn Hook_AttackState_OnEnter_Post(Address pThis, DHookParam hParam
 // DETOUR: ATTACKSTATE::ONUPDATE (PRE HOOK FOR LOW-HEALTH FORCED RETREAT)
 //========================================================================================
 
-static bool PrepAttackRetreatDetour()
+static bool MountAttackRetreatDetour()
 {
     g_hAttackRetreatDetour = DHookCreateDetour(Address_Null, CallConv_THISCALL, ReturnType_Void, ThisPointer_Address);
     if (g_hAttackRetreatDetour == null)
@@ -495,20 +511,12 @@ static bool PrepAttackRetreatDetour()
 
     DHookAddParam(g_hAttackRetreatDetour, HookParamType_CBaseEntity);
 
-    if (!DHookEnableDetour(g_hAttackRetreatDetour, false, Hook_AttackState_OnUpdate_Pre))
-    {
-        LogError("[BotRouteFix] [Module 5] Failed to enable AttackState_OnUpdate Pre detour!");
-        delete g_hAttackRetreatDetour;
-        g_hAttackRetreatDetour = null;
-        return false;
-    }
-
     return true;
 }
 
 public MRESReturn Hook_AttackState_OnUpdate_Pre(Address pThis, DHookParam hParams)
 {
-    if (g_cvEnable != null && !g_cvEnable.BoolValue)
+    if (!g_bModule5_Active)
     {
         return MRES_Ignored;
     }

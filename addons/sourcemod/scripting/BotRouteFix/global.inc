@@ -18,6 +18,10 @@
 // 补丁缓冲与模板匹配常量
 #define MAX_PATCH_SIZE              128
 
+// 引擎原生 NavArea 危险度自然沉降速率 (1.0 每 120 秒)
+// 沉降契约的唯一出处：模块 3(软衰减) / 模块 8(排队钉刺) / 模块 11(走廊钉刺) 共用
+#define DANGER_DECAY_RATE_SEC       120.0
+
 //========================================================================================
 // HANDLES & GLOBAL VARIABLES
 //========================================================================================
@@ -29,8 +33,11 @@ Handle g_hGameConf = null;
 bool g_bIsWin64 = false;
 
 // 全局 ConVar
-ConVar g_cvEnable = null;
 ConVar g_cvDebug = null;
+
+// 对局炸弹状态（唯一写入方：events.inc 事件总线；任何业务模块只读）
+// 上收至全局：下包状态是整局流程的一等事实，不得随任一模块模块启停而断流
+bool g_bBombPlanted = false;
 
 // 常用 Bot 内部偏移缓存（跨模块共享）
 int g_iOffset_Morale = -1;

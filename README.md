@@ -264,13 +264,15 @@ addons\sourcemod\
 | ConVar | 默认值 | 说明 |
 | :--- | :--- | :--- |
 | `sm_botroutefix_version` | `"2.0.0"` | 插件版本（FCVAR_NOTIFY） |
-| `sm_botroutefix_enable`  | `"1"`     | 是否启用 BotRouteFix 战术重构 |
 | `sm_botroutefix_debug`   | `"0"`     | 是否开启详细调试日志与遥测输出 |
+
+> 旧总开关 `sm_botroutefix_enable` 已彻底移除：事件总线不再做任何全局粗暴拦截，
+> 模块启停统一收敛为各模块独立业务态（`EnableModuleX`），避免一刀切拦截对局炸弹状态与事件分发。
 
 ### 控制台指令
 | 指令 | 权限 | 说明 |
 | :--- | :--- | :--- |
-| `sm_botroutefix_status` | 所有人 | 15 模块健康行（ACTIVE/INACTIVE，缺签名显示待机原因）+ 累积计数器（认领/闪避/后撤/拦截/打碎/选举/首席/狙击撤退/狙击前压重定向/蹲守时长缩放，单调递增、换图不清零）+ debug 专属 `[Live]` 段（活包匪士气、glBomb 状态、T/CT 平均士气与守点率，需 `sm_botroutefix_debug 1`） |
+| `sm_botroutefix_status` | 管理员 (`ADMFLAG_GENERIC`) | 15 模块统一状态行（`ACTIVE` / `DEGRADED` / `INACTIVE`，业务态与底层补丁态分流展示）+ 累积计数器（认领/闪避/后撤/拦截/打碎/选举/首席/狙击撤退/狙击前压重定向/蹲守时长缩放，单调递增、换图不清零）+ debug 专属 `[Live]` 段（活包匪士气、炸弹状态、T/CT 平均士气与三条概率公式，需 `sm_botroutefix_debug 1`） |
 
 ---
 
@@ -311,6 +313,13 @@ addons\sourcemod\
 ### 模块 12 借用模块 15 单 Detour 协作契约 (Module 12 Detour Borrowing Contract)
 - 模块 12（狙击 Camp 门禁）与模块 15（Hide 蹲守时长缩放）在底层均需要拦截 `HideState::OnEnter`。为杜绝在同一虚函数/函数签名上挂载双重 Detour 导致的钩子递归重入、执行顺序不确定及调用栈消耗，模块 12 不单独注册 Detour，而是直接借用模块 15 的 Post Detour 作为执行宿主。
 - 协作契约：在模块 15 Detour 入口首先调用 `Module12_CampGate(client)`；若模块 12 判定为高士气前压并递延重定向至 `Hunt`，则返回 `true`，模块 15 随即短路返回，跳过无意义的时长缩放计算，各模块职责清晰解耦。
+- **底层启用态协同（`SyncHideDurationDetourState`）**：底层钩子只要任一借钩方（M12 / M15）仍在工作就必须保持启用，只有双方全部关闭才真正 Disable。模块 12 的 `EnableModuleX()` 与模块 15 的业务态变更都会调用该同步函数，既避免"关掉模块 15 顺带把模块 12 门禁打死"的隐性耦合，也让 DHook 的 Enable/Disable 永远只发生在真实状态跃迁上。
+
+### 模块三层状态机与 DHook 收敛 (Module State Machine & Detour Sync)
+- **业务态**：每个模块持有独立 `g_bModuleN_Active`，统一由 `IsModuleN_Active()` 对外查询，`EnableModuleN(bool)` 是唯一的业务态切换入口（幂等，同态重复调用直接返回）。
+- **底层态**：`MemoryPatch::isPatched` 与各模块的 `Is...Patched()` / `Is...Hooked()` 只描述代码段字节与 Detour 的真实挂载情况；`Is...Hooked()` 同时校验 per-hook 真实启用态，不再把"句柄非空"误当作"钩子生效"。
+- **状态机收敛**：所有 DHook 的 Enable/Disable 统一走 `SyncDetourEnabled()`（[memory.inc](addons/sourcemod/scripting/BotRouteFix/memory.inc)），先比对 per-hook 启用态再动作，从根上杜绝重复 Disable 触发 `Function not detoured` 致命异常（旧版在"管理员先关模块、随后插件卸载"的路径上必现）。
+- **补丁基线保留**：`MemoryPatch::Init()` 在同一目标重入时保留原始字节备份与生效旗标，避免 `Enable -> Disable -> Enable` 后自家补丁被误判为外来补丁、`Restore()` 被零写入熔断拦截而永久卡死。
 
 ### 掉线自愈与残局热重载说明 (Disconnect & Mid-Round Hot-Reload Parity)
 - **掉线机制**：`OnClientDisconnect` 直调三家花名册——模块 7（包匪掉线全放、保镖掉线除名递补）、模块 9（队员掉线按掉包点回补）、模块 10（首席掉线按包坐标接力）。开局持包者意外掉线时，引擎原生还会将 C4 强制掉落触发 `bomb_dropped`，模块 2 藉此换人自愈并恢复原生就近选点，双保险。
@@ -318,4 +327,5 @@ addons\sourcemod\
 
 ### 模块启动刚性容错策略 (Fail-Fast Startup Contract)
 - 主插件入口（`botroutefix.sp`）对全部 15 个业务模块的 `InitModule*()` 实施严格的刚性链式返回值检查。
-- 若因 Gamedata 签名失效、偏移未命中或二进制模板不匹配导致任何一个核心模块初始化失败，插件将立即调用 `SetFailState` 终止启动并报错，坚决杜绝“带病运行”导致的隐蔽战术逻辑割裂。例外：模块 8/10/11 在签名缺失时优雅待机（`INACTIVE (Pending Signature)`，不阻断全库启动）；模块 9 名册为空时行为回退原生（fail-open）；无损测距（NavMeasure）偏移缺失时整体待机，模块 9/10 自动降级为 fail-open/无首席而非杀插件。
+- 若因 Gamedata 签名失效、偏移未命中或二进制模板不匹配导致任何一个核心模块初始化失败，插件将立即调用 `SetFailState` 终止启动并报错，坚决杜绝“带病运行”导致的隐蔽战术逻辑割裂。例外：模块 8/10/11 在签名缺失时优雅待机（业务态开启、底层缺失，状态行显示 `DEGRADED`，不阻断全库启动）；模块 9 名册为空时行为回退原生（fail-open）；无损测距（NavMeasure）偏移缺失时整体待机，模块 9/10 自动降级为 fail-open/无首席而非杀插件。
+- 逐模块业务态复用同一套状态机：任一模块关闭只影响自身业务态与低层资源，事件总线与对局炸弹状态（`g_bBombPlanted`）永远不受影响。

@@ -55,6 +55,11 @@ MemoryPatch g_PatchHuntRandomBypass;
 Handle g_hHuntStateDetour = null;
 int g_iTotalHuntClaims = 0;
 
+// 业务开启态与 per-hook 真实启用态（DHook 状态机唯一事实来源）
+static bool g_bModule4_Active = false;
+static bool g_bHuntPreEnabled = false;
+static bool g_bHuntPostEnabled = false;
+
 // 模块内部专用偏移缓存
 static int g_iOffset_HuntArea = -1;
 static int g_iOffset_ClearedTimestamp = -1;
@@ -89,16 +94,20 @@ bool InitModule4_Hunt()
         return false;
     }
 
-    // 2. 准备并应用随机覆盖 NOP 补丁 (恢复 oldest-scan 权威，失败则降级为 flush-only 模式，不杀 Detour)
-    if (!PrepHuntRandomBypassPatch())
-    {
-        LogMessage("[BotRouteFix] [Module 4] Warning: Random bypass patch skipped (running in flush-only mode).");
-    }
-
-    // 3. 准备并挂载 HuntState::OnUpdate Pre/Post Detour
-    if (!PrepHuntStateDetour())
+    // 2. 挂载 HuntState::OnUpdate Pre/Post Detour（创建句柄，启用态交给 Enable 统一裁决）
+    if (!MountHuntStateDetour())
     {
         LogError("[BotRouteFix] [Module 4] Failed to hook HuntState::OnUpdate detour!");
+        return false;
+    }
+
+    // 3. 套用业务态（随机覆盖 NOP 允许降级，钩子必须成功）
+    EnableModule4_Hunt(true);
+    if (!g_bModule4_Active)
+    {
+        delete g_hHuntStateDetour;
+        g_hHuntStateDetour = null;
+        LogError("[BotRouteFix] [Module 4] Failed to enable HuntState detours!");
         return false;
     }
 
@@ -108,18 +117,56 @@ bool InitModule4_Hunt()
 }
 
 /**
- * 还原模块 4 的所有内存补丁与动态拦截
+ * 动态启用或停用模块 4（幂等；补丁与 Pre/Post 双钩子同步收敛）
+ */
+void EnableModule4_Hunt(bool enable)
+{
+    if (enable == g_bModule4_Active)
+    {
+        return;
+    }
+
+    if (!enable)
+    {
+        SyncDetourEnabled(g_hHuntStateDetour, g_bHuntPreEnabled, false, Hook_HuntState_OnUpdate_Pre, false, "Module 4");
+        SyncDetourEnabled(g_hHuntStateDetour, g_bHuntPostEnabled, true, Hook_HuntState_OnUpdate_Post, false, "Module 4");
+        g_PatchHuntRandomBypass.Restore();
+        g_bModule4_Active = false;
+        return;
+    }
+
+    // 随机覆盖 NOP 失败仅降级为 flush-only，不阻断模块启用
+    if (!PrepHuntRandomBypassPatch())
+    {
+        LogMessage("[BotRouteFix] [Module 4] Warning: Random bypass patch skipped (running in flush-only mode).");
+    }
+
+    bool bPre  = SyncDetourEnabled(g_hHuntStateDetour, g_bHuntPreEnabled, false, Hook_HuntState_OnUpdate_Pre, true, "Module 4");
+    bool bPost = SyncDetourEnabled(g_hHuntStateDetour, g_bHuntPostEnabled, true, Hook_HuntState_OnUpdate_Post, true, "Module 4");
+
+    if (!bPre || !bPost)
+    {
+        // 全成或全败：任一钩子失败立即回滚，绝不留半挂载态
+        SyncDetourEnabled(g_hHuntStateDetour, g_bHuntPreEnabled, false, Hook_HuntState_OnUpdate_Pre, false, "Module 4");
+        SyncDetourEnabled(g_hHuntStateDetour, g_bHuntPostEnabled, true, Hook_HuntState_OnUpdate_Post, false, "Module 4");
+        g_PatchHuntRandomBypass.Restore();
+        g_bModule4_Active = false;
+        LogError("[BotRouteFix] [Module 4] Enable aborted (pre=%d, post=%d), all resources rolled back!", bPre, bPost);
+        return;
+    }
+
+    g_bModule4_Active = true;
+}
+
+/**
+ * 还原模块 4（插件卸载：摘除钩子并释放句柄）
  */
 void RestoreModule4_Hunt()
 {
-    // 还原内存补丁
-    g_PatchHuntRandomBypass.Restore();
+    EnableModule4_Hunt(false);
 
-    // 卸载并释放 DHook Detour
     if (g_hHuntStateDetour != null)
     {
-        DHookDisableDetour(g_hHuntStateDetour, false, Hook_HuntState_OnUpdate_Pre);
-        DHookDisableDetour(g_hHuntStateDetour, true, Hook_HuntState_OnUpdate_Post);
         delete g_hHuntStateDetour;
         g_hHuntStateDetour = null;
     }
@@ -128,18 +175,19 @@ void RestoreModule4_Hunt()
 }
 
 /**
- * 动态启用或停用模块 4 补丁
+ * 查询模块 4 业务开启态
  */
-void EnableModule4_Hunt(bool enable)
+bool IsModule4_Active()
 {
-    if (enable)
-    {
-        PrepHuntRandomBypassPatch();
-    }
-    else
-    {
-        g_PatchHuntRandomBypass.Restore();
-    }
+    return g_bModule4_Active;
+}
+
+/**
+ * 查询 HuntState Detour 钩子是否完全就绪且激活（Pre 与 Post 双钩均处于启用态）
+ */
+bool IsHuntStateHooked()
+{
+    return (g_hHuntStateDetour != null && g_bHuntPreEnabled && g_bHuntPostEnabled);
 }
 
 /**
@@ -196,7 +244,11 @@ static bool PrepHuntRandomBypassPatch()
 
     if (allNop)
     {
-        g_PatchHuntRandomBypass.isPatched = false;
+        // 有备份 = 自家补丁，保持旗标；无备份 = 外来已旁路，记 false（无基线可还原）
+        if (!g_PatchHuntRandomBypass.hasBackup)
+        {
+            g_PatchHuntRandomBypass.isPatched = false;
+        }
         LogMessage("[BotRouteFix] [Module 4] Random bypass patch already present @ %X, skipping", targetAddr);
         return true;
     }
@@ -263,7 +315,7 @@ static bool PrepHuntRandomBypassPatch()
 // DETOUR: HUNTSTATE::ONUPDATE
 //========================================================================================
 
-static bool PrepHuntStateDetour()
+static bool MountHuntStateDetour()
 {
     g_hHuntStateDetour = DHookCreateDetour(Address_Null, CallConv_THISCALL, ReturnType_Void, ThisPointer_Address);
     if (g_hHuntStateDetour == null)
@@ -282,28 +334,12 @@ static bool PrepHuntStateDetour()
 
     DHookAddParam(g_hHuntStateDetour, HookParamType_CBaseEntity);
 
-    if (!DHookEnableDetour(g_hHuntStateDetour, false, Hook_HuntState_OnUpdate_Pre))
-    {
-        LogError("[BotRouteFix] [Module 4] Failed to enable HuntState_OnUpdate Pre detour!");
-        delete g_hHuntStateDetour;
-        g_hHuntStateDetour = null;
-        return false;
-    }
-
-    if (!DHookEnableDetour(g_hHuntStateDetour, true, Hook_HuntState_OnUpdate_Post))
-    {
-        LogError("[BotRouteFix] [Module 4] Failed to enable HuntState_OnUpdate Post detour!");
-        delete g_hHuntStateDetour;
-        g_hHuntStateDetour = null;
-        return false;
-    }
-
     return true;
 }
 
 public MRESReturn Hook_HuntState_OnUpdate_Pre(Address pThis, DHookParam hParams)
 {
-    if (g_cvEnable != null && !g_cvEnable.BoolValue)
+    if (!g_bModule4_Active)
     {
         return MRES_Ignored;
     }
@@ -327,7 +363,7 @@ public MRESReturn Hook_HuntState_OnUpdate_Pre(Address pThis, DHookParam hParams)
 
 public MRESReturn Hook_HuntState_OnUpdate_Post(Address pThis, DHookParam hParams)
 {
-    if (g_cvEnable != null && !g_cvEnable.BoolValue)
+    if (!g_bModule4_Active)
     {
         return MRES_Ignored;
     }

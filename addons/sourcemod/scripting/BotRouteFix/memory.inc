@@ -4,13 +4,20 @@
 #define _botroutefix_memory_included
 
 //========================================================================================
-// MEMORY PATCH INFRASTRUCTURE
+// MEMORY PATCH & DETOUR INFRASTRUCTURE
 //
-// 提供严谨、安全的二进制内存补丁生命周期管理，统一支持：
+// 提供严谨、安全的底层改写生命周期管理：
+//
+// MemoryPatch —— 二进制内存补丁：
 //   1. 现场指令字节备份 (Backup)
 //   2. 写入前模板匹配与常量校验 (Preflight Verification)
 //   3. 幂等性检测（已打补丁跳过，防止热重载重复覆盖）
 //   4. 插件卸载/热重载时严格原样还原 (Restore)
+//
+// SyncDetourEnabled —— DHook 状态机收敛：
+//   SourceMod 的 DHookDisableDetour 在钩子未挂载时抛 "Function not detoured" 致命错误，
+//   重复 Enable 亦会污染 DHook 内部状态机。每个钩子必须持有自己的真实启用态，
+//   只在目标态与现状不一致时才调用底层 Enable/Disable。
 //========================================================================================
 
 enum struct MemoryPatch
@@ -26,6 +33,15 @@ enum struct MemoryPatch
     void Init(const char[] patchName, Address addr, int patchSize)
     {
         strcopy(this.name, sizeof(this.name), patchName);
+
+        // 同一目标重入（Enable -> Disable -> Enable）：保留原始基线备份与生效旗标。
+        // 若在此抹掉 hasBackup，后续幂等检测会把自家补丁误判为"外来补丁"而记
+        // isPatched=false，Restore() 随即被零写入熔断拦截 —— 补丁永久卡死无法卸载。
+        if (this.hasBackup && this.address == addr && this.size == patchSize)
+        {
+            return;
+        }
+
         this.address = addr;
         this.size = patchSize;
         this.isPatched = false;
@@ -128,4 +144,47 @@ enum struct MemoryPatch
         this.isPatched = false;
         return true;
     }
+}
+
+//========================================================================================
+// DETOUR HOOK STATE SYNCHRONIZER
+//========================================================================================
+
+/**
+ * 幂等同步单个 DHook Detour 的启用态
+ *
+ * 调用前先比对 per-hook 真实启用态，只有目标态与现状不一致时才动作，
+ * 从根上杜绝重复 Enable/Disable 引发的 "Function not detoured" 致命状态机异常。
+ *
+ * @param hook       Detour 句柄（null = 未挂载，直接返回 false）
+ * @param enabled    Per-hook 真实启用态（唯一事实来源，调用成功后更新）
+ * @param post       true = post 钩子, false = pre 钩子
+ * @param callback   回调函数
+ * @param want       目标启用态
+ * @param label      日志标识（模块名）
+ * @return           调用后钩子是否处于目标态
+ */
+bool SyncDetourEnabled(Handle hook, bool &enabled, bool post, DHookCallback callback, bool want, const char[] label)
+{
+    if (hook == null)
+    {
+        // 钩子从未挂载（待机或因签名缺失降级）：不存在可同步的底层状态
+        enabled = false;
+        return false;
+    }
+
+    if (enabled == want)
+    {
+        return true;
+    }
+
+    bool ok = want ? DHookEnableDetour(hook, post, callback) : DHookDisableDetour(hook, post, callback);
+    if (!ok)
+    {
+        LogError("[BotRouteFix] [%s] %s detour %s hook failed!", label, want ? "Enable" : "Disable", post ? "post" : "pre");
+        return false;
+    }
+
+    enabled = want;
+    return true;
 }

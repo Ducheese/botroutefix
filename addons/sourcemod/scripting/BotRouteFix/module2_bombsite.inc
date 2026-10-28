@@ -40,6 +40,7 @@
 
 // 模块状态与补丁
 MemoryPatch g_PatchBombsiteLock;
+static bool g_bModule2_Active = false;   // 业务开启态
 bool g_bBombsiteLocked = false;
 int g_iLockedZoneIndex = -1;
 int g_iOpeningCarrier = 0;
@@ -113,6 +114,7 @@ bool InitModule2_Bombsite()
         // 否则后续 round_start/掉包/死亡/换人/安包/卸载触发 Restore 时会向代码段写回全零导致崩服！
         g_PatchBombsiteLock.isPatched = false;
         g_bBombsiteLocked = false;
+        EnableModule2_Bombsite(true);
         LogMessage("[BotRouteFix] [Module 2] Warning: Bombsite lock patch already present @ %X on startup (skipping backup; restore will be no-op to prevent code corruption)", targetAddr);
         return true;
     }
@@ -154,33 +156,58 @@ bool InitModule2_Bombsite()
     LogMessage("[BotRouteFix] [Module 2] PlantBombClosestZone block verified @ %X [%s]",
         targetAddr, g_bIsWin64 ? "64-bit" : "32-bit");
 
+    EnableModule2_Bombsite(true);
     return true;
 }
 
 /**
- * 还原模块 2 的所有内存补丁并复位状态
- */
-void RestoreModule2_Bombsite()
-{
-    RestoreBombsiteLockPatch();
-    g_iOpeningCarrier = 0;
-    g_fCurrentPlantDelay = 0.0;
-}
-
-/**
- * 动态启用或停用模块 2
+ * 动态启用或停用模块 2（幂等）
  */
 void EnableModule2_Bombsite(bool enable)
 {
-    if (!enable)
+    if (enable == g_bModule2_Active)
     {
-        if (g_bBombsiteLocked)
-        {
-            RestoreBombsiteLockPatch();
-        }
-        g_iOpeningCarrier = 0;
-        g_fCurrentPlantDelay = 0.0;
+        return;
     }
+
+    if (enable)
+    {
+        // 无持久低层资源：包点锁定补丁按回合即时注入
+        g_bModule2_Active = true;
+        return;
+    }
+
+    if (g_bBombsiteLocked)
+    {
+        RestoreBombsiteLockPatch();
+    }
+    g_iOpeningCarrier = 0;
+    g_fCurrentPlantDelay = 0.0;
+    g_bModule2_Active = false;
+}
+
+/**
+ * 还原模块 2（插件卸载：解除锁定并复位业务态）
+ */
+void RestoreModule2_Bombsite()
+{
+    EnableModule2_Bombsite(false);
+}
+
+/**
+ * 查询模块 2 业务开启态
+ */
+bool IsModule2_Active()
+{
+    return g_bModule2_Active;
+}
+
+/**
+ * 查询包点锁定底层是否完全就绪（TheCSBots 单例就绪且补丁已锁定原始基线）
+ */
+bool IsBombsitePatchReady()
+{
+    return (g_pTheCSBotsPtr != Address_Null && g_PatchBombsiteLock.address != Address_Null && g_PatchBombsiteLock.hasBackup);
 }
 
 /**
@@ -257,6 +284,11 @@ void Module2_OnMapStart()
  */
 void Module2_OnRoundFreezeEnd()
 {
+    if (!g_bModule2_Active)
+    {
+        return;
+    }
+
     int carrier = GetC4Carrier();
     if (!IsValidClient(carrier, true))
     {
@@ -299,6 +331,11 @@ void Module2_OnRoundFreezeEnd()
  */
 void Module2_OnBombDropped()
 {
+    if (!g_bModule2_Active)
+    {
+        return;
+    }
+
     if (g_bBombsiteLocked)
     {
         RestoreBombsiteLockPatch();
@@ -313,6 +350,11 @@ void Module2_OnBombDropped()
  */
 void Module2_OnItemPickup(int client, const char[] item)
 {
+    if (!g_bModule2_Active)
+    {
+        return;
+    }
+
     // 忽略冻结买枪阶段的系统发包
     if (GameRules_GetProp("m_bFreezePeriod") != 0)
     {
@@ -341,6 +383,11 @@ void Module2_OnItemPickup(int client, const char[] item)
  */
 void Module2_OnPlayerDeath(int victim)
 {
+    if (!g_bModule2_Active)
+    {
+        return;
+    }
+
     if (victim > 0 && victim == g_iOpeningCarrier)
     {
         if (g_bBombsiteLocked)
@@ -358,6 +405,11 @@ void Module2_OnPlayerDeath(int victim)
  */
 void Module2_OnClientDisconnect(int client)
 {
+    if (!g_bModule2_Active)
+    {
+        return;
+    }
+
     if (client > 0 && client == g_iOpeningCarrier)
     {
         if (g_bBombsiteLocked)

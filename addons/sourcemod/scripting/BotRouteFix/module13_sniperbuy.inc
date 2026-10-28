@@ -49,6 +49,9 @@
 MemoryPatch g_PatchSniperBuy13_Main;
 MemoryPatch g_PatchSniperBuy13_Cave;
 
+// 业务开启态
+static bool g_bModule13_Active = false;
+
 /**
  * 初始化并激活模块 13
  *
@@ -68,21 +71,11 @@ bool InitModule13_SniperBuy()
         return false;
     }
 
-    if (g_bIsWin64)
+    EnableModule13_SniperBuy(true);
+    if (!g_bModule13_Active)
     {
-        if (!PrepSniperBuy13_Cave())
-        {
-            LogError("[BotRouteFix] [Module 13] Failed to inject 64-bit cave patch!");
-            return false;
-        }
-    }
-    else
-    {
-        if (!PrepSniperBuy13_Rewrite())
-        {
-            LogError("[BotRouteFix] [Module 13] Failed to inject 32-bit rewrite patch!");
-            return false;
-        }
+        LogError("[BotRouteFix] [Module 13] Failed to inject sniper-buy patch!");
+        return false;
     }
 
     LogMessage("[BotRouteFix] [Module 13] sniperRifleChance (50-10*M) patch activated [%s]",
@@ -91,46 +84,64 @@ bool InitModule13_SniperBuy()
 }
 
 /**
- * 还原模块 13
+ * 动态启用或停用模块 13（幂等；main/cave 两段补丁全成或全败）
+ */
+void EnableModule13_SniperBuy(bool enable)
+{
+    if (enable == g_bModule13_Active)
+    {
+        return;
+    }
+
+    if (enable)
+    {
+        bool ok = g_bIsWin64 ? PrepSniperBuy13_Cave() : PrepSniperBuy13_Rewrite();
+        if (!ok)
+        {
+            // 全成或全败：失败立即写回，杜绝"jmp 已挂、cave 未写"的半态
+            g_PatchSniperBuy13_Main.Restore();
+            g_PatchSniperBuy13_Cave.Restore();
+            g_bModule13_Active = false;
+            LogError("[BotRouteFix] [Module 13] Enable aborted (%s), all patches rolled back!",
+                g_bIsWin64 ? "64-bit cave" : "32-bit rewrite");
+            return;
+        }
+
+        g_bModule13_Active = true;
+        return;
+    }
+
+    g_PatchSniperBuy13_Main.Restore();
+    g_PatchSniperBuy13_Cave.Restore();
+    g_bModule13_Active = false;
+}
+
+/**
+ * 还原模块 13（插件卸载：恢复原始字节并复位业务态）
  */
 void RestoreModule13_SniperBuy()
 {
-    g_PatchSniperBuy13_Main.Restore();
-    g_PatchSniperBuy13_Cave.Restore();
+    EnableModule13_SniperBuy(false);
     LogMessage("[BotRouteFix] [Module 13] Patch safely restored to original bytes.");
 }
 
 /**
- * 动态启用或停用模块 13
+ * 查询模块 13 业务开启态
  */
-void EnableModule13_SniperBuy(bool enable)
+bool IsModule13_Active()
 {
-    if (enable)
-    {
-        if (!IsSniperBuy13Patched())
-        {
-            if (g_bIsWin64)
-            {
-                PrepSniperBuy13_Cave();
-            }
-            else
-            {
-                PrepSniperBuy13_Rewrite();
-            }
-        }
-    }
-    else
-    {
-        g_PatchSniperBuy13_Main.Restore();
-        g_PatchSniperBuy13_Cave.Restore();
-    }
+    return g_bModule13_Active;
 }
 
 /**
- * 查询模块 13 是否生效
+ * 查询模块 13 补丁是否完全生效（64位需 Main 与 Cave 双段补丁均生效）
  */
 bool IsSniperBuy13Patched()
 {
+    if (g_bIsWin64)
+    {
+        return (g_PatchSniperBuy13_Main.isPatched && g_PatchSniperBuy13_Cave.isPatched);
+    }
     return g_PatchSniperBuy13_Main.isPatched;
 }
 
@@ -258,7 +269,7 @@ static bool PrepSniperBuy13_Rewrite()
 }
 
 //========================================================================================
-// 64-BIT: jmp-out cave（comiss 7B → E9 + 3 NOP）
+// 64-BIT: jmp-out cave（comiss 7B → E9 + 2 NOP）
 // cave @ comiss + 0xC5AB3（前驱 C3，21×CC + 10B 对齐 NOP 共 31B，写前全量校验）
 //========================================================================================
 

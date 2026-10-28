@@ -57,7 +57,8 @@
 MemoryPatch g_PatchCamp12_Sites[6];
 static int g_iOffset_Task12 = -1;
 static int g_iOffset_Disp12 = -1;
-static bool g_bModule12_Armed = false;
+static bool g_bModule12_Active = false;   // 业务开启态（仅本模块写；跨模块一律经 IsModule12_Active() 读）
+static bool g_bModule12_Armed = false;    // 低层态：六处骰子旁路是否实际驻留
 static int g_iTotalCampRedirected = 0;
 
 // 站点表：0=O1 1=O2 2=O3 3=D1 4=D2 5=D3；O2/O3 为 ja/jb-to-camp，需 E9 转换，其余 NOP
@@ -99,63 +100,105 @@ bool InitModule12_CampGate()
         return false;
     }
 
-    for (int i = 0; i < 6; i++)
+    EnableModule12_CampGate(true);
+    if (!g_bModule12_Active)
     {
-        if (!PrepCamp12_Site(i))
-        {
-            LogError("[BotRouteFix] [Module 12] Failed at site %d, rolling back to native dice!", i);
-            for (int j = 0; j < 6; j++)
-            {
-                g_PatchCamp12_Sites[j].Restore();
-            }
-            g_bModule12_Armed = false;
-            return false;
-        }
+        LogError("[BotRouteFix] [Module 12] Failed to arm camp gate!");
+        return false;
     }
 
-    g_bModule12_Armed = true;
     LogMessage("[BotRouteFix] [Module 12] Sniper camp gate (60-10*M) armed: 6/6 dice bypassed [%s]",
         g_bIsWin64 ? "64-bit" : "32-bit");
     return true;
 }
 
 /**
- * 还原模块 12（6 处 jcc 写回 + 解除武装；钩子本身归模块 15 管）
+ * 动态启用或停用模块 12（幂等；停用即写回六处 jcc 并解除武装）
  */
-void RestoreModule12_CampGate()
+void EnableModule12_CampGate(bool enable)
 {
+    if (enable == g_bModule12_Active)
+    {
+        return;
+    }
+
+    if (enable)
+    {
+        bool ok = true;
+        for (int i = 0; i < 6; i++)
+        {
+            if (!PrepCamp12_Site(i))
+            {
+                ok = false;
+                break;
+            }
+        }
+
+        // 全成或全败：任一站点失败立即写回全部，绝不半态驻留
+        if (!ok)
+        {
+            for (int i = 0; i < 6; i++)
+            {
+                g_PatchCamp12_Sites[i].Restore();
+            }
+            g_bModule12_Armed = false;
+            g_bModule12_Active = false;
+            LogError("[BotRouteFix] [Module 12] Enable aborted, all dice bypasses rolled back to native!");
+            SyncHideDurationDetourState();
+            return;
+        }
+
+        g_bModule12_Armed = true;
+        g_bModule12_Active = true;
+        // 借钩宿主：本模块自身无 Detour，须确保模块 15 的 OnEnter 钩子处于启用态
+        SyncHideDurationDetourState();
+        return;
+    }
+
     for (int i = 0; i < 6; i++)
     {
         g_PatchCamp12_Sites[i].Restore();
     }
     g_bModule12_Armed = false;
+    g_bModule12_Active = false;
+    // 借钩宿主：模块 15 若仍在工作，钩子必须保持启用
+    SyncHideDurationDetourState();
+}
+
+/**
+ * 还原模块 12（插件卸载：写回六处 jcc 并解除武装；钩子本身归模块 15 管）
+ */
+void RestoreModule12_CampGate()
+{
+    EnableModule12_CampGate(false);
     LogMessage("[BotRouteFix] [Module 12] Dice bypasses restored, gate disarmed.");
 }
 
 /**
- * 动态启用或停用模块 12
+ * 查询模块 12 业务开启态
  */
-void EnableModule12_CampGate(bool enable)
+bool IsModule12_Active()
 {
-    if (enable)
-    {
-        if (!g_bModule12_Armed)
-        {
-            InitModule12_CampGate();
-        }
-    }
-    else
-    {
-        RestoreModule12_CampGate();
-    }
+    return g_bModule12_Active;
 }
 
 /**
- * 查询模块 12 门禁是否武装
+ * 查询模块 12 门禁是否完全就绪（业务态已开、Hunt SDKCall 就绪且 6 处补丁均为本插件所打）
  */
-bool IsCamp12Armed()
+bool IsCamp12Ready()
 {
-    return g_bModule12_Armed;
+    if (!g_bModule12_Armed || g_hSDKCall_Hunt == null)
+    {
+        return false;
+    }
+    for (int i = 0; i < 6; i++)
+    {
+        if (!g_PatchCamp12_Sites[i].isPatched)
+        {
+            return false;
+        }
+    }
+    return true;
 }
 
 /**
@@ -349,7 +392,7 @@ static bool PrepCamp12_Site(int siteIndex)
 
 bool Module12_CampGate(int client)
 {
-    if (!g_bModule12_Armed || g_hSDKCall_Hunt == null)
+    if (!g_bModule12_Active || !g_bModule12_Armed || g_hSDKCall_Hunt == null)
     {
         return false;
     }
@@ -389,6 +432,12 @@ bool Module12_CampGate(int client)
  */
 public void Module12_FrameHunt(any data)
 {
+    // 递延帧可能在停用之后才到，必须二次校验业务态
+    if (!g_bModule12_Active)
+    {
+        return;
+    }
+
     int client = GetClientOfUserId(view_as<int>(data));
     if (!IsBot(client, true))
     {

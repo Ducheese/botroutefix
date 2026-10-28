@@ -30,12 +30,14 @@
 #define SNIPER_NAIL_DANGER      0.8
 #define SNIPER_NAIL_MAX         2.5
 #define SNIPER_MAX_STEPS        20
-#define DANGER_DECAY_RATE_SEC   120.0   // 引擎原生自然沉降速率 (1.0 每 120 秒)
+// 沉降速率 DANGER_DECAY_RATE_SEC 统一定义于 global.inc
 
 // 贴脸不撤距离（units）：距狙小于此值只钉走廊不请求撤退（近距离跑路等于送背）
 #define SNIPER_NO_RETREAT_DIST  265.0
 
 // 本模块私有状态
+static bool g_bModule11_Active = false;         // 业务开启态
+static bool g_bSpottedSniperHooked = false;     // per-hook 真实启用态
 static Handle g_hSpottedSniperDetour = null;
 static int g_iTotalSniperDeterred = 0;
 
@@ -252,7 +254,7 @@ static void Sniper_NailDanger(Address pArea, int teamIdx, float curtime)
  */
 public MRESReturn Hook_SpottedSniper_Post(Address pThis, DHookParam hParams)
 {
-    if (g_cvEnable != null && !g_cvEnable.BoolValue)
+    if (!g_bModule11_Active)
     {
         return MRES_Ignored;
     }
@@ -375,11 +377,11 @@ public MRESReturn Hook_SpottedSniper_Post(Address pThis, DHookParam hParams)
 }
 
 /**
- * 查询狙击手威慑 Detour 是否已就绪
+ * 查询狙击手威慑 SpottedSniper Detour 与 ComputePath SDKCall 是否完全就绪
  */
 bool IsSniperDeterrenceHooked()
 {
-    return (g_hSpottedSniperDetour != null);
+    return (g_hSpottedSniperDetour != null && g_bSpottedSniperHooked && g_hSDKCall_ComputePath != null);
 }
 
 /**
@@ -430,14 +432,16 @@ bool InitModule11_Sniper()
         LogMessage("[BotRouteFix] [Module 11] Signature 'BotChatterInterface_SpottedSniper' pending in gamedata (prototype mode). Module 11 is on standby.");
         delete g_hSpottedSniperDetour;
         g_hSpottedSniperDetour = null;
+        EnableModule11_Sniper(true);    // 待机：签名缺失，业务态开启、底层缺失（状态行显示 DEGRADED）
         return true;
     }
 
-    if (!DHookEnableDetour(g_hSpottedSniperDetour, true, Hook_SpottedSniper_Post))
+    EnableModule11_Sniper(true);
+    if (!g_bModule11_Active)
     {
-        LogError("[BotRouteFix] [Module 11] Failed to enable SpottedSniper Post detour!");
         delete g_hSpottedSniperDetour;
         g_hSpottedSniperDetour = null;
+        LogError("[BotRouteFix] [Module 11] Failed to enable SpottedSniper Post detour!");
         return false;
     }
 
@@ -446,13 +450,42 @@ bool InitModule11_Sniper()
 }
 
 /**
- * 还原模块 11
+ * 动态启用或停用模块 11（幂等）
+ */
+void EnableModule11_Sniper(bool enable)
+{
+    if (enable == g_bModule11_Active)
+    {
+        return;
+    }
+
+    if (enable)
+    {
+        if (g_hSpottedSniperDetour == null)
+        {
+            // 待机态：签名缺失，无可挂载钩子；业务态仍记为开启
+            g_bModule11_Active = true;
+            return;
+        }
+
+        g_bModule11_Active = SyncDetourEnabled(g_hSpottedSniperDetour, g_bSpottedSniperHooked,
+            true, Hook_SpottedSniper_Post, true, "Module 11");
+        return;
+    }
+
+    SyncDetourEnabled(g_hSpottedSniperDetour, g_bSpottedSniperHooked, true, Hook_SpottedSniper_Post, false, "Module 11");
+    g_bModule11_Active = false;
+}
+
+/**
+ * 还原模块 11（插件卸载：摘钩并释放句柄）
  */
 void RestoreModule11_Sniper()
 {
+    EnableModule11_Sniper(false);
+
     if (g_hSpottedSniperDetour != null)
     {
-        DHookDisableDetour(g_hSpottedSniperDetour, true, Hook_SpottedSniper_Post);
         delete g_hSpottedSniperDetour;
         g_hSpottedSniperDetour = null;
     }
@@ -461,21 +494,9 @@ void RestoreModule11_Sniper()
 }
 
 /**
- * 动态启用或停用模块 11
+ * 查询模块 11 业务开启态
  */
-void EnableModule11_Sniper(bool enable)
+bool IsModule11_Active()
 {
-    if (g_hSpottedSniperDetour == null)
-    {
-        return;
-    }
-
-    if (enable)
-    {
-        DHookEnableDetour(g_hSpottedSniperDetour, true, Hook_SpottedSniper_Post);
-    }
-    else
-    {
-        DHookDisableDetour(g_hSpottedSniperDetour, true, Hook_SpottedSniper_Post);
-    }
+    return g_bModule11_Active;
 }

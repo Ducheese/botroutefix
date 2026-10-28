@@ -34,11 +34,13 @@
 //      为 Bot 提供自然且富于变化的动态寻路权衡，避免死板走固定路线。
 //========================================================================================
 
-// 危险度软衰减与网格安全宏定义
-#define DANGER_DECAY_RATE_SEC   120.0   // 引擎原生自然沉降速率 (1.0 每 120 秒)
+// 危险度软衰减与网格安全宏定义（沉降速率 DANGER_DECAY_RATE_SEC 统一定义于 global.inc）
 #define DANGER_ROUND_RETENTION  0.2     // 开局危险度保留比例 (0.2 即软衰减 80%)
 #define DANGER_NOISE_THRESHOLD  0.05    // 浮点底噪截断阈值 (低于此值直接归零)
 #define NAV_AREA_MAX_SANITY     100000  // 导航网格总数安全断言上限 (防野指针读崩溃)
+
+// 业务开启态
+static bool g_bModule3_Active = false;
 
 // 模块内部专用偏移缓存
 static int g_iOffset_Danger = -1;
@@ -80,24 +82,32 @@ bool InitModule3_Danger()
         return false;
     }
 
+    EnableModule3_Danger(true);
     return true;
 }
 
 /**
- * 模块 3 清理释放
- */
-void RestoreModule3_Danger()
-{
-    // 无持久内存 Patch，仅做状态复位
-}
-
-/**
- * 动态启用或停用模块 3
+ * 动态启用或停用模块 3（幂等；纯 round_start 事件驱动，无低层资源）
  */
 void EnableModule3_Danger(bool enable)
 {
-    // 模块 3 完全基于 round_start 事件驱动，事件派发器已挂载 g_cvEnable 守卫
-    #pragma unused enable
+    g_bModule3_Active = enable;
+}
+
+/**
+ * 还原模块 3（插件卸载：无持久补丁，仅复位业务态）
+ */
+void RestoreModule3_Danger()
+{
+    EnableModule3_Danger(false);
+}
+
+/**
+ * 查询模块 3 业务开启态
+ */
+bool IsModule3_Active()
+{
+    return g_bModule3_Active;
 }
 
 
@@ -107,12 +117,20 @@ void EnableModule3_Danger(bool enable)
  */
 void Module3_OnRoundStart()
 {
+    if (!g_bModule3_Active)
+    {
+        return;
+    }
+
     DecayAllNavAreaDanger();
 }
 
 /**
  * 地图加载 (OnMapStart)：nav 网格重建地址全变，必须重解 TheNavAreas 容器
  * （拿旧指针 decay 等于往释放过的内存写；不清零只重解，danger 本就全零无需衰减）
+ *
+ * 【例外：不随业务态守卫】对应 events.inc 契约 (c)。
+ *   模块关闭时若不重建，g_pTheNavAreas* 会停留在已释放的旧网格上，下次启用即野指针写。
  */
 void Module3_OnMapStart()
 {
@@ -209,6 +227,14 @@ void DecayAllNavAreaDanger()
 }
 
 /**
+ * 查询网格危险度衰减底层是否完全就绪（TheNavAreas 容器锚点解析成功）
+ */
+bool IsNavDangerReady()
+{
+    return (g_pTheNavAreasCount != Address_Null && g_pTheNavAreasBase != Address_Null);
+}
+
+/**
  * 查询全局已加载的 NavArea 总数量
  */
 int GetTotalNavAreaCount()
@@ -228,7 +254,7 @@ int GetTotalNavAreaCount()
  * @param dangerCT      输出 CT 阵营危险度
  * @return              是否查询成功
  */
-bool GetNavAreaDanger(Address pArea, float &dangerT, float &dangerCT)
+stock bool GetNavAreaDanger(Address pArea, float &dangerT, float &dangerCT)
 {
     dangerT = 0.0;
     dangerCT = 0.0;

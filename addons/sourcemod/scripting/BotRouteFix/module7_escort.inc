@@ -18,6 +18,7 @@
 #define ESCORT_MAX_COUNT 6
 
 // 本模块私有状态：花名册（不出本文件，对外只暴露 Escort_* 与 Module7_*）
+static bool g_bModule7_Active = false;   // 业务开启态
 int g_iEscortCarrier = 0;
 int g_iBodyguardList[MAXPLAYERS + 1];
 int g_iBodyguardCount = 0;
@@ -358,31 +359,55 @@ bool InitModule7_Escort()
         return false;
     }
 
+    EnableModule7_Escort(true);
     LogMessage("[BotRouteFix] [Module 7] Carrier escort roster online (Euclidean bodyguards)");
     return true;
 }
 
 /**
- * 还原模块 7（卸载不断跟随链）
- */
-void RestoreModule7_Escort()
-{
-    Escort_ReleaseAll();
-}
-
-/**
- * 动态启用或停用模块 7
+ * 动态启用或停用模块 7（幂等；停用即解除全队跟随）
  */
 void EnableModule7_Escort(bool enable)
 {
-    if (!enable)
+    if (enable == g_bModule7_Active)
     {
-        Escort_ReleaseAll();
+        return;
     }
-    else
+
+    g_bModule7_Active = enable;
+
+    if (enable)
     {
         Escort_Refresh();
     }
+    else
+    {
+        Escort_ReleaseAll();
+    }
+}
+
+/**
+ * 还原模块 7（插件卸载：解除跟随链并复位业务态）
+ */
+void RestoreModule7_Escort()
+{
+    EnableModule7_Escort(false);
+}
+
+/**
+ * 查询模块 7 业务开启态
+ */
+bool IsModule7_Active()
+{
+    return g_bModule7_Active;
+}
+
+/**
+ * 查询 C4 保镖名册底层 SDKCall 是否完全就绪
+ */
+bool IsEscortReady()
+{
+    return (g_hSDKCall_Follow != null && g_hSDKCall_StopFollowing != null);
 }
 
 /**
@@ -406,6 +431,11 @@ void Module7_OnMapStart()
  */
 void Module7_OnRoundFreezeEnd()
 {
+    if (!g_bModule7_Active)
+    {
+        return;
+    }
+
     Escort_Refresh();
 }
 
@@ -414,6 +444,11 @@ void Module7_OnRoundFreezeEnd()
  */
 void Module7_OnItemPickup(int client, const char[] item)
 {
+    if (!g_bModule7_Active)
+    {
+        return;
+    }
+
     // 冻结期内开局发包不触发（买枪期跟随会打断 BuyState）
     if (GameRules_GetProp("m_bFreezePeriod") != 0)
     {
@@ -431,6 +466,12 @@ void Module7_OnItemPickup(int client, const char[] item)
  */
 public void Module7_FrameRefresh(any data)
 {
+    // 递延帧可能在停用之后才到，必须二次校验业务态
+    if (!g_bModule7_Active)
+    {
+        return;
+    }
+
     Escort_Refresh();
 }
 
@@ -470,6 +511,11 @@ void Module7_OnBombExploded()
  */
 void Module7_OnPlayerDeath(int victim)
 {
+    if (!g_bModule7_Active)
+    {
+        return;
+    }
+
     // 包匪阵亡：当场彻底释放保镖名单，保镖立即恢复自由身可就近捡包、自由迎敌或防守
     if (Escort_IsCarrier(victim))
     {
@@ -486,6 +532,11 @@ void Module7_OnPlayerDeath(int victim)
  */
 void Module7_OnClientDisconnect(int client)
 {
+    if (!g_bModule7_Active)
+    {
+        return;
+    }
+
     Escort_OnClientDisconnect(client);
 }
 

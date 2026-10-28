@@ -28,6 +28,8 @@
 #define LOOT_ROSTER_SIZE 3
 
 // 本模块私有状态（static，名册与句柄不出本文件）
+static bool g_bModule9_Active = false;      // 业务开启态
+static bool g_bLooseHooked = false;         // per-hook 真实启用态
 static Handle g_hLooseDetour = null;
 static int g_iLootRoster[LOOT_ROSTER_SIZE] = {-1, -1, -1};
 static bool g_bHasRoster = false;
@@ -104,7 +106,7 @@ static void Loot_ElectRoster()
 
     for (int i = 1; i <= MaxClients; i++)
     {
-        if (!IsBot(i, true) || GetClientTeam(i) != 2)
+        if (!IsTeamBot(i, 2, true))
         {
             continue;
         }
@@ -148,7 +150,7 @@ static void Loot_ElectRoster()
 
 public MRESReturn Hook_NoticeLooseBomb_Pre(int client, DHookParam hParams)
 {
-    if (g_cvEnable != null && !g_cvEnable.BoolValue)
+    if (!g_bModule9_Active)
     {
         return MRES_Ignored;
     }
@@ -181,7 +183,7 @@ public MRESReturn Hook_NoticeLooseBomb_Pre(int client, DHookParam hParams)
  */
 bool IsLootHooked()
 {
-    return (g_hLooseDetour != null);
+    return (g_hLooseDetour != null && g_bLooseHooked);
 }
 
 /**
@@ -198,6 +200,14 @@ int Loot_GetRosterCount()
         }
     }
     return count;
+}
+
+/**
+ * 获取抢包花名册容量上限
+ */
+int Loot_GetRosterSize()
+{
+    return LOOT_ROSTER_SIZE;
 }
 
 /**
@@ -239,11 +249,12 @@ bool InitModule9_Loot()
     }
 
     // NoticeLooseBomb(void)：无参数，this 即 bot 本体
-    if (!DHookEnableDetour(g_hLooseDetour, false, Hook_NoticeLooseBomb_Pre))
+    EnableModule9_Loot(true);
+    if (!g_bModule9_Active)
     {
-        LogError("[BotRouteFix] [Module 9] Failed to enable NoticeLooseBomb Pre detour!");
         delete g_hLooseDetour;
         g_hLooseDetour = null;
+        LogError("[BotRouteFix] [Module 9] Failed to enable NoticeLooseBomb Pre detour!");
         return false;
     }
 
@@ -252,37 +263,47 @@ bool InitModule9_Loot()
 }
 
 /**
- * 还原模块 9（摘钩子 + 清名册）
- */
-void RestoreModule9_Loot()
-{
-    if (g_hLooseDetour != null)
-    {
-        DHookDisableDetour(g_hLooseDetour, false, Hook_NoticeLooseBomb_Pre);
-        delete g_hLooseDetour;
-        g_hLooseDetour = null;
-    }
-    Loot_ClearRoster();
-}
-
-/**
- * 动态启用或停用模块 9
+ * 动态启用或停用模块 9（幂等；停用即清空名册 = 全放行回原生）
  */
 void EnableModule9_Loot(bool enable)
 {
-    if (g_hLooseDetour == null)
+    if (enable == g_bModule9_Active)
     {
         return;
     }
 
     if (enable)
     {
-        DHookEnableDetour(g_hLooseDetour, false, Hook_NoticeLooseBomb_Pre);
+        g_bModule9_Active = SyncDetourEnabled(g_hLooseDetour, g_bLooseHooked,
+            false, Hook_NoticeLooseBomb_Pre, true, "Module 9");
+        return;
     }
-    else
+
+    SyncDetourEnabled(g_hLooseDetour, g_bLooseHooked, false, Hook_NoticeLooseBomb_Pre, false, "Module 9");
+    Loot_ClearRoster();
+    g_bModule9_Active = false;
+}
+
+/**
+ * 还原模块 9（插件卸载：摘钩并释放句柄）
+ */
+void RestoreModule9_Loot()
+{
+    EnableModule9_Loot(false);
+
+    if (g_hLooseDetour != null)
     {
-        DHookDisableDetour(g_hLooseDetour, false, Hook_NoticeLooseBomb_Pre);
+        delete g_hLooseDetour;
+        g_hLooseDetour = null;
     }
+}
+
+/**
+ * 查询模块 9 业务开启态
+ */
+bool IsModule9_Active()
+{
+    return g_bModule9_Active;
 }
 
 /**
@@ -290,6 +311,11 @@ void EnableModule9_Loot(bool enable)
  */
 void Module9_OnBombDropped()
 {
+    if (!g_bModule9_Active)
+    {
+        return;
+    }
+
     RequestFrame(Module9_FrameElect);
 }
 
@@ -298,6 +324,12 @@ void Module9_OnBombDropped()
  */
 public void Module9_FrameElect(any data)
 {
+    // 递延帧可能在停用之后才到，必须二次校验业务态
+    if (!g_bModule9_Active)
+    {
+        return;
+    }
+
     Loot_ElectRoster();
 }
 
@@ -341,7 +373,7 @@ static void Loot_RemoveAndBackfill(int client, const char[] reason)
     float bestDist = 9999999.0;
     for (int i = 1; i <= MaxClients; i++)
     {
-        if (!IsBot(i, true) || GetClientTeam(i) != 2 || Loot_IsInRoster(i))
+        if (!IsTeamBot(i, 2, true) || Loot_IsInRoster(i))
         {
             continue;
         }
@@ -368,6 +400,7 @@ static void Loot_RemoveAndBackfill(int client, const char[] reason)
                 break;
             }
         }
+        g_iTotalLootElections++;
         DebugLog("[BotRouteFix] [Module 9] Roster backfill (%s): %N joins", reason, best);
     }
 
