@@ -55,6 +55,7 @@
 #include "BotRouteFix/module13_sniperbuy"
 #include "BotRouteFix/module14_defendrush"
 #include "BotRouteFix/module15_hideduration"
+#include "BotRouteFix/module_manager"
 #include "BotRouteFix/events"
 #include "BotRouteFix/commands"
 
@@ -126,8 +127,23 @@ public void OnPluginStart()
         return;
     }
 
+    // 6. Initialize Module Rules and connect ConVar change hook
+    InitModuleManager();
+    g_cvModules.AddChangeHook(OnConVarChange_Modules);
+    ApplyModulesConfig();
+
     LogMessage("[BotRouteFix] ========== Initialization Complete [%s] ==========",
         g_bIsWin64 ? "64-bit (Steam x64)" : "32-bit (v91/v92)");
+}
+
+public void OnConVarChange_Modules(ConVar convar, const char[] oldValue, const char[] newValue)
+{
+    ApplyModulesConfig();
+}
+
+public void OnConfigsExecuted()
+{
+    ApplyModulesConfig();
 }
 
 public void OnPluginEnd()

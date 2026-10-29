@@ -111,9 +111,30 @@ static void PrintModuleLine(int client, int index, const char[] label, const cha
         strcopy(state, sizeof(state), "ACTIVE");
     }
 
-    if (detail[0] != '\0')
+    char finalDetail[128];
+    if (!IsModuleEnabledByRule(index))
     {
-        ReplyToCommand(client, "[BotRouteFix] [Module %02d] %-8s | %s | %s", index, state, label, detail);
+        Format(finalDetail, sizeof(finalDetail), "disabled by rule");
+    }
+    else if (!bActive)
+    {
+        if (detail[0] != '\0')
+        {
+            Format(finalDetail, sizeof(finalDetail), "activation failed (%s)", detail);
+        }
+        else
+        {
+            Format(finalDetail, sizeof(finalDetail), "activation failed");
+        }
+    }
+    else
+    {
+        strcopy(finalDetail, sizeof(finalDetail), detail);
+    }
+
+    if (finalDetail[0] != '\0')
+    {
+        ReplyToCommand(client, "[BotRouteFix] [Module %02d] %-8s | %s | %s", index, state, label, finalDetail);
     }
     else
     {
@@ -140,6 +161,17 @@ public Action Command_Status(int client, int args)
     ReplyToCommand(client, "[BotRouteFix] Debug         : %s | Architecture: %s",
         bDebug ? "ON" : "OFF", g_bIsWin64 ? "64-bit (Steam x64)" : "32-bit (v91/v92)");
     ReplyToCommand(client, "[BotRouteFix] Gamedata      : %s (%s)", GAMEDATA, (g_hGameConf != null) ? "Ready" : "Not Loaded");
+
+    char modulesRule[128];
+    if (g_cvModules != null)
+    {
+        g_cvModules.GetString(modulesRule, sizeof(modulesRule));
+    }
+    else
+    {
+        strcopy(modulesRule, sizeof(modulesRule), "all");
+    }
+    ReplyToCommand(client, "[BotRouteFix] Modules Rule  : %s", modulesRule);
     ReplyToCommand(client, "[BotRouteFix] ------------------------------------------------------------");
 
     char detail[128];
