@@ -424,3 +424,30 @@ public MRESReturn Hook_InvestigateNoise_Pre(int client, DHookParam hParams)
         client, dist, morale);
     return MRES_Ignored;
 }
+
+/**
+ * 获取 Bot 当前接战策略 (Disposition)
+ *
+ * @param client        客户端索引
+ * @return              0: ENGAGE_AND_INVESTIGATE, 1: OPPORTUNITY_FIRE, -1: 无效/非Bot
+ */
+int Module6_GetBotDisposition(int client)
+{
+    if (client < 1 || client > MaxClients || !IsClientInGame(client) || !IsPlayerAlive(client) || !IsFakeClient(client))
+    {
+        return -1;
+    }
+
+    if (g_iOffset_Disposition <= 0)
+    {
+        return -1;
+    }
+
+    Address pBot = GetEntityAddress(client);
+    if (pBot == Address_Null)
+    {
+        return -1;
+    }
+
+    return LoadFromAddress(pBot + view_as<Address>(g_iOffset_Disposition), NumberType_Int32);
+}

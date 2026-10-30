@@ -450,3 +450,34 @@ void Module9_OnMapStart()
 {
     Loot_ClearRoster();
 }
+
+/**
+ * 获取当前捡包花名册 Bot 列表与掉落 C4 坐标 (供可视化子系统渲染牵引光束)
+ *
+ * @param roster        输出候选人 client 索引数组 (容量 LOOT_ROSTER_SIZE)
+ * @param c4Pos         输出掉落 C4 的世界坐标
+ * @return              实际有效候选人数量
+ */
+int Module9_GetFetchRoster(int roster[LOOT_ROSTER_SIZE], float c4Pos[3])
+{
+    if (!g_bHasRoster)
+    {
+        return 0;
+    }
+
+    if (!Loot_FindDropPos(c4Pos))
+    {
+        return 0;
+    }
+
+    int count = 0;
+    for (int i = 0; i < LOOT_ROSTER_SIZE; i++)
+    {
+        int bot = g_iLootRoster[i];
+        if (bot > 0 && bot <= MaxClients && IsClientInGame(bot) && IsPlayerAlive(bot))
+        {
+            roster[count++] = bot;
+        }
+    }
+    return count;
+}

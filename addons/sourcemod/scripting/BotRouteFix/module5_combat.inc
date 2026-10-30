@@ -84,6 +84,12 @@
 #define CARRIER_SHIELD_MIN_FRIENDS  1       // 包匪肉盾掩护生效所需的身边存活队友/保镖数
 #define BOT_TASK_PLANT_BOMB         1       // 引擎原生任务枚举：PLANT_BOMB (下包任务)
 
+// 后撤触发原因枚举
+#define RETREAT_REASON_NONE         0
+#define RETREAT_REASON_LOW_HP       1       // 残血脱战
+#define RETREAT_REASON_OUTNUMBERED  2       // 孤身一打多
+#define RETREAT_REASON_SNIPER       3       // 狙击手威慑
+
 // 模块状态、内存补丁与 Detour 句柄
 MemoryPatch g_PatchReloadHide;
 Handle g_hAttackDodgeDetour = null;
@@ -96,8 +102,10 @@ static bool g_bModule5_Active = false;
 static bool g_bDodgeHooked = false;
 static bool g_bRetreatHooked = false;
 
-// 模块内部专用冷却与偏移缓存
+// 模块内部专用冷却、偏移与可视化追踪缓存
 static float g_flNextForcedRetreat[MAXPLAYERS + 1];
+static int g_iRetreatReason[MAXPLAYERS + 1];
+static float g_flRetreatUntil[MAXPLAYERS + 1];
 static int g_iOffset_AttackShouldDodge = -1;
 static int g_iOffset_PinnedDownTimestamp = -1;
 static int g_iOffset_MRetreatTimer = -1;
@@ -267,6 +275,8 @@ void Module5_OnRoundStart()
     {
         g_flNextForcedRetreat[i] = 0.0;
         g_bSniperRetreatWanted[i] = false;
+        g_iRetreatReason[i] = RETREAT_REASON_NONE;
+        g_flRetreatUntil[i] = 0.0;
     }
 }
 
@@ -279,6 +289,8 @@ void Module5_OnPlayerDeath(int victim)
     {
         g_flNextForcedRetreat[victim] = 0.0;
         g_bSniperRetreatWanted[victim] = false;
+        g_iRetreatReason[victim] = RETREAT_REASON_NONE;
+        g_flRetreatUntil[victim] = 0.0;
     }
 }
 
@@ -291,6 +303,8 @@ void Module5_OnMapStart()
     {
         g_flNextForcedRetreat[i] = 0.0;
         g_bSniperRetreatWanted[i] = false;
+        g_iRetreatReason[i] = RETREAT_REASON_NONE;
+        g_flRetreatUntil[i] = 0.0;
     }
 }
 
@@ -303,6 +317,8 @@ void Module5_OnClientPutInServer(int client)
     {
         g_flNextForcedRetreat[client] = 0.0;
         g_bSniperRetreatWanted[client] = false;
+        g_iRetreatReason[client] = RETREAT_REASON_NONE;
+        g_flRetreatUntil[client] = 0.0;
     }
 }
 
@@ -315,6 +331,8 @@ void Module5_OnClientDisconnect(int client)
     {
         g_flNextForcedRetreat[client] = 0.0;
         g_bSniperRetreatWanted[client] = false;
+        g_iRetreatReason[client] = RETREAT_REASON_NONE;
+        g_flRetreatUntil[client] = 0.0;
     }
 }
 
@@ -620,6 +638,22 @@ public MRESReturn Hook_AttackState_OnUpdate_Pre(Address pThis, DHookParam hParam
     }
 
     g_iTotalRetreatTriggered++;
+
+    // 记录后撤原因与高亮维持时长 (4.0 秒)，供可视化系统呈现
+    if (bSniperRetreat)
+    {
+        g_iRetreatReason[client] = RETREAT_REASON_SNIPER;
+    }
+    else if (bOutnumbered)
+    {
+        g_iRetreatReason[client] = RETREAT_REASON_OUTNUMBERED;
+    }
+    else if (bLowHealth)
+    {
+        g_iRetreatReason[client] = RETREAT_REASON_LOW_HP;
+    }
+    g_flRetreatUntil[client] = GetGameTime() + 4.0;
+
     // DebugLog("[BotRouteFix] [Module 5] Low-HP bot %N (HP: %d) forced retreat via pinnedDown",
     //     client, GetClientHealth(client));
     if (bOutnumbered)
@@ -627,4 +661,24 @@ public MRESReturn Hook_AttackState_OnUpdate_Pre(Address pThis, DHookParam hParam
         // DebugLog("[BotRouteFix] [Module 5] Outnumbered bot %N forced retreat via confirm (no dice)", client);
     }
     return MRES_Ignored;
+}
+
+/**
+ * 获取 Bot 当前后撤原因枚举 (供可视化子系统渲染特效)
+ *
+ * @param client        客户端索引
+ * @return              RETREAT_REASON_* (若未处于后撤或超时则返回 RETREAT_REASON_NONE)
+ */
+int Module5_GetRetreatReason(int client)
+{
+    if (client < 1 || client > MaxClients || !IsClientInGame(client) || !IsPlayerAlive(client))
+    {
+        return RETREAT_REASON_NONE;
+    }
+
+    if (GetGameTime() < g_flRetreatUntil[client])
+    {
+        return g_iRetreatReason[client];
+    }
+    return RETREAT_REASON_NONE;
 }

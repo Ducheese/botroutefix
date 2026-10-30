@@ -55,6 +55,7 @@
 #include "BotRouteFix/module13_sniperbuy"
 #include "BotRouteFix/module14_defendrush"
 #include "BotRouteFix/module15_hideduration"
+#include "BotRouteFix/visuals"
 #include "BotRouteFix/module_manager"
 #include "BotRouteFix/events"
 #include "BotRouteFix/commands"
@@ -132,6 +133,9 @@ public void OnPluginStart()
     g_cvModules.AddChangeHook(OnConVarChange_Modules);
     ApplyModulesConfig();
 
+    // 7. Initialize Visuals Subsystem
+    Visuals_Init();
+
     LogMessage("[BotRouteFix] ========== Initialization Complete [%s] ==========",
         g_bIsWin64 ? "64-bit (Steam x64)" : "32-bit (v91/v92)");
 }
@@ -184,6 +188,7 @@ public void OnMapStart()
     // 换图 = 实体索引全废 + nav 重建 + curtime 归零：各模块清脏状态（不清即跨图污染）
     // M1/M4 无状态，M3 重解容器，M5 清时间数组，M8 清打碎计数，其余清名单/旗帜（与 round_start 同语义但独立命名）
     Events_OnMapStart();    // 对局炸弹状态唯一写入方
+    Visuals_OnMapStart();   // 预缓存激光与光环精灵
     Module2_OnMapStart();
     Module3_OnMapStart();
     Module5_OnMapStart();

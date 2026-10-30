@@ -558,3 +558,24 @@ int Escort_GetCarrier()
 {
     return g_iEscortCarrier;
 }
+
+/**
+ * 获取当前存活保镖列表（供可视化子系统渲染护航连线）
+ *
+ * @param bodyguards    输出保镖 client 索引数组
+ * @param maxCount      输出数组容量
+ * @return              实际有效保镖数量
+ */
+int Module7_GetBodyguards(int[] bodyguards, int maxCount)
+{
+    int count = 0;
+    for (int i = 0; i < g_iBodyguardCount && count < maxCount; i++)
+    {
+        int bot = g_iBodyguardList[i];
+        if (bot > 0 && bot <= MaxClients && IsClientInGame(bot) && IsPlayerAlive(bot))
+        {
+            bodyguards[count++] = bot;
+        }
+    }
+    return count;
+}

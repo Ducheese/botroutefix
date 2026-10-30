@@ -45,6 +45,55 @@ static int g_iPtrSize = 4;
 static int g_iTotalQueueShattered = 0;
 static int g_iTotalDeadlockHunt = 0;
 
+// 可视化追踪：因堵路加过 danger 的 NavArea (持续至少 60 秒) 与死锁解脱 Bot
+#define MAX_BLOCKED_AREAS 64
+static Address g_BlockedAreas[MAX_BLOCKED_AREAS];
+static float g_flBlockedAreaExpire[MAX_BLOCKED_AREAS];
+static int g_iBlockedAreaCount = 0;
+static float g_flDeadlockBrokenUntil[MAXPLAYERS + 1];
+
+// 登记加过 danger 的 NavArea
+static void RecordBlockedArea(Address pArea, float expireTime)
+{
+    if (pArea == Address_Null)
+    {
+        return;
+    }
+
+    for (int i = 0; i < g_iBlockedAreaCount; i++)
+    {
+        if (g_BlockedAreas[i] == pArea)
+        {
+            if (expireTime > g_flBlockedAreaExpire[i])
+            {
+                g_flBlockedAreaExpire[i] = expireTime;
+            }
+            return;
+        }
+    }
+
+    if (g_iBlockedAreaCount < MAX_BLOCKED_AREAS)
+    {
+        g_BlockedAreas[g_iBlockedAreaCount] = pArea;
+        g_flBlockedAreaExpire[g_iBlockedAreaCount] = expireTime;
+        g_iBlockedAreaCount++;
+        return;
+    }
+
+    int oldestIdx = 0;
+    float oldestTime = g_flBlockedAreaExpire[0];
+    for (int i = 1; i < MAX_BLOCKED_AREAS; i++)
+    {
+        if (g_flBlockedAreaExpire[i] < oldestTime)
+        {
+            oldestTime = g_flBlockedAreaExpire[i];
+            oldestIdx = i;
+        }
+    }
+    g_BlockedAreas[oldestIdx] = pArea;
+    g_flBlockedAreaExpire[oldestIdx] = expireTime;
+}
+
 // 给指定 NavArea 按阵营钉 danger（先沉降再加，封顶防永久封路，刷时间戳）
 static void Queue_NailDanger(Address pArea, int teamIdx, float curtime)
 {
@@ -52,6 +101,8 @@ static void Queue_NailDanger(Address pArea, int teamIdx, float curtime)
     {
         return;
     }
+
+    RecordBlockedArea(pArea, curtime + 60.0);
 
     float rawDanger = view_as<float>(LoadFromAddress(pArea + view_as<Address>(g_iOffset_Danger + teamIdx * 4), NumberType_Int32));
     float dangerTimestamp = view_as<float>(LoadFromAddress(pArea + view_as<Address>(g_iOffset_DangerTimestamp + teamIdx * 4), NumberType_Int32));
@@ -89,7 +140,9 @@ void Module8_OnRoundStart()
     for (int i = 1; i <= MaxClients; i++)
     {
         g_iShatterCount[i] = 0;
+        g_flDeadlockBrokenUntil[i] = 0.0;
     }
+    g_iBlockedAreaCount = 0;
 }
 
 /**
@@ -215,6 +268,7 @@ public MRESReturn Hook_UpdatePathMovement_Post(int client, DHookParam hParams)
     {
         g_iShatterCount[client] = 0; // 触发后清零
         g_iTotalDeadlockHunt++;
+        g_flDeadlockBrokenUntil[client] = curtime + 4.0; // 持续 4 秒高亮醒目标识
         RequestFrame(Module8_FrameHunt, GetClientUserId(client));
         DebugLog("[BotRouteFix] [Module 8] Bot %N shattered %d times, deadlocked -> deferred Hunt state transition", client, QUEUE_SHATTER_LIMIT);
     }
@@ -372,4 +426,39 @@ void RestoreModule8_Queue()
 bool IsModule8_Active()
 {
     return g_bModule8_Active;
+}
+
+/**
+ * 获取当前所有处于 60 秒高亮期内的堵路 NavArea
+ *
+ * @param areas         输出 NavArea 指针数组
+ * @param expires       输出各 Area 的过期时间戳
+ * @return              实际有效数量
+ */
+int Module8_GetBlockedAreas(Address areas[MAX_BLOCKED_AREAS], float expires[MAX_BLOCKED_AREAS])
+{
+    float curtime = GetGameTime();
+    int count = 0;
+    for (int i = 0; i < g_iBlockedAreaCount; i++)
+    {
+        if (g_BlockedAreas[i] != Address_Null && curtime < g_flBlockedAreaExpire[i])
+        {
+            areas[count] = g_BlockedAreas[i];
+            expires[count] = g_flBlockedAreaExpire[i];
+            count++;
+        }
+    }
+    return count;
+}
+
+/**
+ * 判断指定 Bot 当前是否刚被打破死锁强切 Hunt (4秒高亮期内)
+ */
+bool Module8_IsDeadlockBroken(int client)
+{
+    if (client < 1 || client > MaxClients || !IsClientInGame(client) || !IsPlayerAlive(client))
+    {
+        return false;
+    }
+    return (GetGameTime() < g_flDeadlockBrokenUntil[client]);
 }

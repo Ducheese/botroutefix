@@ -71,6 +71,7 @@ public void Event_RoundStart(Event event, const char[] name, bool dontBroadcast)
     // 回合重置，通知各模块执行新回合初始化
     Module2_OnRoundStart();
     Module3_OnRoundStart();
+    Module4_OnRoundStart();
     Module5_OnRoundStart();
     Module7_OnRoundStart();
     Module8_OnRoundStart();

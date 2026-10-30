@@ -65,6 +65,10 @@ static int g_iOffset_HuntArea = -1;
 static int g_iOffset_ClearedTimestamp = -1;
 static int g_iOffset_HasVisitedEnemySpawn = -1;
 
+// 可视化搜敌追踪缓存 (Bot 当前认领的 m_huntArea 与心跳时间戳)
+static Address g_pVisualHuntArea[MAXPLAYERS + 1];
+static float g_flVisualHuntTimestamp[MAXPLAYERS + 1];
+
 /**
  * 初始化模块 4 所需的偏移、内存补丁与 DHook Detour
  *
@@ -392,12 +396,16 @@ public MRESReturn Hook_HuntState_OnUpdate_Post(Address pThis, DHookParam hParams
     Address pArea = LoadAddressFromAddress(pThis + view_as<Address>(g_iOffset_HuntArea));
     if (pArea == Address_Null)
     {
+        g_pVisualHuntArea[client] = Address_Null;
         return MRES_Ignored;
     }
 
+    float curtime = GetGameTime();
+    g_pVisualHuntArea[client] = pArea;
+    g_flVisualHuntTimestamp[client] = curtime;
+
     // 盖章认领该区域: 设置 m_clearedTimestamp[teamIdx] = curtime
     // 刚被认领的区域 age 恒为 0，同队其他 Bot 绝不会重复选取，实现完全无排队的多路分散搜敌
-    float curtime = GetGameTime();
     Address pClearedTimestampAddr = pArea + view_as<Address>(g_iOffset_ClearedTimestamp + teamIdx * 4);
     StoreToAddress(pClearedTimestampAddr, view_as<int>(curtime), NumberType_Int32);
 
@@ -405,4 +413,36 @@ public MRESReturn Hook_HuntState_OnUpdate_Post(Address pThis, DHookParam hParams
     // DebugLog("[BotRouteFix] [Module 4] Bot %N claimed oldest-cleared area @ %X (teamIdx: %d, curtime: %.1f)",
     //     client, pArea, teamIdx, curtime);
     return MRES_Ignored;
+}
+
+/**
+ * 获取 Bot 当前认领的搜敌 NavArea 指针
+ */
+Address Module4_GetHuntArea(int client)
+{
+    if (client < 1 || client > MaxClients || !IsClientInGame(client) || !IsPlayerAlive(client))
+    {
+        return Address_Null;
+    }
+
+    // 状态心跳超时判定 (0.3s):
+    // 若 Bot 已脱离 HuntState (如包匪转入 MoveTo 运包/下包、或遇敌交火)，立即自动熄灭激光线
+    if (GetGameTime() - g_flVisualHuntTimestamp[client] > 0.3)
+    {
+        return Address_Null;
+    }
+
+    return g_pVisualHuntArea[client];
+}
+
+/**
+ * 回合开始时复位所有搜敌目标
+ */
+void Module4_OnRoundStart()
+{
+    for (int i = 1; i <= MaxClients; i++)
+    {
+        g_pVisualHuntArea[i] = Address_Null;
+        g_flVisualHuntTimestamp[i] = 0.0;
+    }
 }

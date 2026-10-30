@@ -571,3 +571,59 @@ static void RestoreBombsiteLockPatch()
             g_PatchBombsiteLock.address);
     }
 }
+
+/**
+ * 获取目标包点世界中心坐标（供可视化子系统渲染航标）
+ *
+ * @param pos           输出包点中心三维坐标
+ * @return              是否成功解析出包点坐标
+ */
+bool Module2_GetTargetBombsitePosition(float pos[3])
+{
+    if (g_pTheCSBotsPtr == Address_Null || g_iOffset_ZoneCount <= 0 || g_iOffset_ZoneBase <= 0 || g_iZoneStride <= 0)
+    {
+        return false;
+    }
+
+    Address pTheCSBots = LoadAddressFromAddress(g_pTheCSBotsPtr);
+    if (pTheCSBots == Address_Null)
+    {
+        return false;
+    }
+
+    int zoneCount = LoadFromAddress(pTheCSBots + view_as<Address>(g_iOffset_ZoneCount), NumberType_Int32);
+    if (zoneCount <= 0)
+    {
+        return false;
+    }
+
+    int targetZone = g_iLockedZoneIndex;
+    if (targetZone < 0 || targetZone >= zoneCount)
+    {
+        targetZone = 0;
+    }
+
+    Address pZone = pTheCSBots + view_as<Address>(g_iOffset_ZoneBase + targetZone * g_iZoneStride);
+    int offsetCenter = g_bIsWin64 ? 140 : 72;
+
+    pos[0] = view_as<float>(LoadFromAddress(pZone + view_as<Address>(offsetCenter),     NumberType_Int32));
+    pos[1] = view_as<float>(LoadFromAddress(pZone + view_as<Address>(offsetCenter + 4), NumberType_Int32));
+    pos[2] = view_as<float>(LoadFromAddress(pZone + view_as<Address>(offsetCenter + 8), NumberType_Int32));
+    return true;
+}
+
+/**
+ * 获取当前对局最早允许下包的时间戳
+ */
+float Module2_GetEarliestPlantTime()
+{
+    if (g_pTheCSBotsPtr != Address_Null && g_iOffset_EarliestBombPlant > 0)
+    {
+        Address pTheCSBots = LoadAddressFromAddress(g_pTheCSBotsPtr);
+        if (pTheCSBots != Address_Null)
+        {
+            return view_as<float>(LoadFromAddress(pTheCSBots + view_as<Address>(g_iOffset_EarliestBombPlant), NumberType_Int32));
+        }
+    }
+    return 0.0;
+}

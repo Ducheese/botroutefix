@@ -360,3 +360,27 @@ void Module10_OnMapStart()
 {
     g_iChief = -1;
 }
+
+/**
+ * 获取当前首席拆包 CT 与已安放 C4 坐标 (供可视化子系统渲染拆包指引光束)
+ *
+ * @param c4Pos         输出已安放 C4 的世界坐标
+ * @return              首席 CT client 索引 (若无首席或 C4 未安放则返回 -1)
+ */
+int Module10_GetChiefDefuser(float c4Pos[3])
+{
+    if (g_iChief <= 0 || g_iChief > MaxClients || !IsClientInGame(g_iChief) || !IsPlayerAlive(g_iChief))
+    {
+        return -1;
+    }
+
+    if (!Defuse_ReadBombPos())
+    {
+        return -1;
+    }
+
+    c4Pos[0] = g_fBombPos[0];
+    c4Pos[1] = g_fBombPos[1];
+    c4Pos[2] = g_fBombPos[2];
+    return g_iChief;
+}
