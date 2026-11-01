@@ -18,74 +18,16 @@ void InitCommands()
 //========================================================================================
 // MODULE STATE ROUTING
 //
-// 权责分离的唯一分流点：
-//   业务开启态 -> IsModuleX_Active()
-//   底层补丁/挂载态 -> Is...Patched() / Is...Hooked()
-// 两个路由函数各自覆盖全部 15 个模块，保证每个状态接口都有确切调用点。
+// 唯一状态源 = items.inc 的 21 件事项能力表。
+//   INACTIVE = 模块规则关闭
+//   ACTIVE   = 全部事项武装
+//   DEGRADED = 部分事项武装（仅多事项模块可能出现）
+//   FAILED   = 0 个事项武装
+// 底层 Is...Patched()/Is...Hooked() 只是事项后端的实现细节，不再直接拼状态词。
 //========================================================================================
 
 /**
- * 业务开启态路由（每个 IsModuleX_Active 的确切调用点）
- */
-static bool Module_IsBusinessActive(int index)
-{
-    switch (index)
-    {
-        case 1:  return IsModule1_Active();
-        case 2:  return IsModule2_Active();
-        case 3:  return IsModule3_Active();
-        case 4:  return IsModule4_Active();
-        case 5:  return IsModule5_Active();
-        case 6:  return IsModule6_Active();
-        case 7:  return IsModule7_Active();
-        case 8:  return IsModule8_Active();
-        case 9:  return IsModule9_Active();
-        case 10: return IsModule10_Active();
-        case 11: return IsModule11_Active();
-        case 12: return IsModule12_Active();
-        case 13: return IsModule13_Active();
-        case 14: return IsModule14_Active();
-        case 15: return IsModule15_Active();
-    }
-    return false;
-}
-
-/**
- * 底层补丁/挂载态路由（每个 Is...Patched / Is...Hooked 的确切调用点）
- *
- * 准则：底层依赖齐全且可用才返回 true (ACTIVE)，任何核心缺失均返回 false (DEGRADED)。
- * "核心" = 运行期可能变化的底层资源：补丁字节 / Detour 挂载 / SDKCall 句柄 / 全局单例指针。
- * Init 期已 fail-fast 校验过的 gamedata 偏移不在此列（运行中不可能失效，写进判定没有信息量）。
- */
-static bool Module_IsBackendReady(int index)
-{
-    switch (index)
-    {
-        case 1:  return IsGuardBombsitePatched() && IsDefenseRushPatched();
-        case 2:  return IsBombsitePatchReady();
-        case 3:  return IsNavDangerReady();
-        case 4:  return IsHuntStateHooked() && IsHuntRandomBypassed();
-        case 5:  return IsReloadHidePatched() && IsAttackDodgeHooked() && IsAttackRetreatHooked();
-        case 6:  return IsInvestigateNoiseHooked();
-        case 7:  return IsEscortReady();
-        case 8:  return IsQueueBreakerHooked();
-        case 9:  return IsLootHooked() && BotNavReady();
-        case 10: return IsDefuseHooked() && BotNavReady();
-        case 11: return IsSniperDeterrenceHooked();
-        case 12: return IsCamp12Ready() && IsHideDurationHooked();  // 借钩：宿主未启用则门禁无效
-        case 13: return IsSniperBuy13Patched();
-        case 14: return IsDefendRush14Patched();
-        case 15: return IsHideDurationHooked();
-    }
-    return false;
-}
-
-/**
  * 统一模块状态行
- *
- *   ACTIVE   = 业务开启 + 底层补丁/钩子就绪
- *   DEGRADED = 业务开启但底层缺失（签名待机 / 外来补丁占位 / 启用失败）
- *   INACTIVE = 业务已关闭
  *
  * @param client    接收方（0 = 服务端控制台）
  * @param index     模块编号 1-15
@@ -94,37 +36,39 @@ static bool Module_IsBackendReady(int index)
  */
 static void PrintModuleLine(int client, int index, const char[] label, const char[] detail)
 {
-    bool bActive  = Module_IsBusinessActive(index);
-    bool bBackend = Module_IsBackendReady(index);
+    bool ruleEnabled = IsModuleEnabledByRule(index);
+    ItemModuleState state = Items_GetModuleState(index, ruleEnabled);
 
-    char state[16];
-    if (!bActive)
-    {
-        strcopy(state, sizeof(state), "INACTIVE");
-    }
-    else if (!bBackend)
-    {
-        strcopy(state, sizeof(state), "DEGRADED");
-    }
-    else
-    {
-        strcopy(state, sizeof(state), "ACTIVE");
-    }
+    char stateName[16];
+    Items_GetStateName(state, stateName, sizeof(stateName));
 
-    char finalDetail[128];
-    if (!IsModuleEnabledByRule(index))
+    int total = Items_CountForModule(index);
+    int ready = Items_ReadyForModule(index);
+    int armed = Items_ArmedForModule(index);
+
+    char finalDetail[192];
+    if (!ruleEnabled)
     {
-        Format(finalDetail, sizeof(finalDetail), "disabled by rule");
+        strcopy(finalDetail, sizeof(finalDetail), "disabled by rule");
     }
-    else if (!bActive)
+    else if (state != ItemModule_Active)
     {
-        if (detail[0] != '\0')
+        Format(finalDetail, sizeof(finalDetail), "items %d/%d armed (%d/%d ready)", armed, total, ready, total);
+
+        char failedNames[128];
+        Items_FailedNamesForModule(index, failedNames, sizeof(failedNames));
+        if (failedNames[0] != '\0')
         {
-            Format(finalDetail, sizeof(finalDetail), "activation failed (%s)", detail);
+            StrCat(finalDetail, sizeof(finalDetail), " | failed: ");
+            StrCat(finalDetail, sizeof(finalDetail), failedNames);
         }
-        else
+
+        // DEGRADED 仍可能有活跃事项在产出实时数据（例如 M2 包点锁已锁定），
+        // 保留 detail；FAILED 是 0 事项武装，detail 一律不拼，避免宣传性假话。
+        if (state == ItemModule_Degraded && detail[0] != '\0')
         {
-            Format(finalDetail, sizeof(finalDetail), "activation failed");
+            StrCat(finalDetail, sizeof(finalDetail), " | ");
+            StrCat(finalDetail, sizeof(finalDetail), detail);
         }
     }
     else
@@ -134,11 +78,11 @@ static void PrintModuleLine(int client, int index, const char[] label, const cha
 
     if (finalDetail[0] != '\0')
     {
-        ReplyToCommand(client, "[BotRouteFix] [Module %02d] %-8s | %s | %s", index, state, label, finalDetail);
+        ReplyToCommand(client, "[BotRouteFix] [Module %02d] %-8s | %s | %s", index, stateName, label, finalDetail);
     }
     else
     {
-        ReplyToCommand(client, "[BotRouteFix] [Module %02d] %-8s | %s", index, state, label);
+        ReplyToCommand(client, "[BotRouteFix] [Module %02d] %-8s | %s", index, stateName, label);
     }
 }
 
@@ -176,17 +120,44 @@ public Action Command_Status(int client, int args)
 
     char detail[128];
 
-    PrintModuleLine(client, 1, "CT Guard Chance & Anti-Rush", "formula 70-10*M, anti-rush NOP");
-
-    if (IsBombsiteLocked())
+    // M1 detail 按实际武装的事项生成，DEGRADED 时不再宣称失败的那一项。
+    char m1Detail[64];
+    m1Detail[0] = '\0';
+    if (Item_IsArmed(ITEM_M1_GUARD))
     {
-        Format(detail, sizeof(detail), "live: LOCKED Zone #%d (delay %.1fs)", GetLockedBombsiteIndex(), GetCurrentPlantDelay());
+        StrCat(m1Detail, sizeof(m1Detail), "formula 70-10*M");
+    }
+    if (Item_IsArmed(ITEM_M1_ANTI_RUSH))
+    {
+        if (m1Detail[0] != '\0')
+        {
+            StrCat(m1Detail, sizeof(m1Detail), ", ");
+        }
+        StrCat(m1Detail, sizeof(m1Detail), "anti-rush NOP");
+    }
+    PrintModuleLine(client, 1, "CT Guard Chance & Anti-Rush", m1Detail);
+
+    char m2Detail[128];
+    if (Item_IsArmed(ITEM_M2_CLOCK))
+    {
+        if (Module2_IsBombsiteLocked())
+        {
+            Format(m2Detail, sizeof(m2Detail), "live: LOCKED Zone #%d (delay %.1fs)", Module2_GetLockedBombsiteIndex(), Module2_GetCurrentPlantDelay());
+        }
+        else
+        {
+            Format(m2Detail, sizeof(m2Detail), "live: NATIVE GetClosestZone (delay %.1fs)", Module2_GetCurrentPlantDelay());
+        }
+    }
+    else if (Module2_IsBombsiteLocked())
+    {
+        Format(m2Detail, sizeof(m2Detail), "live: LOCKED Zone #%d (clock disabled)", Module2_GetLockedBombsiteIndex());
     }
     else
     {
-        Format(detail, sizeof(detail), "live: NATIVE GetClosestZone (delay %.1fs)", GetCurrentPlantDelay());
+        strcopy(m2Detail, sizeof(m2Detail), "clock disabled");
     }
-    PrintModuleLine(client, 2, "T Plant Clock & Site Lock", detail);
+    PrintModuleLine(client, 2, "T Plant Clock & Site Lock", m2Detail);
 
     Format(detail, sizeof(detail), "live: %d areas tracked", GetTotalNavAreaCount());
     PrintModuleLine(client, 3, "NavArea Danger Soft-Decay", detail);
@@ -231,7 +202,7 @@ public Action Command_Status(int client, int args)
     }
     PrintModuleLine(client, 10, "CT Chief Defuser", detail);
 
-    Format(detail, sizeof(detail), "total: %d deterred", GetTotalSniperDeterred());
+    Format(detail, sizeof(detail), "total: %d requests", GetTotalSniperRequests());
     PrintModuleLine(client, 11, "Sniper Corridor Deterrence", detail);
 
     Format(detail, sizeof(detail), "total: %d redirected", GetTotalCampRedirected());
@@ -247,6 +218,13 @@ public Action Command_Status(int client, int args)
 
     if (bDebug)
     {
+        char m2PlantDelay[48];
+        m2PlantDelay[0] = '\0';
+        if (Item_IsArmed(ITEM_M2_CLOCK))
+        {
+            Format(m2PlantDelay, sizeof(m2PlantDelay), " | Plant delay %.1fs", Module2_GetCurrentPlantDelay());
+        }
+
         int liveCarrier = Escort_GetCarrier();
         if (IsValidClient(liveCarrier, true))
         {
@@ -256,13 +234,13 @@ public Action Command_Status(int client, int args)
 
             if (IsHumanPlayer(liveCarrier))
             {
-                ReplyToCommand(client, "[BotRouteFix] [Live] T Carrier: %N (Human, Team Morale: %d %s) | Escorts %d/%d | Plant delay %.1fs",
-                    liveCarrier, liveMorale, liveMoraleStr, Escort_GetBodyguardCount(), Escort_GetTargetCount(), GetCurrentPlantDelay());
+                ReplyToCommand(client, "[BotRouteFix] [Live] T Carrier: %N (Human, Team Morale: %d %s) | Escorts %d/%d%s",
+                    liveCarrier, liveMorale, liveMoraleStr, Escort_GetBodyguardCount(), Escort_GetTargetCount(), m2PlantDelay);
             }
             else
             {
-                ReplyToCommand(client, "[BotRouteFix] [Live] T Carrier: %N (Morale: %d %s) | Escorts %d/%d | Plant delay %.1fs",
-                    liveCarrier, liveMorale, liveMoraleStr, Escort_GetBodyguardCount(), Escort_GetTargetCount(), GetCurrentPlantDelay());
+                ReplyToCommand(client, "[BotRouteFix] [Live] T Carrier: %N (Morale: %d %s) | Escorts %d/%d%s",
+                    liveCarrier, liveMorale, liveMoraleStr, Escort_GetBodyguardCount(), Escort_GetTargetCount(), m2PlantDelay);
             }
         }
         else
@@ -273,10 +251,20 @@ public Action Command_Status(int client, int args)
         int tMorale  = GetTeamAverageBotMorale(2);
         int ctMorale = GetTeamAverageBotMorale(3);
 
+        char m1GuardChance[32];
+        if (Item_IsArmed(ITEM_M1_GUARD))
+        {
+            Format(m1GuardChance, sizeof(m1GuardChance), "%.0f%%", Module1_CalculateGuardBombsiteChance(ctMorale));
+        }
+        else
+        {
+            strcopy(m1GuardChance, sizeof(m1GuardChance), "disabled");
+        }
+
         ReplyToCommand(client, "[BotRouteFix] [Live] Bomb: %s | Morale AVG T %d / CT %d",
             g_bBombPlanted ? "PLANTED" : "NOT PLANTED", tMorale, ctMorale);
-        ReplyToCommand(client, "[BotRouteFix] [Live] Dice @ AVG morale - CT Guard: %.0f%% | SniperBuy: T %.0f%% / CT %.0f%% | DefendRush: T %.0f%% / CT %.0f%%",
-            CalculateGuardBombsiteChance(ctMorale),
+        ReplyToCommand(client, "[BotRouteFix] [Live] Dice @ AVG morale - CT Guard: %s | SniperBuy: T %.0f%% / CT %.0f%% | DefendRush: T %.0f%% / CT %.0f%%",
+            m1GuardChance,
             CalculateSniperBuyChance(tMorale), CalculateSniperBuyChance(ctMorale),
             CalculateDefendRushChance(tMorale), CalculateDefendRushChance(ctMorale));
     }

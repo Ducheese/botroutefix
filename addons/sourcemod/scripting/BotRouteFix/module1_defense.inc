@@ -31,8 +31,12 @@
 //               - 32 位: 55 字节完整 x87 FPU 状态机重写，严格遵守跨 call 浮点栈契约。
 //               ★ 机器码立即数固化说明: 当前注入的机器码已将公式 (70.0 - 10.0 * Morale)
 //               固化为底层汇编立即数 (add eax, 70 与 imul eax, -10)；下方的 GUARD_CHANCE_*
-//               宏定义仅用于 CalculateGuardBombsiteChance 等辅助查询与理论对齐，修改宏
+//               宏定义仅用于 Module1_CalculateGuardBombsiteChance 等辅助查询与理论对齐，修改宏
 //               不会直接改变二进制立即数（后续若需完全动态自定义需配合机器码动态组装）。
+//========================================================================================
+
+//========================================================================================
+// MODULE 1 DEFINES & GLOBALS
 //========================================================================================
 
 // 守点概率公式宏定义 (Chance = BASE - STEP * Morale，注：当前机器码内已固化立即数 70 与 -10)
@@ -48,33 +52,51 @@ MemoryPatch g_PatchDefenseRush;
 // 业务开启态（唯一事实来源；底层 isPatched 由 MemoryPatch 自己维护）
 static bool g_bModule1_Active = false;
 
+//========================================================================================
+// MODULE 1 LIFECYCLE
+//========================================================================================
+
 /**
- * 初始化并激活模块 1 所有内存补丁
+ * 初始化模块 1 的两个独立事项：守点公式与防前冲
  *
- * @return              是否全部成功激活
+ * 分别准备两条事项链并立即武装；任一失败不拖累另一条。
+ *
+ * @return              是否至少有一个事项武装成功
  */
 bool InitModule1_Defense()
 {
     if (g_hGameConf == null)
     {
-        LogError("[BotRouteFix] [Module 1] Error: Gamedata is not loaded, cannot initialize defense patches!");
+        LogError("[BotRouteFix] [Module 1] Gamedata missing; both items FAILED.");
+        Item_SetReady(ITEM_M1_GUARD, false);
+        Item_SetReady(ITEM_M1_ANTI_RUSH, false);
         return false;
     }
+
+    bool guardReady = PrepModule1_GuardBackend();
+    bool rushReady  = PrepModule1_AntiRushBackend();
+
+    Item_SetReady(ITEM_M1_GUARD, guardReady);
+    Item_SetReady(ITEM_M1_ANTI_RUSH, rushReady);
 
     EnableModule1_Defense(true);
     if (!g_bModule1_Active)
     {
-        LogError("[BotRouteFix] [Module 1] Failed to inject defense patches!");
+        LogError("[BotRouteFix] [Module 1] Both defense items failed; module will report FAILED.");
         return false;
     }
 
-    LogMessage("[BotRouteFix] [Module 1] CT guard chance & anti-rush patches activated [%s]",
+    LogMessage("[BotRouteFix] [Module 1] Defense items armed (guard=%d, anti-rush=%d) [%s]",
+        Item_IsArmed(ITEM_M1_GUARD), Item_IsArmed(ITEM_M1_ANTI_RUSH),
         g_bIsWin64 ? "64-bit" : "32-bit");
     return true;
 }
 
 /**
- * 动态启用或停用模块 1（幂等：同态重复调用不重写代码段）
+ * 动态启用或停用模块 1（幂等；两个事项分别武装/还原，互不连带）
+ *
+ * 初次武装由 Init 的 Prep 完成；规则关闭后再开启时，补丁已被还原，
+ * 这里只对“已就绪但补丁不在位”的事项重新执行 Prep。
  */
 void EnableModule1_Defense(bool enable)
 {
@@ -85,31 +107,41 @@ void EnableModule1_Defense(bool enable)
 
     if (enable)
     {
-        bool bGuard = PrepGuardBombsitePatch();
-        bool bRush  = PrepDefenseRushPatch();
-
-        // 全成或全败：任一失败立即回滚另一条，杜绝半态驻留
-        if (!bGuard || !bRush)
+        bool guardArmed = false;
+        if (Item_IsReady(ITEM_M1_GUARD))
         {
-            if (bGuard)
+            if (!g_PatchGuardBombsite.isPatched)
             {
-                RestoreGuardBombsitePatch();
+                Item_SetReady(ITEM_M1_GUARD, PrepModule1_GuardBackend());
             }
-            if (bRush)
-            {
-                RestoreDefenseRushPatch();
-            }
-            g_bModule1_Active = false;
-            LogError("[BotRouteFix] [Module 1] Enable aborted (guard=%d, rush=%d), all patches rolled back!", bGuard, bRush);
-            return;
+            guardArmed = g_PatchGuardBombsite.isPatched;
         }
 
-        g_bModule1_Active = true;
+        bool rushArmed = false;
+        if (Item_IsReady(ITEM_M1_ANTI_RUSH))
+        {
+            if (!g_PatchDefenseRush.isPatched)
+            {
+                Item_SetReady(ITEM_M1_ANTI_RUSH, PrepModule1_AntiRushBackend());
+            }
+            rushArmed = g_PatchDefenseRush.isPatched;
+        }
+
+        Item_SetArmed(ITEM_M1_GUARD, guardArmed);
+        Item_SetArmed(ITEM_M1_ANTI_RUSH, rushArmed);
+        g_bModule1_Active = (guardArmed || rushArmed);
+
+        if (g_bModule1_Active && (!guardArmed || !rushArmed))
+        {
+            LogError("[BotRouteFix] [Module 1] Partial activation (guard=%d, anti-rush=%d).", guardArmed, rushArmed);
+        }
         return;
     }
 
-    RestoreGuardBombsitePatch();
-    RestoreDefenseRushPatch();
+    RestoreModule1_GuardBackend();
+    RestoreModule1_AntiRushBackend();
+    Item_SetArmed(ITEM_M1_GUARD, false);
+    Item_SetArmed(ITEM_M1_ANTI_RUSH, false);
     g_bModule1_Active = false;
 }
 
@@ -122,29 +154,9 @@ void RestoreModule1_Defense()
     LogMessage("[BotRouteFix] [Module 1] Patches safely restored to original bytes.");
 }
 
-/**
- * 查询模块 1 业务开启态
- */
-bool IsModule1_Active()
-{
-    return g_bModule1_Active;
-}
-
-/**
- * 查询守点概率补丁当前是否生效
- */
-bool IsGuardBombsitePatched()
-{
-    return g_PatchGuardBombsite.isPatched;
-}
-
-/**
- * 查询防前冲补丁当前是否生效
- */
-bool IsDefenseRushPatched()
-{
-    return g_PatchDefenseRush.isPatched;
-}
+//========================================================================================
+// MODULE 1 PUBLIC API / FORMULA
+//========================================================================================
 
 /**
  * 计算给定士气值对应的理论守点概率 (百分比 0.0 ~ 100.0)
@@ -152,7 +164,7 @@ bool IsDefenseRushPatched()
  * @param morale        Bot 士气数值 (-3 ~ +3)
  * @return              守点概率 (0.0 ~ 100.0)
  */
-float CalculateGuardBombsiteChance(int morale)
+float Module1_CalculateGuardBombsiteChance(int morale)
 {
     float chance = GUARD_CHANCE_BASE - GUARD_CHANCE_STEP * float(morale);
     if (chance > GUARD_CHANCE_MAX)
@@ -167,10 +179,17 @@ float CalculateGuardBombsiteChance(int morale)
 }
 
 //========================================================================================
-// PATCH 1: GUARD BOMBSITE CHANCE FORMULA REWRITE (70 - 10 * Morale)
+// ITEM 1 BACKEND: GUARD BOMBSITE CHANCE FORMULA REWRITE (70 - 10 * Morale)
 //========================================================================================
 
-bool PrepGuardBombsitePatch()
+/**
+ * 准备并应用守点概率公式补丁（70 - 10 * Morale）
+ *
+ * 事项 M1 guard chance formula 的唯一后端入口；失败时该事项 FAILED，另一事项不受影响。
+ *
+ * @return              是否成功写入补丁
+ */
+static bool PrepModule1_GuardBackend()
 {
     Address sigAddr = GameConfGetAddress(g_hGameConf, "IdleState_GuardBombsiteChance");
     if (sigAddr == Address_Null)
@@ -204,6 +223,8 @@ bool PrepGuardBombsitePatch()
             if (!g_PatchGuardBombsite.hasBackup)
             {
                 g_PatchGuardBombsite.isPatched = false;
+                LogError("[BotRouteFix] [Module 1] Guard patch already present @ %X without baseline; item FAILED.", targetAddr);
+                return false;
             }
             LogMessage("[BotRouteFix] [Module 1] Guard bombsite patch already present @ %X, skipping", targetAddr);
             return true;
@@ -260,6 +281,8 @@ bool PrepGuardBombsitePatch()
             if (!g_PatchGuardBombsite.hasBackup)
             {
                 g_PatchGuardBombsite.isPatched = false;
+                LogError("[BotRouteFix] [Module 1] Guard patch already present @ %X without baseline; item FAILED.", targetAddr);
+                return false;
             }
             LogMessage("[BotRouteFix] [Module 1] Guard bombsite patch already present @ %X, skipping", targetAddr);
             return true;
@@ -326,16 +349,26 @@ bool PrepGuardBombsitePatch()
     }
 }
 
-void RestoreGuardBombsitePatch()
+/**
+ * 还原守点概率公式补丁（写回原始字节）
+ */
+static void RestoreModule1_GuardBackend()
 {
     g_PatchGuardBombsite.Restore();
 }
 
 //========================================================================================
-// PATCH 2: CT ANTI-RUSH (IsDefenseRushing NOP BYPASS)
+// ITEM 2 BACKEND: CT ANTI-RUSH (IsDefenseRushing NOP BYPASS)
 //========================================================================================
 
-bool PrepDefenseRushPatch()
+/**
+ * 准备并应用防开局前冲补丁（NOP 穿透 IsDefenseRushing 跳转）
+ *
+ * 事项 M1 anti-rush NOP 的唯一后端入口；失败时该事项 FAILED，另一事项不受影响。
+ *
+ * @return              是否成功写入补丁
+ */
+static bool PrepModule1_AntiRushBackend()
 {
     Address sigAddr = GameConfGetAddress(g_hGameConf, "IdleState_DefenseRush");
     if (sigAddr == Address_Null)
@@ -361,6 +394,8 @@ bool PrepDefenseRushPatch()
         if (!g_PatchDefenseRush.hasBackup)
         {
             g_PatchDefenseRush.isPatched = false;
+            LogError("[BotRouteFix] [Module 1] Anti-Rush NOP already present @ %X without baseline; item FAILED.", targetAddr);
+            return false;
         }
         LogMessage("[BotRouteFix] [Module 1] Anti-Rush NOP patch already present @ %X, skipping", targetAddr);
         return true;
@@ -402,7 +437,10 @@ bool PrepDefenseRushPatch()
     return g_PatchDefenseRush.NopOut();
 }
 
-void RestoreDefenseRushPatch()
+/**
+ * 还原防开局前冲补丁（写回原始字节）
+ */
+static void RestoreModule1_AntiRushBackend()
 {
     g_PatchDefenseRush.Restore();
 }

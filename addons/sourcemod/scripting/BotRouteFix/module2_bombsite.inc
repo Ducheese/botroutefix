@@ -32,6 +32,10 @@
 //               使残局新持包者能够根据当前战场位置就近选择最合理的包点下包。
 //========================================================================================
 
+//========================================================================================
+// MODULE 2 DEFINES & GLOBALS
+//========================================================================================
+
 // 运包时钟士气映射公式宏定义 (Delay = BASE + STEP * Morale)
 #define PLANT_DELAY_BASE        30.0    // 基础运包时钟 (士气 0 时 30 秒)
 #define PLANT_DELAY_STEP        10.0    // 每级士气增减步长 (秒)
@@ -52,74 +56,75 @@ static int g_iOffset_ZoneCount = -1;
 static int g_iOffset_ZoneBase = -1;
 static int g_iZoneStride = -1;
 
+//========================================================================================
+// MODULE 2 ITEM BACKENDS (called by Init)
+//========================================================================================
+
 /**
- * 初始化模块 2 所需的偏移与内存补丁准备
+ * 事项后端：运包时钟写入
  *
- * @return              是否初始化成功
+ * 条件 = earliest timestamp 偏移 + morale 偏移 + TheCSBots 单例（单例由 Init 预先解析）。
+ * 任一缺失 → clockReady=false，只让运包时钟事项 FAILED，不影响包点锁。
+ *
+ * @return              运包时钟事项的后端是否就绪
  */
-bool InitModule2_Bombsite()
+static bool PrepModule2_ClockBackend()
 {
-    if (g_hGameConf == null)
-    {
-        LogError("[BotRouteFix] [Module 2] Error: Gamedata is not loaded, cannot initialize bombsite module!");
-        return false;
-    }
-
-    // 1. 读取所需内部偏移
     g_iOffset_EarliestBombPlant = GameConfGetOffset(g_hGameConf, "TheCSBots_EarliestBombPlant_Offset");
-    g_iOffset_ZoneCount         = GameConfGetOffset(g_hGameConf, "TheCSBots_ZoneCount_Offset");
-    g_iOffset_ZoneBase          = GameConfGetOffset(g_hGameConf, "TheCSBots_ZoneBase_Offset");
-    g_iZoneStride               = GameConfGetOffset(g_hGameConf, "TheCSBots_ZoneStride");
 
-    if (g_iOffset_EarliestBombPlant == -1 || g_iOffset_ZoneCount == -1 ||
-        g_iOffset_ZoneBase == -1 || g_iZoneStride == -1)
+    bool ready = (g_iOffset_EarliestBombPlant > 0 && g_iOffset_Morale > 0);
+    if (!ready)
     {
-        LogError("[BotRouteFix] [Module 2] Failed to read one or more zone/plant offsets from gamedata!");
+        LogError("[BotRouteFix] [Module 2] Clock backend missing (earliest=%d, morale=%d); clock item FAILED.",
+            g_iOffset_EarliestBombPlant, g_iOffset_Morale);
+    }
+    return ready;
+}
+
+/**
+ * 事项后端：包点锁补丁
+ *
+ * 条件 = zone 三个偏移 + 签名 + patch 偏移 + 19 字节模板校验 + 原始基线备份。
+ * 任一缺失 → lockReady=false，只让包点锁事项 FAILED，不影响运包时钟。
+ *
+ * @return              包点锁事项的后端是否就绪
+ */
+static bool PrepModule2_LockBackend()
+{
+    g_iOffset_ZoneCount = GameConfGetOffset(g_hGameConf, "TheCSBots_ZoneCount_Offset");
+    g_iOffset_ZoneBase  = GameConfGetOffset(g_hGameConf, "TheCSBots_ZoneBase_Offset");
+    g_iZoneStride       = GameConfGetOffset(g_hGameConf, "TheCSBots_ZoneStride");
+
+    if (g_iOffset_ZoneCount <= 0 || g_iOffset_ZoneBase <= 0 || g_iZoneStride <= 0)
+    {
+        LogError("[BotRouteFix] [Module 2] Zone offsets missing; lock item FAILED.");
         return false;
     }
 
-    // 2. 解析 TheCSBots 单例指针
-    if (!ResolveTheCSBots())
-    {
-        return false;
-    }
-
-    // 3. 准备 PlantBombClosestZone 补丁
     Address sigAddr = GameConfGetAddress(g_hGameConf, "IdleState_PlantBombClosestZone");
-    if (sigAddr == Address_Null)
-    {
-        LogError("[BotRouteFix] [Module 2] Failed to locate signature for IdleState_PlantBombClosestZone!");
-        return false;
-    }
-
     int patchOffset = GameConfGetOffset(g_hGameConf, "PlantBombClosestZone_PatchOffset");
-    if (patchOffset == -1)
+    if (sigAddr == Address_Null || patchOffset == -1)
     {
-        LogError("[BotRouteFix] [Module 2] Failed to read PlantBombClosestZone_PatchOffset!");
+        LogError("[BotRouteFix] [Module 2] Lock signature/offset missing; lock item FAILED.");
         return false;
     }
 
     Address targetAddr = sigAddr + view_as<Address>(patchOffset);
-    int patchSize = 19;
-    g_PatchBombsiteLock.Init("PlantBombClosestZone_Lock", targetAddr, patchSize);
+    g_PatchBombsiteLock.Init("PlantBombClosestZone_Lock", targetAddr, 19);
 
     int firstByte  = LoadFromAddress(targetAddr, NumberType_Int8);
     int secondByte = LoadFromAddress(targetAddr + view_as<Address>(1), NumberType_Int8);
 
-    // 幂等性检测：检查是否已处于锁定补丁状态 (64位: 48 B8, 32位: B8)
+    // 幂等性检测：已处于锁定补丁状态 (64位: 48 B8, 32位: B8) 时无原始基线可还原
     bool isAlreadyPatched = (g_bIsWin64 && firstByte == 0x48 && secondByte == 0xB8) || (!g_bIsWin64 && firstByte == 0xB8);
     if (isAlreadyPatched)
     {
-        // 核心安全防线：已打分支绝不能标 isPatched=true（因缺失未打补丁时的原始基线备份），
-        // 否则后续 round_start/掉包/死亡/换人/安包/卸载触发 Restore 时会向代码段写回全零导致崩服！
         g_PatchBombsiteLock.isPatched = false;
         g_bBombsiteLocked = false;
-        EnableModule2_Bombsite(true);
-        LogMessage("[BotRouteFix] [Module 2] Warning: Bombsite lock patch already present @ %X on startup (skipping backup; restore will be no-op to prevent code corruption)", targetAddr);
-        return true;
+        LogError("[BotRouteFix] [Module 2] Lock patch already present @ %X; lock item FAILED.", targetAddr);
+        return false;
     }
 
-    // 预检验证：严格比对 19 字节调用头部的特征操作码
     if (g_bIsWin64)
     {
         int chkOff64[5] = {0, 1, 2, 3, 4};
@@ -129,7 +134,7 @@ bool InitModule2_Bombsite()
             int got = LoadFromAddress(targetAddr + view_as<Address>(chkOff64[i]), NumberType_Int8);
             if (got != chkVal64[i])
             {
-                LogError("[BotRouteFix] [Module 2] 64-bit PlantBombClosestZone template mismatch at +%d (expected %02X, got %02X)!",
+                LogError("[BotRouteFix] [Module 2] 64-bit lock template mismatch at +%d (expected %02X, got %02X)!",
                     chkOff64[i], chkVal64[i], got);
                 return false;
             }
@@ -144,24 +149,79 @@ bool InitModule2_Bombsite()
             int got = LoadFromAddress(targetAddr + view_as<Address>(chkOff32[i]), NumberType_Int8);
             if (got != chkVal32[i])
             {
-                LogError("[BotRouteFix] [Module 2] 32-bit PlantBombClosestZone template mismatch at +%d (expected %02X, got %02X)!",
+                LogError("[BotRouteFix] [Module 2] 32-bit lock template mismatch at +%d (expected %02X, got %02X)!",
                     chkOff32[i], chkVal32[i], got);
                 return false;
             }
         }
     }
 
-    // 备份原始指令现场 (均为 19 字节)
-    g_PatchBombsiteLock.BackupOriginal();
+    if (!g_PatchBombsiteLock.BackupOriginal())
+    {
+        LogError("[BotRouteFix] [Module 2] Lock patch baseline backup failed; lock item FAILED.");
+        return false;
+    }
+
     LogMessage("[BotRouteFix] [Module 2] PlantBombClosestZone block verified @ %X [%s]",
         targetAddr, g_bIsWin64 ? "64-bit" : "32-bit");
+    return true;
+}
+
+//========================================================================================
+// MODULE 2 LIFECYCLE
+//========================================================================================
+
+/**
+ * 初始化模块 2 的两个独立事项：运包时钟写入与包点锁补丁
+ *
+ * 先解析两个事项共用的 TheCSBots 单例，再分别检查各自后端；
+ * 任一事项失败只让对应事项 FAILED，另一件仍可 ACTIVE。
+ *
+ * 分别准备两个事项并立即武装；任一失败不拖累另一个。
+ *
+ * @return              是否至少有一个事项武装成功
+ */
+bool InitModule2_Bombsite()
+{
+    if (g_hGameConf == null)
+    {
+        LogError("[BotRouteFix] [Module 2] Gamedata missing; both items FAILED.");
+        Item_SetReady(ITEM_M2_CLOCK, false);
+        Item_SetReady(ITEM_M2_LOCK, false);
+        return false;
+    }
+
+    // 两个事项共用 TheCSBots 单例
+    if (!ResolveTheCSBots())
+    {
+        Item_SetReady(ITEM_M2_CLOCK, false);
+        Item_SetReady(ITEM_M2_LOCK, false);
+        return false;
+    }
+
+    bool clockReady = PrepModule2_ClockBackend();
+    bool lockReady  = PrepModule2_LockBackend();
+
+    Item_SetReady(ITEM_M2_CLOCK, clockReady);
+    Item_SetReady(ITEM_M2_LOCK, lockReady);
 
     EnableModule2_Bombsite(true);
+    if (!g_bModule2_Active)
+    {
+        LogError("[BotRouteFix] [Module 2] Both bombsite items failed; module will report FAILED.");
+        return false;
+    }
+
+    LogMessage("[BotRouteFix] [Module 2] Bombsite items armed (clock=%d, lock=%d) [%s]",
+        Item_IsArmed(ITEM_M2_CLOCK), Item_IsArmed(ITEM_M2_LOCK),
+        g_bIsWin64 ? "64-bit" : "32-bit");
     return true;
 }
 
 /**
- * 动态启用或停用模块 2（幂等）
+ * 动态启用或停用模块 2（幂等；两个事项分别武装/还原，互不连带）
+ *
+ * @param enable        true = 按事项后端就绪情况武装；false = 还原并解除武装
  */
 void EnableModule2_Bombsite(bool enable)
 {
@@ -172,8 +232,16 @@ void EnableModule2_Bombsite(bool enable)
 
     if (enable)
     {
-        // 无持久低层资源：包点锁定补丁按回合即时注入
-        g_bModule2_Active = true;
+        // 两个事项独立武装：锁定补丁按回合即时注入，运包时钟按 freeze_end 写内存。
+        Item_SetArmed(ITEM_M2_LOCK, Item_IsReady(ITEM_M2_LOCK));
+        Item_SetArmed(ITEM_M2_CLOCK, Item_IsReady(ITEM_M2_CLOCK));
+        g_bModule2_Active = (Item_IsArmed(ITEM_M2_LOCK) || Item_IsArmed(ITEM_M2_CLOCK));
+
+        if (g_bModule2_Active && (!Item_IsArmed(ITEM_M2_LOCK) || !Item_IsArmed(ITEM_M2_CLOCK)))
+        {
+            LogError("[BotRouteFix] [Module 2] Partial activation (lock=%d, clock=%d).",
+                Item_IsArmed(ITEM_M2_LOCK), Item_IsArmed(ITEM_M2_CLOCK));
+        }
         return;
     }
 
@@ -181,6 +249,8 @@ void EnableModule2_Bombsite(bool enable)
     {
         RestoreBombsiteLockPatch();
     }
+    Item_SetArmed(ITEM_M2_LOCK, false);
+    Item_SetArmed(ITEM_M2_CLOCK, false);
     g_iOpeningCarrier = 0;
     g_fCurrentPlantDelay = 0.0;
     g_bModule2_Active = false;
@@ -192,47 +262,44 @@ void EnableModule2_Bombsite(bool enable)
 void RestoreModule2_Bombsite()
 {
     EnableModule2_Bombsite(false);
+    LogMessage("[BotRouteFix] [Module 2] Patches safely restored to original bytes.");
 }
 
-/**
- * 查询模块 2 业务开启态
- */
-bool IsModule2_Active()
-{
-    return g_bModule2_Active;
-}
-
-/**
- * 查询包点锁定底层是否完全就绪（TheCSBots 单例就绪且补丁已锁定原始基线）
- */
-bool IsBombsitePatchReady()
-{
-    return (g_pTheCSBotsPtr != Address_Null && g_PatchBombsiteLock.address != Address_Null && g_PatchBombsiteLock.hasBackup);
-}
+//========================================================================================
+// MODULE 2 PUBLIC GETTERS & FORMULA
+//========================================================================================
 
 /**
  * 查询包点是否正处于开局锁定状态
+ *
+ * @return              true = 当前补丁已驻留并锁定包点
  */
-bool IsBombsiteLocked()
+bool Module2_IsBombsiteLocked()
 {
     return g_bBombsiteLocked;
 }
 
 /**
  * 获取当前锁定的包点索引
+ *
+ * @return              包点在 TheCSBots zone 表中的下标；-1 = 未锁定
  */
-int GetLockedBombsiteIndex()
+int Module2_GetLockedBombsiteIndex()
 {
     return g_iLockedZoneIndex;
 }
 
 /**
  * 获取当前回合计算出的运包延时
+ *
+ * @return              运包延时秒数；0.0 = 本回合时钟事项未武装或尚未计算
  */
-float GetCurrentPlantDelay()
+float Module2_GetCurrentPlantDelay()
 {
     return g_fCurrentPlantDelay;
 }
+
+// --- internal formula (only used by the clock item) ---
 
 /**
  * 根据士气计算运包延时 (公式: 30 + 10 * Morale，区间 0.0s ~ 60.0s)
@@ -240,7 +307,7 @@ float GetCurrentPlantDelay()
  * @param morale        Bot 士气数值 (-3 ~ +3)
  * @return              运包延时秒数
  */
-float CalculatePlantDelay(int morale)
+static float CalculatePlantDelay(int morale)
 {
     float delay = PLANT_DELAY_BASE + PLANT_DELAY_STEP * float(morale);
     if (delay < PLANT_DELAY_MIN)
@@ -255,7 +322,7 @@ float CalculatePlantDelay(int morale)
 }
 
 //========================================================================================
-// LIFECYCLE & TACTICAL EVENT HOOKS
+// MODULE 2 EVENT HANDLERS
 //========================================================================================
 
 /**
@@ -297,15 +364,12 @@ void Module2_OnRoundFreezeEnd()
 
     g_iOpeningCarrier = carrier;
 
-    // 1. 读取持包者士气（调用 helpers 标准封装：Bot 读自身，人类读存活 T 均值）
-    int carrierMorale = GetEffectiveCarrierMorale(carrier);
-
-    // 2. 士气线性映射: 30.0 + 10.0 * Morale (0.0s ~ 60.0s)
-    g_fCurrentPlantDelay = CalculatePlantDelay(carrierMorale);
-
-    // 3. 动态写入 TheCSBots()->m_earliestBombPlantTimestamp
-    if (g_pTheCSBotsPtr != Address_Null && g_iOffset_EarliestBombPlant > 0)
+    // 1. 运包时钟事项：士气映射并写 m_earliestBombPlantTimestamp
+    if (Item_IsArmed(ITEM_M2_CLOCK))
     {
+        int carrierMorale = GetEffectiveCarrierMorale(carrier);
+        g_fCurrentPlantDelay = CalculatePlantDelay(carrierMorale);
+
         Address pTheCSBots = LoadAddressFromAddress(g_pTheCSBotsPtr);
         if (pTheCSBots != Address_Null)
         {
@@ -321,8 +385,11 @@ void Module2_OnRoundFreezeEnd()
         }
     }
 
-    // 4. 开局随机选择包点并打上内存锁定补丁
-    SelectRandomBombsite();
+    // 2. 包点锁事项：随机选点并打补丁
+    if (Item_IsArmed(ITEM_M2_LOCK))
+    {
+        SelectRandomBombsite();
+    }
 }
 
 /**
@@ -331,7 +398,7 @@ void Module2_OnRoundFreezeEnd()
  */
 void Module2_OnBombDropped()
 {
-    if (!g_bModule2_Active)
+    if (!Item_IsArmed(ITEM_M2_LOCK))
     {
         return;
     }
@@ -345,12 +412,14 @@ void Module2_OnBombDropped()
 }
 
 /**
- * 道具拾取事件 (item_pickup)
- * 检查是否有新包主产生
+ * 道具拾取事件 (item_pickup)：新包主出现时解除开局锁定
+ *
+ * @param client        拾取者客户端索引
+ * @param item          被拾取的道具名
  */
 void Module2_OnItemPickup(int client, const char[] item)
 {
-    if (!g_bModule2_Active)
+    if (!Item_IsArmed(ITEM_M2_LOCK))
     {
         return;
     }
@@ -378,12 +447,13 @@ void Module2_OnItemPickup(int client, const char[] item)
 }
 
 /**
- * 玩家死亡事件 (player_death)
- * 若开局包匪阵亡，则解除开局锁定
+ * 玩家死亡事件 (player_death)：开局包匪阵亡时解除锁定
+ *
+ * @param victim        阵亡客户端索引
  */
 void Module2_OnPlayerDeath(int victim)
 {
-    if (!g_bModule2_Active)
+    if (!Item_IsArmed(ITEM_M2_LOCK))
     {
         return;
     }
@@ -400,12 +470,13 @@ void Module2_OnPlayerDeath(int victim)
 }
 
 /**
- * 客户端掉线事件 (OnClientDisconnect)
- * 若开局持包者断开连接，当场解除包点锁定并清空索引
+ * 客户端掉线事件 (OnClientDisconnect)：开局持包者掉线时解除锁定
+ *
+ * @param client        掉线客户端索引
  */
 void Module2_OnClientDisconnect(int client)
 {
-    if (!g_bModule2_Active)
+    if (!Item_IsArmed(ITEM_M2_LOCK))
     {
         return;
     }
@@ -435,11 +506,13 @@ void Module2_OnBombPlanted()
 }
 
 //========================================================================================
-// BOMBSITE LOCKING PRIMITIVES
+// MODULE 2 BACKEND RESOLUTION & LOCK PRIMITIVES
 //========================================================================================
 
 /**
- * 解析 TheCSBots 单例指针
+ * 解析 TheCSBots 单例指针（两个事项共用后端）
+ *
+ * @return              是否成功解析到非空单例
  */
 static bool ResolveTheCSBots()
 {
@@ -572,6 +645,10 @@ static void RestoreBombsiteLockPatch()
     }
 }
 
+//========================================================================================
+// MODULE 2 VISUALIZATION GETTERS
+//========================================================================================
+
 /**
  * 获取目标包点世界中心坐标（供可视化子系统渲染航标）
  *
@@ -613,7 +690,9 @@ bool Module2_GetTargetBombsitePosition(float pos[3])
 }
 
 /**
- * 获取当前对局最早允许下包的时间戳
+ * 获取当前对局最早允许下包的时间戳（引擎原生字段，供可视化读取）
+ *
+ * @return              m_earliestBombPlantTimestamp；不可读时返回 0.0
  */
 float Module2_GetEarliestPlantTime()
 {

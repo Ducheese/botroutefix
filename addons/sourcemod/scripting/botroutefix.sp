@@ -5,6 +5,7 @@
 //   - BotRouteFix/global.inc          : 全局常量、宏定义、环境架构识别与公共状态
 //   - BotRouteFix/memory.inc          : 内存补丁抽象 (MemoryPatch) 与 DHook 启用态同步 (SyncDetourEnabled)
 //   - BotRouteFix/helpers.inc         : Bot 实体判定、Morale 属性与通用内存数据读取
+//   - BotRouteFix/items.inc           : 21 件事项能力表与四态计算（唯一状态源）
 //   - BotRouteFix/sdkcalls.inc        : 引擎级虚函数/静态函数底层调用封装 (SDKCall)
 //   - BotRouteFix/nav_measure.inc     : 真实地面行走距离无损测量子系统 (NavMeasure)
 //   - BotRouteFix/events.inc          : 游戏事件监听、对局炸弹状态唯一写入方与多模块分发 (Events Hub)
@@ -38,6 +39,7 @@
 #include "BotRouteFix/global"
 #include "BotRouteFix/memory"
 #include "BotRouteFix/helpers"
+#include "BotRouteFix/items"
 #include "BotRouteFix/sdkcalls"
 #include "BotRouteFix/nav_measure"
 #include "BotRouteFix/module1_defense"
@@ -105,28 +107,34 @@ public void OnPluginStart()
     InitCommands();
     InitEvents();
 
-    // 4. Initialize reverse engineering infrastructure (fail-fast: escort needs Follow calls)
+    // 4. Initialize reverse engineering infrastructure (soft: missing calls only starve the items that need them)
     if (!InitSDKCalls())
     {
-        SetFailState("[BotRouteFix] Core SDKCall table failed to initialize! Aborting plugin startup.");
-        return;
+        LogMessage("[BotRouteFix] [SDKCalls] One or more SDKCall handles unavailable; dependent items will report FAILED.");
     }
 
     // 4b. NavMeasure soft init (standby on missing offsets, never fail-fast)
     InitNavMeasure();
 
-    // 5. Initialize business modules (fail-fast: abort startup if any module fails)
-    if (!InitModule1_Defense() || !InitModule2_Bombsite() || !InitModule3_Danger()
-        || !InitModule4_Hunt() || !InitModule5_Combat() || !InitModule6_TMorale()
-        || !InitModule7_Escort() || !InitModule8_Queue()
-        || !InitModule9_Loot() || !InitModule10_Defuse()
-        || !InitModule11_Sniper() || !InitModule12_CampGate()
-        || !InitModule13_SniperBuy() || !InitModule14_DefendRush()
-        || !InitModule15_HideDuration())
-    {
-        SetFailState("[BotRouteFix] One or more core tactical modules failed to initialize! Aborting plugin startup.");
-        return;
-    }
+    // 5. Initialize item registry, then every business module independently.
+    //    任何模块初始化失败只影响自己的事项，绝不 SetFailState 杀死全插件。
+    InitItems();
+
+    InitModule1_Defense();
+    InitModule2_Bombsite();
+    InitModule3_Danger();
+    InitModule4_Hunt();
+    InitModule5_Combat();
+    InitModule6_TMorale();
+    InitModule7_Escort();
+    InitModule8_Queue();
+    InitModule9_Loot();
+    InitModule10_Defuse();
+    InitModule11_Sniper();
+    InitModule12_CampGate();
+    InitModule13_SniperBuy();
+    InitModule14_DefendRush();
+    InitModule15_HideDuration();
 
     // 6. Initialize Module Rules and connect ConVar change hook
     InitModuleManager();
@@ -134,7 +142,7 @@ public void OnPluginStart()
     ApplyModulesConfig();
 
     // 7. Initialize Visuals Subsystem
-    Visuals_Init();
+    InitVisuals();
 
     LogMessage("[BotRouteFix] ========== Initialization Complete [%s] ==========",
         g_bIsWin64 ? "64-bit (Steam x64)" : "32-bit (v91/v92)");
