@@ -8,23 +8,27 @@
 //
 // 业务背景与引擎逆向分析：
 //
-// 1. 原生缺陷 (cs_bot_update.cpp:529-535 & cs_bot_attack.cpp:354-360):
+// 1. 原生缺陷 (cs_bot_update.cpp:606-611 & cs_bot_attack.cpp:334-360):
 //    Bot 观察到敌方持有狙击枪时调用 GetChatter()->SpottedSniper() 发出警告，但非狙击手步枪手
 //    依然会盲目横穿狙击手直视走廊（如中门、中路、香蕉道）排队送命。原生交火撤退判定虽然有
 //    (me->CanSeeSniper() && !me->IsSniper())，却被 m_retreatTimer 与交战冷却死死卡住。
 // 2. 战术闭环设计：
 //    - 触发源：挂载 BotChatterInterface::SpottedSniper Post 钩子，纯事件驱动，0 模拟视觉开销；
 //    - 自身校验：若目击者自己持有狙击枪（AWP/Scout/连狙），放行对狙博弈；
-//    - 战术豁免：下包后 CT 见狙禁撤（争分夺秒回防拆包），T 进包点后见狙禁撤（坚守包点与强行下包）；
-//    - 贴脸不撤：距狙 < 265 units 只钉走廊不请求撤退（近距离跑路等于送背）；
+//    - 职责边界 (2026-10-31)：本模块只负责"走廊 danger + 撤退请求"，撤退档位（硬豁免/短蹲/放行）
+//      由模块 5 统一裁决，本模块不判任务与包点豁免；
+//    - 贴脸无效化：距狙 < 265 units 时狙击枪退化为步枪，不构成走廊威胁——不钉 danger、不探测走廊
+//      （因此不改写当前路径）、不发撤退请求，直接放行（两点重叠没有走廊可钉，钉了只会污染遭遇区）；
 //    - 敌方狙击手定位：双轨确定性解析（0 Raycast、0 全图盲搜）：
 //      1) 优先读取 spotter 的 m_enemy 句柄（处于交火态时直接锁定目标）；
 //      2) 路径 2：若 m_enemy 尚未锁定（如移动/非交火状态），直接从 CCSBot::UpdateReactionQueue
-//         每帧推入的 m_enemyQueue 瞬时感知威胁队列逆序回溯提取当帧目击的狙击手实体；
+//         每次感知更新推入的 m_enemyQueue 瞬时感知威胁队列逆序回溯提取当帧目击的狙击手实体；
 //      3) 武器判断全面覆盖：同时检索 m_hActiveWeapon 与 Slot 0 主武器，杜绝狙击手切副手/刀具时漏判；
-//    - 走廊加压：调用 CCSBot::ComputePath 生成通往狙击手的 A* 走廊，最多遍历前 20 步 NavArea 钉刺 +0.8f 危险度
-//      （封顶 2.5f，严格遵循 1.0/120.0s 沉降契约），逼迫友军与自身后续 A* 绕开该走廊；
-//    - 强制后撤：立即清空前进路径碎步，并联动模块 5 机制穿透冷却，强制底层立即执行 TryToRetreat() 躲入掩体。
+//    - 走廊加压：经 NavMeasure 的临时探测（内部调用 CCSBot::ComputePath，快照-还原）生成通往狙击手的
+//      A* 走廊，最多遍历前 20 步 NavArea 钉刺 +0.8f 危险度（封顶 2.5f，遵循 1.0/120.0s 沉降契约）；
+//      爬梯中跳过探测（梯子子状态不在快照范围）；
+//    - 撤退请求：仅发 Combat_RequestSniperRetreat（带 2 秒 TTL），不碎路径——
+//      是否真撤、撤多久由 M5 按身份/阶段裁决，避免硬豁免目标被本模块打断使命动作。
 //========================================================================================
 
 #define SNIPER_NAIL_DANGER      0.8
@@ -32,7 +36,7 @@
 #define SNIPER_MAX_STEPS        20
 // 沉降速率 DANGER_DECAY_RATE_SEC 统一定义于 global.inc
 
-// 贴脸不撤距离（units）：距狙小于此值只钉走廊不请求撤退（近距离跑路等于送背）
+// 贴脸无效化距离（units）：距狙小于此值视为步枪，不钉 danger、不碎路径、不请求撤退
 #define SNIPER_NO_RETREAT_DIST  265.0
 
 // 本模块私有状态
@@ -46,12 +50,6 @@ static int g_iOffset_ChatterMe       = -1;
 static int g_iOffset_Enemy           = -1;
 static int g_iOffset_EnemyQueue      = -1;
 static int g_iOffset_EnemyQueueIndex = -1;
-static int g_iOffset_Path            = -1;
-static int g_iPathStride             = 0;
-static int g_iOffset_PathLength      = -1;
-static int g_iOffset_PathIndex       = -1;
-static int g_iOffset_PathLadder      = -1;
-static int g_iOffset_IsStopping      = -1;
 static int g_iOffset_Danger          = -1;
 static int g_iOffset_DangerTimestamp = -1;
 
@@ -283,22 +281,10 @@ public MRESReturn Hook_SpottedSniper_Post(Address pThis, DHookParam hParams)
         return MRES_Ignored;
     }
 
-    // 2. 下包后，CT 见狙击手不可以撤（争分夺秒回防拆包）
-    if (g_bBombPlanted && spotterTeam == 3)
-    {
-        return MRES_Ignored;
-    }
-
-    // 3. T 进包点后，见狙击手不可以撤（坚守包点阵地与强行下包）
-    if (spotterTeam == 2 && GetEntProp(spotter, Prop_Send, "m_bInBombZone") != 0)
-    {
-        return MRES_Ignored;
-    }
-
     // 原生 20 秒节流在上游按人头卡着，per-bot 节流永远轮不到，直接走
     float curtime = GetGameTime();
 
-    // 4. 锁定敌方狙击手坐标
+    // 2. 锁定敌方狙击手坐标
     float sniperPos[3];
     int sniper = Sniper_FindTargetSniper(spotter, sniperPos);
     if (sniper == -1)
@@ -309,70 +295,41 @@ public MRESReturn Hook_SpottedSniper_Post(Address pThis, DHookParam hParams)
 
     int teamIdx = spotterTeam - 2;
 
-    // 4b. 贴脸不撤：距狙 265 内跑路等于送背，只钉走廊（团队情报）不请求撤退
+    // 3. 贴脸无效化：distance < 265 时狙击枪退化为步枪，只构成点威胁、不构成走廊威胁。
+    //    不钉 danger（两点重叠没有走廊可钉，钉了污染遭遇区）、不碎路径、不发撤退请求，
+    //    威胁模型交回常规交火（M5 残血/一打多）处理。
     float spotterPos[3];
     GetClientAbsOrigin(spotter, spotterPos);
-    bool tooClose = (GetVectorDistance(spotterPos, sniperPos) < SNIPER_NO_RETREAT_DIST);
-
-    Address pBot = GetEntityAddress(spotter);
-    if (pBot == Address_Null)
+    if (GetVectorDistance(spotterPos, sniperPos) < SNIPER_NO_RETREAT_DIST)
     {
+        // 贴脸属于"放行交火"，不计入威慑成功数（否则 status 的 deterred 会混入大量无效样本）
+        DebugLog("[BotRouteFix] [Module 11] Bot %N spotted sniper %N at close range, treated as rifle (no danger, no retreat)", spotter, sniper);
         return MRES_Ignored;
     }
 
-    // 5. 计算到狙击手的走廊路径，并为沿途 NavArea 钉上 +0.8f 危险度
-    if (BotComputePath(spotter, sniperPos, 0))
+    // 4. 临时探测到狙击手的走廊路径，并为沿途 NavArea 钉上 +0.8f 危险度
+    //    ★ 必须走 BotNavProbePathAreas（快照-计算-还原）：CCSBot::ComputePath 会先 DestroyPath()
+    //      再写入新路径（cs_bot_pathfind.cpp:1877-1891），直接调用会篡改 spotter 当前行进路径，
+    //      硬豁免目标（包匪下包临界、CT 拆包任务）不会被 M5 后撤，也就没人帮它重建路径。
+    int corridorCount = BotNavProbePathAreas(spotter, sniperPos);
+    int corridorSteps = (corridorCount > SNIPER_MAX_STEPS) ? SNIPER_MAX_STEPS : corridorCount;
+    for (int i = 0; i < corridorSteps; i++)
     {
-        if (g_iOffset_PathLength > 0 && g_iOffset_Path > 0 && g_iPathStride > 0)
+        Address pArea = BotNavProbeAreaAt(i);
+        if (pArea != Address_Null)
         {
-            int pathLength = LoadFromAddress(pBot + view_as<Address>(g_iOffset_PathLength), NumberType_Int32);
-            int count = (pathLength > SNIPER_MAX_STEPS) ? SNIPER_MAX_STEPS : pathLength;
-
-            for (int i = 0; i < count; i++)
-            {
-                Address pConnect = pBot + view_as<Address>(g_iOffset_Path + i * g_iPathStride);
-                Address pArea = LoadAddressFromAddress(pConnect);
-                if (pArea != Address_Null)
-                {
-                    Sniper_NailDanger(pArea, teamIdx, curtime);
-                }
-            }
+            Sniper_NailDanger(pArea, teamIdx, curtime);
         }
     }
 
-    // 6. 立即打碎前进路径，迫使 Bot 停步并重新评估
-    if (g_iOffset_IsStopping > 0)
-    {
-        StoreToAddress(pBot + view_as<Address>(g_iOffset_IsStopping), 0, NumberType_Int8);
-    }
-    if (g_iOffset_PathLength > 0)
-    {
-        StoreToAddress(pBot + view_as<Address>(g_iOffset_PathLength), 0, NumberType_Int32);
-    }
-    if (g_iOffset_PathIndex > 0)
-    {
-        StoreToAddress(pBot + view_as<Address>(g_iOffset_PathIndex), 0, NumberType_Int32);
-    }
-    if (g_iOffset_PathLadder > 0)
-    {
-        StoreAddressToAddress(pBot + view_as<Address>(g_iOffset_PathLadder), Address_Null);
-    }
-
-    // 7. 联动模块 5 机制：穿透撤退冷却，迫使下一拍立即执行 TryToRetreat 进掩体（贴脸不撤）
-    if (!tooClose)
-    {
-        Combat_RequestSniperRetreat(spotter);
-    }
+    // 5. 联动模块 5：只发撤退请求（带 TTL），不碎路径。
+    //    是否真撤、撤多久由 M5 按身份/阶段裁决——硬豁免目标（包匪下包临界、CT 拆包临界）
+    //    不能被本模块打断使命动作；真正撤退时 Hide 内部会自行 DestroyPath/ComputePath。
+    Combat_RequestSniperRetreat(spotter);
 
     g_iTotalSniperDeterred++;
-    if (tooClose)
-    {
-        DebugLog("[BotRouteFix] [Module 11] Bot %N spotted sniper %N at close range, nailed corridor danger (no retreat)", spotter, sniper);
-    }
-    else
-    {
-        DebugLog("[BotRouteFix] [Module 11] Bot %N spotted sniper %N, nailed corridor danger and retreated", spotter, sniper);
-    }
+    DebugLog("[BotRouteFix] [Module 11] Bot %N spotted sniper %N, nailed corridor danger (%d areas) and requested retreat",
+        spotter, sniper, corridorSteps);
     return MRES_Ignored;
 }
 
@@ -381,7 +338,8 @@ public MRESReturn Hook_SpottedSniper_Post(Address pThis, DHookParam hParams)
  */
 bool IsSniperDeterrenceHooked()
 {
-    return (g_hSpottedSniperDetour != null && g_bSpottedSniperHooked && g_hSDKCall_ComputePath != null);
+    // 走廊钉刺依赖 NavMeasure 的临时探测（快照-计算-还原），测距子系统待机时视为后端不完整
+    return (g_hSpottedSniperDetour != null && g_bSpottedSniperHooked && BotNavReady());
 }
 
 /**
@@ -402,19 +360,11 @@ bool InitModule11_Sniper()
     g_iOffset_Enemy           = GameConfGetOffset(g_hGameConf, "CCSBot_Enemy_Offset");
     g_iOffset_EnemyQueue      = GameConfGetOffset(g_hGameConf, "CCSBot_EnemyQueue_Offset");
     g_iOffset_EnemyQueueIndex = GameConfGetOffset(g_hGameConf, "CCSBot_EnemyQueueIndex_Offset");
-    g_iOffset_Path            = GameConfGetOffset(g_hGameConf, "CCSBot_Path_Offset");
-    g_iPathStride             = GameConfGetOffset(g_hGameConf, "CCSBot_PathStride");
-    g_iOffset_PathLength      = GameConfGetOffset(g_hGameConf, "CCSBot_PathLength_Offset");
-    g_iOffset_PathIndex       = g_iOffset_PathLength + 4;
-    g_iOffset_PathLadder      = GameConfGetOffset(g_hGameConf, "CCSBot_PathLadder_Offset");
-    g_iOffset_IsStopping      = GameConfGetOffset(g_hGameConf, "CCSBot_IsStopping_Offset");
     g_iOffset_Danger          = GameConfGetOffset(g_hGameConf, "NavArea_Danger_Offset");
     g_iOffset_DangerTimestamp = GameConfGetOffset(g_hGameConf, "NavArea_DangerTimestamp_Offset");
 
     if (g_iOffset_ChatterMe == -1 || g_iOffset_Enemy == -1 || g_iOffset_EnemyQueue == -1
-        || g_iOffset_EnemyQueueIndex == -1 || g_iOffset_Path == -1 || g_iPathStride <= 0
-        || g_iOffset_PathLength == -1 || g_iOffset_IsStopping == -1
-        || g_iOffset_PathLadder == -1 || g_iOffset_Danger == -1 || g_iOffset_DangerTimestamp == -1)
+        || g_iOffset_EnemyQueueIndex == -1 || g_iOffset_Danger == -1 || g_iOffset_DangerTimestamp == -1)
     {
         LogError("[BotRouteFix] [Module 11] Failed to read one or more sniper/path offsets from gamedata!");
         return false;

@@ -196,6 +196,7 @@ public void OnMapStart()
     Module8_OnMapStart();
     Module9_OnMapStart();
     Module10_OnMapStart();
+    Module15_OnMapStart();
 }
 
 public void OnClientPutInServer(int client)
@@ -213,4 +214,5 @@ public void OnClientDisconnect(int client)
     Module8_OnClientDisconnect(client);
     Module9_OnClientDisconnect(client);
     Module10_OnClientDisconnect(client);
+    Module15_OnClientDisconnect(client);
 }

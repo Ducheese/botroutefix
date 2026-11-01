@@ -240,7 +240,7 @@ public Action Command_Status(int client, int args)
     PrintModuleLine(client, 13, "Sniper Buy Chance", "formula 50-10*M, dynamic rifle dice");
     PrintModuleLine(client, 14, "Defend Rush Chance", "formula 40-10*M, 4 lea sites patched");
 
-    Format(detail, sizeof(detail), "total: %d rescaled", GetTotalHideRescaled());
+    Format(detail, sizeof(detail), "total: %d rescaled, %d short", GetTotalHideRescaled(), GetTotalShortHides());
     PrintModuleLine(client, 15, "Hide Duration x(1-0.15*M)", detail);
 
     ReplyToCommand(client, "[BotRouteFix] ------------------------------------------------------------");

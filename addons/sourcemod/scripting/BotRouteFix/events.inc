@@ -72,6 +72,7 @@ public void Event_RoundStart(Event event, const char[] name, bool dontBroadcast)
     Module2_OnRoundStart();
     Module3_OnRoundStart();
     Module4_OnRoundStart();
+    Module15_OnRoundStart();
     Module5_OnRoundStart();
     Module7_OnRoundStart();
     Module8_OnRoundStart();

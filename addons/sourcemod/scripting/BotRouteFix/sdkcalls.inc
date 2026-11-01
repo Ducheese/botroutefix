@@ -157,23 +157,14 @@ stock bool BotStopFollowing(int bot)
     return true;
 }
 
-/**
- * 计算指定 Bot 通往目标坐标的导航路径
- *
- * @param bot       Bot 客户端索引 (必须为存活有效 Bot)
- * @param goal      目标世界坐标
- * @param routeType 寻路策略 (0 = FASTEST_ROUTE, 1 = SAFEST_ROUTE)
- * @return          是否成功生成路径
- */
-stock bool BotComputePath(int bot, const float goal[3], int routeType = 0)
-{
-    if (g_hSDKCall_ComputePath == null || !IsBot(bot, true))
-    {
-        return false;
-    }
-
-    return SDKCall(g_hSDKCall_ComputePath, bot, goal, routeType);
-}
+//--------------------------------------------------------------------------------------------------------------
+// 已废弃：stock bool BotComputePath(int bot, const float goal[3], int routeType = 0)
+//
+// 裸调 CCSBot::ComputePath 会先 DestroyPath() 再重写 m_path（cs_bot_pathfind.cpp:1877-1997），
+// 且绕过 repath 节流与状态快照，调用即持久篡改 Bot 当前行进路径（M11 旧版踩过此坑）。
+// 需要走廊/距离一律走 nav_measure.inc 的 BotNavWalkDistance / BotNavProbePathAreas
+// （内部快照-计算-还原），不要恢复此封装。
+//--------------------------------------------------------------------------------------------------------------
 
 /**
  * 直调原生一打多判定（CCSBot::IsOutnumbered，友 < 敌-1，读视觉记忆表计数值）

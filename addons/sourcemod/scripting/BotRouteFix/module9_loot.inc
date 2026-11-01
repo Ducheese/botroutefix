@@ -39,8 +39,8 @@ static float g_fDropPos[3];
 static int g_iTotalLootGated = 0;
 static int g_iTotalLootElections = 0;
 
-// 名册内查找（-1 槽位跳过）
-static bool Loot_IsInRoster(int client)
+// 名册内查找（-1 槽位跳过）；模块 5 后撤档位裁决复用
+bool Loot_IsInRoster(int client)
 {
     for (int i = 0; i < LOOT_ROSTER_SIZE; i++)
     {

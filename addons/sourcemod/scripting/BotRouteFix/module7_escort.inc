@@ -298,6 +298,12 @@ bool Escort_IsCarrier(int client)
     return client > 0 && client == g_iEscortCarrier;
 }
 
+// 保镖身份查询（供模块 5 后撤档位裁决用）
+bool Escort_IsBodyguard(int client)
+{
+    return Escort_Find(client) != -1;
+}
+
 // 名单成员丢失（阵亡/掉线）：除名 + 按当前士气重算编制，多退少补
 void Escort_OnRosterLost(int bot, bool logIt = true)
 {

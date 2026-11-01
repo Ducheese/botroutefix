@@ -68,18 +68,27 @@
 - **残血强制后撤 (Low-Health Forced Retreat via PinnedDown)**：
   - 原生引擎在 `AttackState::OnUpdate` 撤退段中受 `isPinnedDown`（交火持续 7~10 秒）与自带 3~15 秒冷却约束，导致残血 Bot 往往死战至死。
   - 本模块通过 DHook 拦截 `AttackState::OnUpdate` 的 Pre 阶段，当检测到 Bot 血量 $< 35\text{ HP}$ 时，直接将 `m_pinnedDownTimestamp` 写为 `0.0`（使 `isPinnedDown` 恒真）并清空撤退计时器冷却；下一帧引擎原生撤退段在满足其余门控（有敌人正瞄着自己、掩体可达，**60 秒长节流冷却**）时触发 `TryToRetreat()` 寻找就近掩体撤退并转入 `HideState`，显著提升竞技残局生存率！
-- **包匪使命特权防护 (C4 Carrier Mission Shield)**：
-  - **保镖在场豁免**：身边有存活队友/保镖（`nearbyFriends > 0`）时，持包者绝对禁止后撤，由保镖拉枪吸引火力，包匪维持推进；
-  - **下包任务豁免**：已处于 `PLANT_BOMB` 任务（`Task == 1`）时，下包使命压倒一切，绝对禁止后撤；
-  - 彻底根除残血包匪受击抛下保镖掉头逃跑进掩体的恶性折返跑死循环！
+- **后撤档位三档制 (Retreat Tiering: Hard / Soft / Pass)**：
+  - 所有后撤触发（残血、孤身一打多、狙击威慑）共用同一套"身份 × 阶段"档位框架，裁决权唯一收敛在本模块：
+    - **硬豁免**：不施加强制后撤，直接放行交火（使命动作的临界态；引擎原生撤退判定仍保留）；
+    - **软豁免**：照常撤，但经模块 15 的 `HideDuration_RequestShort` 把蹲守压到 1 秒（跑进掩体、到点即起）；
+    - **放行**：照常撤，Hide 时长交由模块 15 按士气缩放。
+  - **下包前（T 有使命）**：
+    - 包匪：`Task == PLANT_BOMB && m_bInBombZone`（持包者已进包点触区，下一拍下包）→ 硬；其余情况 → 软；
+    - 捡包名册（模块 9）成员：软；保镖（模块 7 名册）成员：软；
+    - 其他 T：残血 / 一打多源 → 放行；**狙击威胁源 → 软**（下包前所有 T 一律短蹲，包点内包匪除外——已被上面的硬豁免拦下）。
+  - **下包后（CT 有使命）**：
+    - `Task == DEFUSE_BOMB` → 硬；其他 CT → 软（三源同构）；全 T：放行。
+    - 该判定随任务自动 fail-open：模块 10 开启时仅首席持有 `DEFUSE_BOMB`；模块 10 关闭/降级时全员原生持有，硬豁免自动覆盖所有 CT，不会出现"无首席即无硬豁免"的真空（例外：`bot_defer_to_human` 开启且队内有活人时，bot 可能拿不到该任务，回落软豁免）。
+  - 注：`m_bInBombZone` 仅在持包者进入 bomb target 触发区时置位（`func_bomb_target.cpp:50-52`），天然等价"下一拍下包"；CT 无 C4 该标记恒 false，故 CT 改用拆包任务判定。
+  - 消除包点内下包临界态的折返跑死循环；包点外的包匪仍保留短蹲后撤的保命机动。
 - **孤身一打多强制后撤 (Outnumbered Forced Retreat via SDKCall)**：
   - 原生 `CCSBot::IsOutnumbered() = 友 < 敌-1`（`cs_bot.cpp:606-621`，自己不占名额，1v2 起算），计数读 3 秒视觉记忆表而非距离圈；原生只走 c 支骰子/aggr，高侵略 Bot 近乎不撤。
   - 本模块同一 Pre 钩子直调原生判定，确认被包后再读 `m_nearbyFriendCount`：视野内有队友（2v3/2v4）放行交火，仅计数为 0 的真 1v 多才写同一两处内存焊门（1、2 号门焊死，3 号门"有人瞄着"仍归原生）。
-  - **完全不走节流阀**：一对多属于高危态，完全脱离节流阀限制，只要遇围随时允许后撤拉开身位。
-- **狙击手威慑强撤特权接口 (Combat_RequestSniperRetreat Bypass)**：
-  - 供模块 11 远程调用。目击 Bot 遭遇敌方狙击手后，由模块 11 调用此接口将 `g_bSniperRetreatWanted[client]` 置为 true；
-  - 在随后的 `AttackState::OnUpdate` Pre 阶段，**完全不走节流阀**与 `< 35 HP` 残血门控，直接写零 `m_pinnedDownTimestamp` 并清空 `m_retreatTimer`，引导 Bot 立即寻找掩体脱战；
-  - **全员一视同仁后撤**：遭遇狙击手威胁时，所有人无论谁（包括持包者，无论身边是否有保镖），全员统一撤退寻找掩体拉开身位，杜绝保镖退入掩体而包匪独自暴露在狙击线下的白给现象；包匪护卫抗线豁免仅在常规交火残血与一对多中生效。
+  - **完全不走节流阀**：一对多属于高危态，完全脱离节流阀限制；档位仍按上面的矩阵裁决。
+- **狙击手威慑联动接口 (Combat_RequestSniperRetreat + TTL)**：
+  - 供模块 11 调用；请求带 2 秒 TTL，Bot 未在窗口内进入 `AttackState` 则自动作废，杜绝跨状态残影误触发；
+  - 命中请求时完全穿透 `< 35 HP` 残血门控与节流阀，赋予单拍立即后撤特权；最终是硬豁免/短蹲/放行由本模块按矩阵统一裁决，模块 11 不再自行判任务与包点豁免。
 
 ### 模块 6：T 阵营士气接战策略与守包听觉出击梯度 (Morale Disposition & Audio Interception)
 - **下包前 T 包匪行为 (Pre-Plant Carrier Morale Disposition)**：
@@ -106,10 +115,10 @@
   - 本模块按持包者士气配给保镖：`保镖数 = 3 - Morale`（钳制在 0~6 名）。士气 -3（绝境）：6 名抱团强推；士气 +1（常规）：2 名随行；士气 +3（大优）：0 名，全员放飞控图。
 - **欧氏 3D 选人与差量刷新 (Euclidean Pick & Diff Refresh)**：
    - 保镖人选按包匪坐标欧氏 3D 平方距离（含 Z，跨楼层天然排后）取最近者；用 A* 真实距离精度更高，但在 10v10 开局每回合 O(N) 次寻路是可观卡顿，故以欧氏换零开销（同层排序精确，跨楼层自动靠后）。
-  - 名单只做差量更新：换包匪才解散重配；保镖阵亡/掉线/转队只除名并按实时士气多退少补，不抖散整条跟随链。
+  - 名单只做差量更新：换包匪才解散重配；保镖阵亡/掉线立即除名并按实时士气多退少补，转队在下一次 `Escort_Refresh()` 时除名，不抖散整条跟随链。
 - **包离手即解散 (Release on Loose)**：
   - 掉包、下包、拆包、爆炸、包匪阵亡/掉线时全体解散（发 `StopFollowing` 恢复自由身，可就近捡包或转入守点）；回合开始静默清零。
-  - 冻结期内不接管（跟随会打断买枪），中途捡包递延一帧等槽位归属落定。
+  - `item_pickup` 在冻结期被忽略；模块启用/热重载时会立即按当前持包者配一次保镖（可能打断买枪），中途捡包递延一帧等槽位归属落定。
 
 ### 模块 8：门口礼貌排队打碎与死锁强切 Hunt (Polite Queue Breaker & Deadlock Hunt Transition)
 - **原生排队过久与顽固对冲死锁 (Over-Polite Waiting & Deadlock)**：
@@ -123,7 +132,7 @@
 
 ### 模块 9：掉包 Top3 抢包花名册 (Loose-Bomb Fetch Roster)
 - **原生全员哄抢 (Swarm on Loose Bomb)**：
-  - 原生 `CCSBot::NoticeLooseBomb()` 只要地上有包即返回 true（`cs_bot.cpp:428`），`Idle` 与 `Hunt` 两条路闻到就 `FetchBomb()`，掉包即全员送死。且虽然原生调用方在外层有 T 阵营检查，但查询函数本体未作阵营约束。
+  - 原生 `CCSBot::NoticeLooseBomb()` 仅在拆弹场景且存在无主 C4 时返回 true（`cs_bot.cpp:428`），`Idle` 与 `Hunt` 两条路闻到就 `FetchBomb()`，掉包即全员送死。且虽然原生调用方在外层有 T 阵营检查，但查询函数本体未作阵营约束。
 - **Pre 门控 + 事件花名册 (Pre Gate & Event Roster)**：
   - 本模块 Pre 钩上述查询函数：CT 一律回 false 实施纵深防御兜底（视力 `CanSeeLooseBomb` 与捡包听觉不受影响）；T 非名册成员直接回 false 并计入拦截（遥测 `gated`）；名册为空时全部放行回原生（fail-open）。
   - 掉包事件递延一帧（等 C4 归属落定，当场查恒为"人手里"）后，以无主 `weapon_c4` 坐标为圆心、无损实测（`BotNavWalkDistance`：备份移动状态→解 repath 节流→`ComputePath` 实测→逐段累加→全量还原，调用方零副作用）真实地面行走距离取最近 3 存活 T，不可达跳过；测距未就绪则无名单直接放行（不拿欧氏混分）。成员阵亡/掉线按掉包点真实距离回补，全灭则解散回原生（防"包烂地上没人捡"死锁）；有人捡包/回合开始/换图即清。
@@ -143,22 +152,21 @@
 - **触发契约与武器豁免 (Trigger & Weapon Exemption)**：
   - 挂载 `BotChatterInterface::SpottedSniper` Post 钩子，纯事件驱动，0 每帧扫描，0 模拟视觉与 Raycast 开销。
   - 自身对狙豁免：若目击 Bot 自身主武器为狙击枪（`Sniper_IsSniper` 双重校验当前手持与 Slot 0 主武器），则放行原生逻辑，允许对位架枪反打。
-  - 原生上游节流保护：依托引擎底层 `BotChatterInterface` 内置的 Chatter 报点冷却，天然规避密集触发，杜绝短时间频繁重算与重复走廊钉刺。
-- **核心战术豁免 (Tactical Retreat Exemptions)**：
-  - **下包后 CT 见狙禁撤**：C4 成功安放后（`g_bBombPlanted`），CT 阵营 Bots 见狙击手绝对不可后撤逃跑，必须争分夺秒回防进点拆包，杜绝因掩体寻路掉头跑回老家送掉对局。
-   - **T 进包点后见狙禁撤**：T 阵营 Bots 进入包点范围后（`m_bInBombZone` 为真），见狙击手绝对不可后撤逃跑，必须坚守包点掩体、压制点内敌人或强行下包，杜绝拿包进点后因受击掉头缩回包点外通道。
-   - **贴脸不撤（265 units 内）**：距狙小于 265 只钉走廊（团队情报照给）不请求撤退——近距离跑路等于送背，碎步停步与钉刺保留。
+  - 原生上游节流保护：`CCSBot::Update` 的 `m_sawEnemySniperTimer` 提供 20 秒/每 bot 节流（`CanSeeSniper → SpottedSniper`），天然规避密集触发；`BotChatterInterface` 另有接收者侧的 60 秒警告去重。
+- **职责边界与贴脸无效化 (Responsibility Boundary & Close-Range Nullification)**：
+  - 本模块只负责"走廊 danger + 撤退请求"，撤退档位（硬豁免 / 短蹲 / 放行）统一由模块 5 按身份与阶段裁决，本模块不判任务与包点豁免。
+  - **贴脸无效化（265 units 内）**：近距离狙击枪退化为步枪，只构成点威胁、不构成走廊威胁——不钉 danger、不碎路径、不发撤退请求，直接放行，威胁模型交回常规交火（模块 5 残血/一打多）处理。两点重叠没有走廊可钉，钉了只会污染遭遇区；该分支不计入 `deterred` 遥测，避免 status 混入大量放行样本。
 - **双轨目标定位与逆序回溯 (Dual-Path Threat Resolution)**：
   - **路径 1（优先交火目标）**：直接读取 `m_enemy` 句柄（$O(1)$ 查找），若已锁定且为主武器持狙的敌方，即刻确立目标。
   - **路径 2（瞬时感知队列回溯）**：若目击 Bot 尚未进入交火态（`m_enemy == 0xFFFFFFFF`），直接深入引擎内部感知队列 `m_enemyQueue`（由 `CCSBot::FindMostDangerousThreat` 每帧感知刷新），从 `m_enemyQueueIndex` 逆序回溯最近 20 帧的历史威胁实体，提取瞬间闪现的狙击手。
   - **Slot 0 主武器双重校验**：不仅检查狙击手当前手持武器（`m_hActiveWeapon`），还穿透检查 Slot 0（主武器槽），杜绝敌方狙击手因切手枪、切刀或掏雷导致的威慑漏判。
-- **走廊加压与碎步打碎 (Corridor Danger & Route Shatter)**：
-  - 定位到狙击手后，调用引擎底层寻路函数 `CCSBot::ComputePath(spotter, sniperPos, 0)` 计算目击者直面狙击手的视线走廊。
-  - 遍历沿途最多前 20 步 (SNIPER_MAX_STEPS) NavArea 节点（从脚底起步），严格遵守 `1.0 / 120.0s` 自然衰减沉降契约，各钉刺 `+0.8f` 危险度（封顶 `2.5f`）并同步刷新时间戳，迫使后续全队寻路 A* 天然规避该交火走廊。
-  - 碎步打碎冲锋：清空 `m_pathLength = 0`、`m_pathIndex = 0`、`m_isStopping = 0`、`m_pathLadder = NULL`，强行截断当前面向狙击手的送命路线。
-- **脱战特权通道 (Forced Disengage Bypass)**：
-  - 联动模块 5 调用 `Combat_RequestSniperRetreat(spotter)`，开启单拍后撤特权通道。
-  - 穿透原生 `< 35 HP` 残血门控、清空 `m_pinnedDownTimestamp` 与 `m_retreatTimer` 冷却，使目击 Bot 在下一拍 `AttackState::OnUpdate` 时必走 `TryToRetreat()` 躲入掩体，实现“见狙立缩、封锁走廊、绕路迂回”的高拟真竞技战术行为！
+- **走廊加压 (Corridor Danger)**：
+  - 定位到狙击手后，通过 `BotNavProbePathAreas()` 临时探测目击者直面狙击手的视线走廊：内部仍是 `CCSBot::ComputePath`，但先快照路径数组、路径下标、梯子指针、阻挡旗、当前/最后已知区域、目标坐标、repath 时间戳与区域进入时间，读取走廊 NavArea 后还原；**爬梯中直接跳过探测**（梯子子状态不在快照范围）。spot 遭遇点、初始遭遇区等次级状态未纳入快照，属低频可自愈的残留。
+  - 该设计是必需而非优化：`CCSBot::ComputePath` 本体先 `DestroyPath()` 再写入新路径（`cs_bot_pathfind.cpp:1877-1891`），直接调用会当场篡改 spotter 当前行进路径；硬豁免目标（包匪下包临界、CT 拆包任务）不会经 M5 后撤重建路径，会被带向狙击手。
+  - 遍历沿途最多前 20 步 (SNIPER_MAX_STEPS) NavArea 节点（从 Bot 当前/最后已知 NavArea 起步），严格遵守 `1.0 / 120.0s` 自然衰减沉降契约，各钉刺 `+0.8f` 危险度（封顶 `2.5f`）并同步刷新时间戳，迫使后续全队寻路 A* 天然规避该交火走廊。
+- **撤退请求 (Retreat Request)**：
+  - 只调用 `Combat_RequestSniperRetreat(spotter)`（带 2 秒 TTL），不碎路径、不同步切换状态。
+  - 真正撤退时 `Hide` 内部会自行 `DestroyPath` / `ComputePath`；硬豁免目标（包匪下包临界、CT 首席）不会被本模块打断使命动作，是否真撤与撤多久由模块 5 统一裁决。
 
 ### 模块 12：狙击手 Camp 门禁与高士气前压 (Sniper Camp Gate & Morale Rush)
 - **原生狙击蹲点缺陷 (Static Sniper Camp Dice)**：
@@ -215,6 +223,11 @@
     - 士气 +3（大胜）：$0.55\times$ 时长（蹲守缩短 45%，快速破架转入进攻）
   - **时序完美吻合**：引擎原生在 `OnEnter` 阶段只写入变量，真正的倒计时计时器是在 Bot 跑到位后（`range < 20.0f`，`cs_bot_hide.cpp:458`）才在 `OnUpdate` 中由 `m_hideTimer.Start(m_duration)` 触发，因此 Post Detour 的修改 100% 及时且全局生效。
   - 系数区间 $[0.55, 1.45]$ 严格恒正，零浮点下溢，且遇脚步声或受击时引擎事件自打断机制完好保留。
+- **模块 5 紧急短蹲入口 (M5 Soft-Exemption Short Hide)**：
+  - 提供 `HideDuration_RequestShort(client)`：一次性请求 + 2 秒 TTL，Post 中优先消费，将 `m_duration` 写为 1 秒并跳过士气缩放（单独计数）。
+  - 语义：后撤动作完整保留（跑向掩体、`IgnoreEnemies` 照给），抵达藏身点后蹲 1 秒即起，供模块 5 的软豁免身份（包匪/捡包名册/保镖/CT 掩护组等）使用。请求只绑定 client + 2 秒窗口：窗口内任意 `Hide` 都会消费它；超时未消费则作废，不跨窗口污染后续 Hide。
+  - **短蹲优先于 M15 缩放（业务门后置）**：短蹲属于 M5 的后撤语义，M15 只是执行宿主。即使模块 15 被规则关闭，只要模块 12 借钩仍保持 Detour 挂载，短蹲照常生效；只有 M12/M15 全关（Hook 整体禁用）时才退化为原生撤退时长（`TryToRetreat` 默认 3~15 秒）。
+  - 无待消费请求时，换弹掩体的 `Hide(*spot, 0.0f)` 保持原生 0 秒；若 2 秒窗口内存在请求，换弹/守包等任意 Hide 会被压成 1 秒（已知的弱身份绑定）。士气缩放对 0.0 亦为 no-op。
 - **承载模块 12 宿主钩与短路保护 (Host Detour for Module 12 & Short-Circuit)**：
   - 模块 15 的 `HideState_OnEnter_Post` 钩子作为单一归口，在缩放时长前首先调用 `Module12_CampGate(client)`；
   - 若模块 12 判定狙击手高士气前压重定向至 `Hunt`，则立即短路返回 `MRES_Ignored`，跳过无意义的时长缩放计算与内存覆写。
@@ -244,7 +257,7 @@ addons\sourcemod\
         ├── module2_bombsite.inc      [模块 2] T 运包时钟士气映射与开局包点随机锁定 (Bombsite & Plant Clock)
         ├── module3_danger.inc        [模块 3] CNavArea 危险度开局软衰减 (NavArea Danger Soft-Decay)
         ├── module4_hunt.inc          [模块 4] HuntState 搜敌机制重构 (45秒老家破除、时间戳认领与随机覆盖 NOP)
-        ├── module5_combat.inc        [模块 5] 战斗决策重构 (AttackState 闪避 100% 强制、换弹进掩体 100% 强制、残血/一打多强制后撤)
+        ├── module5_combat.inc        [模块 5] 战斗决策重构 (闪避 100%、换弹进掩体 100%、残血/一打多/见狙后撤与三档豁免裁决)
         ├── module6_tmorale.inc       [模块 6] T 阵营士气接战策略与守包听觉出击梯度 (TMorale)
         ├── module7_escort.inc        [模块 7] T 包匪贴身保镖花名册 (Carrier Escort Roster)
         ├── module8_queue.inc         [模块 8] 门口礼貌排队打碎与死锁强切 Hunt (Polite Queue Breaker & Deadlock Hunt Transition)
@@ -254,7 +267,7 @@ addons\sourcemod\
         ├── module12_campgate.inc     [模块 12] 狙击 camp 概率重构 (60-10*M, OnEnter 重骰门)
         ├── module13_sniperbuy.inc    [模块 13] 随机买狙概率重构 (50-10*M, 汇编补丁)
         ├── module14_defendrush.inc   [模块 14] 开局前沿架枪概率重构 (40-10*M, defendRushChance)
-        └── module15_hideduration.inc [模块 15] Hide 蹲守时长士气缩放 (m_duration *= 1-0.15*M)
+        └── module15_hideduration.inc [模块 15] Hide 蹲守时长士气缩放 + 紧急短蹲入口 (m_duration *= 1-0.15*M / RequestShort=1s)
 ```
 
 ---
@@ -287,7 +300,7 @@ addons\sourcemod\
 ### 控制台指令
 | 指令 | 权限 | 说明 |
 | :--- | :--- | :--- |
-| `sm_botroutefix_status` | 管理员 (`ADMFLAG_GENERIC`) | 15 模块统一状态行（`ACTIVE` / `DEGRADED` / `INACTIVE`，业务态与底层补丁态分流展示）+ 累积计数器（认领/闪避/后撤/拦截/打碎/选举/首席/狙击撤退/狙击前压重定向/蹲守时长缩放，单调递增、换图不清零）+ debug 专属 `[Live]` 段（活包匪士气、炸弹状态、T/CT 平均士气与三条概率公式，需 `sm_botroutefix_debug 1`） |
+| `sm_botroutefix_status` | 管理员 (`ADMFLAG_GENERIC`) | 15 模块统一状态行（`ACTIVE` / `DEGRADED` / `INACTIVE`，业务态与底层补丁态分流展示）+ 累积计数器（认领/闪避/后撤/拦截/打碎/选举/首席/狙击撤退/狙击前压重定向/蹲守时长缩放/紧急短蹲，单调递增、换图不清零）+ debug 专属 `[Live]` 段（活包匪士气、炸弹状态、T/CT 平均士气与三条概率公式，需 `sm_botroutefix_debug 1`） |
 
 ---
 
@@ -329,6 +342,13 @@ addons\sourcemod\
 - 模块 12（狙击 Camp 门禁）与模块 15（Hide 蹲守时长缩放）在底层均需要拦截 `HideState::OnEnter`。为杜绝在同一虚函数/函数签名上挂载双重 Detour 导致的钩子递归重入、执行顺序不确定及调用栈消耗，模块 12 不单独注册 Detour，而是直接借用模块 15 的 Post Detour 作为执行宿主。
 - 协作契约：在模块 15 Detour 入口首先调用 `Module12_CampGate(client)`；若模块 12 判定为高士气前压并递延重定向至 `Hunt`，则返回 `true`，模块 15 随即短路返回，跳过无意义的时长缩放计算，各模块职责清晰解耦。
 - **底层启用态协同（`SyncHideDurationDetourState`）**：底层钩子只要任一借钩方（M12 / M15）仍在工作就必须保持启用，只有双方全部关闭才真正 Disable。模块 12 的 `EnableModuleX()` 与模块 15 的业务态变更都会调用该同步函数，既避免"关掉模块 15 顺带把模块 12 门禁打死"的隐性耦合，也让 DHook 的 Enable/Disable 永远只发生在真实状态跃迁上。
+
+### 后撤三档制跨模块契约 (Retreat Tier Contract: M5 × M11 × M15)
+- **唯一裁决点**：残血 / 孤身一打多 / 狙击威慑三大触发源的"硬豁免 / 短蹲 / 放行"全部由模块 5 的 `AttackState::OnUpdate` Pre 钩子裁决；模块 11 与 15 不感知身份矩阵。
+- **M11 → M5**：模块 11 只钉走廊 danger 并调用 `Combat_RequestSniperRetreat(client)`，请求带 2 秒 TTL；命中后模块 5 穿透残血门控与节流阀，再按矩阵决定档位。
+- **M5 → M15**：软豁免时模块 5 调用 `HideDuration_RequestShort(client)`（一次性 + 2 秒 TTL），模块 15 在 `HideState::OnEnter` Post 中优先消费，写 1 秒并跳过士气缩放。
+- **M5 → M7/M9（只读）**：`Escort_IsBodyguard()` / `Loot_IsInRoster()` 是名册内的常数级小循环；M5 同一判定还包括一次 `GetC4Carrier()` 的 O(MaxClients) 持包扫描。后撤判定内不做寻路。
+- **失效行为**：模块 10 未就绪/无首席时，CT 通常全员原生持有 `DEFUSE_BOMB`，下包后硬豁免自动覆盖所有 CT（fail-open；`bot_defer_to_human` 开且有真人时例外）；模块 15 单独关闭但模块 12 借钩仍在时，短蹲照常由宿主消费；只有 M12/M15 全关导致 Hook 整体禁用时，短蹲请求才按 TTL 过期，软豁免退回原生撤退时长（`TryToRetreat` 默认 3~15 秒，而非守包 Hide 的 30~60 秒）。
 
 ### 模块三层状态机与 DHook 收敛 (Module State Machine & Detour Sync)
 - **业务态**：每个模块持有独立 `g_bModuleN_Active`，统一由 `IsModuleN_Active()` 对外查询，`EnableModuleN(bool)` 是唯一的业务态切换入口（幂等，同态重复调用直接返回）。
