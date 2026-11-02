@@ -275,6 +275,8 @@ bool InitModule4_Hunt()
  * 动态启用或停用模块 4
  *
  * 两个事项分别武装、分别还原；NOP 失败不影响 HuntState 钩子，反之亦然。
+ * 规则关闭时若 Hunt 后端就绪，钩子保持只读观察挂载（不写内存、不计数），
+ * 用于可视化原生 Hunt 选区；后端缺失时钩子彻底停用。
  *
  * @param enable        true = 按事项后端就绪情况武装；false = 解除武装并还原资源
  */
@@ -290,6 +292,13 @@ void EnableModule4_Hunt(bool enable)
         RestoreModule4_NopBackend();
         RestoreModule4_HuntBackend();
         g_bModule4_Active = false;
+
+        // 观察模式：后端就绪但规则关闭时，仅保持 Post 钩子挂载记录原生选区（Pre 无需启用）
+        if (Item_IsReady(ITEM_M4_HUNT) && g_hHuntStateDetour != null)
+        {
+            SyncDetourEnabled(g_hHuntStateDetour, g_bHuntPostEnabled, true,
+                Hook_HuntState_OnUpdate_Post, true, "Module 4");
+        }
         return;
     }
 
@@ -307,11 +316,12 @@ void EnableModule4_Hunt(bool enable)
 /**
  * 还原模块 4（插件卸载）
  *
- * HuntState Detour 句柄在本函数最后释放，确保两个钩子先安全停用。
+ * 彻底退出观察模式并脱钩，确保两个钩子先安全停用后再释放 Detour 句柄。
  */
 void RestoreModule4_Hunt()
 {
     EnableModule4_Hunt(false);
+    RestoreModule4_HuntBackend();
 
     if (g_hHuntStateDetour != null)
     {
@@ -325,18 +335,6 @@ void RestoreModule4_Hunt()
 //========================================================================================
 // MODULE 4 PUBLIC GETTERS & TELEMETRY
 //========================================================================================
-
-/**
- * 查询模块 4 是否至少有一个事项处于武装态
- *
- * 供可视化等外部消费者读取；事实依据收敛至 Item_IsArmed 契约。
- *
- * @return              true = 至少一个事项已武装
- */
-bool Module4_IsActive()
-{
-    return (Item_IsArmed(ITEM_M4_NOP) || Item_IsArmed(ITEM_M4_HUNT));
-}
 
 /**
  * 查询累计认领的 HuntState 区域次数
@@ -426,7 +424,10 @@ public MRESReturn Hook_HuntState_OnUpdate_Pre(Address pThis, DHookParam hParams)
 }
 
 /**
- * HuntState::OnUpdate Post：给当前 hunt area 盖时间戳，并记录可视化目标
+ * HuntState::OnUpdate Post：记录当前 hunt area（观察）+ 盖时间戳（仅武装时写入）
+ *
+ * 观察与写入分离：可视化记录是只读观测，事项未武装时也执行，用于 M4 关闭时
+ * 查看原生选区；盖章认领与计数是事项写操作，只在 HuntState 事项武装时执行。
  *
  * @param pThis         HuntState 指针
  * @param hParams       DHook 参数
@@ -434,7 +435,7 @@ public MRESReturn Hook_HuntState_OnUpdate_Pre(Address pThis, DHookParam hParams)
  */
 public MRESReturn Hook_HuntState_OnUpdate_Post(Address pThis, DHookParam hParams)
 {
-    if (!Item_IsArmed(ITEM_M4_HUNT) || pThis == Address_Null)
+    if (pThis == Address_Null || g_iOffset_HuntArea <= 0 || g_iOffset_ClearedTimestamp <= 0)
     {
         return MRES_Ignored;
     }
@@ -461,9 +462,16 @@ public MRESReturn Hook_HuntState_OnUpdate_Post(Address pThis, DHookParam hParams
         return MRES_Ignored;
     }
 
+    // 观察记录：只写插件自有可视化缓存，不碰引擎内存
     float curtime = GetGameTime();
     g_pVisualHuntArea[client] = pArea;
     g_flVisualHuntTimestamp[client] = curtime;
+
+    // 以下为事项写操作：只有 HuntState 事项武装时才盖章认领
+    if (!Item_IsArmed(ITEM_M4_HUNT))
+    {
+        return MRES_Ignored;
+    }
 
     // 盖章认领该区域: 设置 m_clearedTimestamp[teamIdx] = curtime
     // 刚被认领的区域 age 恒为 0，同队其他 Bot 绝不会重复选取，实现完全无排队的多路分散搜敌

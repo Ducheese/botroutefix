@@ -13,10 +13,12 @@
 //     以激光线、光环与 3D 警戒盒直接画进游戏世界。
 //
 // 视觉设计（与下方实现逐条对应）：
-//   - M2 (Bombsite): 包匪胸膛连目标包点，黄色激光线（粗 3.0）；下包延时未到期时不画任何光环，
+//   - M2 (Bombsite): 包匪胸膛连目标包点，黄色激光线（粗 3.0），锁定时连锁定包点，
+//     未锁定时连原生最近包点（M2 关闭也能看原生选点）；下包延时未到期时不画任何光环，
 //     到期起在包匪脚底叠加红色扩散光环（包点上不画）；
-//   - M4 (Hunt): 各阵营 Bot 统一红色激光线（粗 3.0）连认领的 NavArea 中心，末端不画光环；
-//     包匪在 HuntState 时同样画线，不互斥；认领心跳超过 0.3s 即熄线；
+//   - M4 (Hunt): 各阵营 Bot 统一红色激光线（粗 3.0）连当前 Hunt 选区 NavArea 中心，末端不画光环；
+//     包匪在 HuntState 时同样画线，不互斥；心跳超过 0.3s 即熄线；
+//     M4 关闭时钩子保持只读观察，画的是原生选区（不写内存、不计数）；
 //   - M5 (Retreat): 撤退原因三色分流（残血：红色，一打多：紫色，遇狙：青色），
 //     用 TE_SetupBeamFollow 拖尾跟随人物，0.6s 接力续 0.8s；
 //   - M6 (Disposition): 腰部静止环不区分阵营（绿色 OPPORTUNITY_FIRE vs 粉色 ENGAGE_AND_INVESTIGATE）；
@@ -41,7 +43,7 @@ void Visuals_OnMapStart()
 /**
  * 初始化可视化定时器 (快速 0.2s 连线与慢速 1.0s 网格)
  */
-void Visuals_Init()
+void InitVisuals()
 {
     CreateTimer(0.2, Timer_RenderVisualsFast, _, TIMER_REPEAT);
     CreateTimer(1.0, Timer_RenderVisualsSlow, _, TIMER_REPEAT);
@@ -165,43 +167,56 @@ public Action Timer_RenderVisualsFast(Handle timer)
 
     //------------------------------------------------------------------------------------
     // [M2] 包匪下包指引线与就绪光环
+    //   数据源分离：光圈读引擎原生 earliest timestamp，M2 关闭也应显示；
+    //   指引线：锁事项武装时连锁定包点，未锁定时连原生最近包点（M2 关闭也能看原生选点）。
     //------------------------------------------------------------------------------------
-    if (IsModule2_Active())
     {
         int carrier = GetC4Carrier();
         if (carrier > 0 && carrier <= MaxClients && IsClientInGame(carrier) && IsPlayerAlive(carrier))
         {
-            float targetPos[3];
-            if (Module2_GetTargetBombsitePosition(targetPos))
+            float carrierChest[3];
+            GetBotChestPosition(carrier, carrierChest);
+
+            // 包匪胸膛连目标包点，黄色 (包点不画光环)
+            static const int colorM2Beam[4] = {255, 170, 0, 220}; // 黄色
+            if (Item_IsArmed(ITEM_M2_LOCK))
             {
-                float carrierChest[3];
-                GetBotChestPosition(carrier, carrierChest);
-
-                // 包匪胸膛连目标包点，黄色 (包点不画光环)
-                static const int colorM2Beam[4] = {255, 170, 0, 220}; // 黄色
-                DrawBeam(carrierChest, targetPos, colorM2Beam, 3.0, 0.0, 0.25);
-
-                float earliest = Module2_GetEarliestPlantTime();
-                float curtime = GetGameTime();
-                if (curtime >= earliest && earliest > 0.0)
+                float targetPos[3];
+                if (Module2_GetTargetBombsitePosition(targetPos))
                 {
-                    // 下包延时到期：光圈显示在【包匪脚下】！跟随包匪开始高频闪烁纯正猩红扩散光圈
-                    float carrierFeet[3];
-                    GetClientAbsOrigin(carrier, carrierFeet);
-                    carrierFeet[2] += 5.0; // 紧贴脚底地面
-
-                    static const int colorM2Ring[4] = {255, 0, 0, 255}; // 纯正猩红
-                    DrawRing(carrierFeet, 20.0, 80.0, colorM2Ring, 3.5, 0.25, 12);
+                    DrawBeam(carrierChest, targetPos, colorM2Beam, 3.0, 0.0, 0.25);
                 }
-                // 延时未到期前：包匪脚底绝对不闪光圈，保持 100% 静默纯净
             }
+            else
+            {
+                float nativePos[3];
+                if (Module2_GetNativeClosestBombsitePosition(carrierChest, nativePos))
+                {
+                    DrawBeam(carrierChest, nativePos, colorM2Beam, 3.0, 0.0, 0.25);
+                }
+            }
+
+            float earliest = Module2_GetEarliestPlantTime();
+            float curtime = GetGameTime();
+            if (earliest > 0.0 && curtime >= earliest)
+            {
+                // 下包延时到期：光圈显示在【包匪脚下】！跟随包匪开始高频闪烁纯正猩红扩散光圈
+                float carrierFeet[3];
+                GetClientAbsOrigin(carrier, carrierFeet);
+                carrierFeet[2] += 5.0; // 紧贴脚底地面
+
+                static const int colorM2Ring[4] = {255, 0, 0, 255}; // 纯正猩红
+                DrawRing(carrierFeet, 20.0, 80.0, colorM2Ring, 3.5, 0.25, 12);
+            }
+            // 延时未到期前：包匪脚底绝对不闪光圈，保持 100% 静默纯净
         }
     }
 
     //------------------------------------------------------------------------------------
-    // [M4] HuntState 认领 NavArea 直连激光线 (统一用红色线)
+    // [M4] HuntState 选区 NavArea 直连激光线 (统一用红色线)
+    //   不按事项门控：M4 关闭时钩子保持只读观察，画的是原生选区；
+    //   无数据（心跳超时/后端缺失）时 GetHuntArea 返回 Null，自然不画。
     //------------------------------------------------------------------------------------
-    if (IsModule4_Active())
     {
         static const int colorM4_Red[4] = {255, 40, 40, 200}; // 红色激光线
 
@@ -227,7 +242,7 @@ public Action Timer_RenderVisualsFast(Handle timer)
     //------------------------------------------------------------------------------------
     // [M5] 战斗后撤三色标识 (不画贴地光圈，用 TE_SetupBeamFollow 拖尾)
     //------------------------------------------------------------------------------------
-    if (IsModule5_Active())
+    if (Module5_IsActive())
     {
         static const int colorM5_LowHp[4]       = {255, 30, 30, 220};     // 残血：红色
         static const int colorM5_Outnumbered[4] = {180, 0, 255, 220};    // 一打多：紫色
@@ -281,8 +296,9 @@ public Action Timer_RenderVisualsFast(Handle timer)
 
     //------------------------------------------------------------------------------------
     // [M6] 接战策略腰部静止环 (不区分阵营，互补色: 绿色 OPPORTUNITY_FIRE vs 粉色 INVESTIGATE)
+    //   数据源是缓存偏移 m_disposition（引擎原生状态），不依赖 M6 钩子；M6 关闭也应显示。
+    //   Module6_GetBotDisposition() 在偏移缺失时返回 -1，自然不画。
     //------------------------------------------------------------------------------------
-    if (IsModule6_Active())
     {
         static const int colorM6_OppFire[4]     = {0, 255, 128, 220};   // OPPORTUNITY_FIRE: 绿色腰环 (架枪/固守)
         static const int colorM6_Investigate[4] = {255, 60, 180, 220};  // ENGAGE_AND_INVESTIGATE: 粉色腰环 (探查/出击)

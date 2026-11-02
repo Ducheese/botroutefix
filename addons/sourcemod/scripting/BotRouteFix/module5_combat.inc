@@ -77,8 +77,9 @@
 //          CT 按拆包任务档（DEFUSE_BOMB 硬、其他软）；CT 下包前放行。
 //      注: 包匪硬豁免的 `m_bInBombZone` 由 func_bomb_target 仅对持包者置位，
 //          天然等价"持包者已进入包点触区"；CT 硬豁免以拆包任务为准——
-//          M10 开启时仅首席持有该任务，M10 关闭/降级时全员原生持有，自动 fail-open
-//          （例外：bot_defer_to_human 开且队内有活人时 bot 可能拿不到该任务，回落软豁免）。
+//          M10 开启时仅首席持有该任务，M10 关闭/FAILED 时全员原生持有，这是原生任务语义，
+//          不是 M10 fail-open（例外：bot_defer_to_human 开且队内有活人时 bot 可能拿不到该任务，
+//          回落软豁免）。
 //
 // 4. 孤身一打多强制后撤 (Outnumbered Forced Retreat via SDKCall):
 //    - 源码逻辑 (cs_bot.cpp:606-621): `IsOutnumbered() = 友 < 敌-1`（自己不占名额，1v2 起算），
@@ -100,6 +101,10 @@
 #define BOT_TASK_DEFUSE_BOMB        3       // 引擎原生任务枚举：DEFUSE_BOMB (拆包任务)
 #define SNIPER_RETREAT_REQUEST_TTL  2.0     // 狙击撤退请求有效期 (秒)
 
+//========================================================================================
+// MODULE 5 DEFINES & GLOBALS
+//========================================================================================
+
 // 后撤触发原因枚举
 #define RETREAT_REASON_NONE         0
 #define RETREAT_REASON_LOW_HP       1       // 残血脱战
@@ -113,10 +118,14 @@ Handle g_hAttackRetreatDetour = null;
 int g_iTotalDodgeForced = 0;
 int g_iTotalRetreatTriggered = 0;
 
-// 业务开启态与 per-hook 真实启用态（DHook 状态机唯一事实来源）
+// 模块内部启用缓存（仅用于 Enable 幂等短路；逐事项判据统一用 Item_IsArmed）
 static bool g_bModule5_Active = false;
 static bool g_bDodgeHooked = false;
 static bool g_bRetreatHooked = false;
+
+// 狙击撤退跨模块请求状态（TTL 窗口由后撤事项的 Pre 钩子消费）
+static bool g_bSniperRetreatWanted[MAXPLAYERS + 1];
+static float g_flSniperRetreatUntil[MAXPLAYERS + 1];
 
 // 模块内部专用冷却、偏移与可视化追踪缓存
 static float g_flNextForcedRetreat[MAXPLAYERS + 1];
@@ -130,21 +139,127 @@ static int g_iOffset_TimerDuration = -1;
 static int g_iOffset_NearbyFriendCount = -1;
 static int g_iOffset_Task = -1;
 
+//========================================================================================
+// MODULE 5 ITEM BACKENDS (called by Init)
+//========================================================================================
+
 /**
- * 初始化模块 5 所需的偏移、内存补丁与 DHook Detour
+ * 事项后端：换弹掩体 NOP
  *
- * @return              是否初始化成功
+ * 只定位目标、校验模板并确认可备份，不写入 NOP（写入由 Apply 执行，M4 式分工）。
+ * 外来已 NOP 但无基线时直接标事项 FAILED，不允许无基线假装可用。
+ * 任一后端失败都返回 false，Init 会把 NOP 事项标记为 FAILED。
+ *
+ * @return              true = NOP 事项后端就绪
  */
-bool InitModule5_Combat()
+static bool PrepModule5_ReloadBackend()
 {
-    if (g_hGameConf == null)
+    Address sigAddr = GameConfGetAddress(g_hGameConf, "ReloadCheck_HideChance");
+    if (sigAddr == Address_Null)
     {
-        LogError("[BotRouteFix] [Module 5] Error: Gamedata is not loaded, cannot initialize combat module!");
+        LogError("[BotRouteFix] [Module 5] Failed to locate signature for ReloadCheck_HideChance!");
         return false;
     }
 
-    // 1. 读取所需内部偏移
-    g_iOffset_AttackShouldDodge   = GameConfGetOffset(g_hGameConf, "AttackState_ShouldDodge_Offset");
+    int patchOffset = GameConfGetOffset(g_hGameConf, "ReloadHide_PatchOffset");
+    if (patchOffset == -1)
+    {
+        LogError("[BotRouteFix] [Module 5] Failed to read ReloadHide_PatchOffset!");
+        return false;
+    }
+
+    Address targetAddr = sigAddr + view_as<Address>(patchOffset);
+    int patchSize = 2;
+
+    g_PatchReloadHide.Init("ReloadHide_100Pct", targetAddr, patchSize);
+
+    // 幂等性检测：检查是否已全部为 NOP (0x90)
+    bool allNop = true;
+    for (int i = 0; i < patchSize; i++)
+    {
+        if (LoadFromAddress(targetAddr + view_as<Address>(i), NumberType_Int8) != 0x90)
+        {
+            allNop = false;
+            break;
+        }
+    }
+
+    if (allNop)
+    {
+        // 有备份 = 自家补丁，保持旗标；无备份 = 外来已旁路，记 false（无基线可还原）
+        if (!g_PatchReloadHide.hasBackup)
+        {
+            g_PatchReloadHide.isPatched = false;
+            LogError("[BotRouteFix] [Module 5] Reload hide already NOP without baseline @ %X; reload item FAILED.",
+                targetAddr);
+            return false;
+        }
+        LogMessage("[BotRouteFix] [Module 5] Reload hide patch already present @ %X, skipping", targetAddr);
+        return true;
+    }
+
+    // 预检验证：严格比对跳转指令及相邻操作码 (32位: 76 <rel> A1, 64位: 73 <rel> 48 8B)
+    int firstByte = LoadFromAddress(targetAddr, NumberType_Int8);
+    bool isExpected = false;
+    if (g_bIsWin64)
+    {
+        isExpected = (firstByte == 0x73
+            && LoadFromAddress(targetAddr + view_as<Address>(2), NumberType_Int8) == 0x48
+            && LoadFromAddress(targetAddr + view_as<Address>(3), NumberType_Int8) == 0x8B);
+    }
+    else
+    {
+        isExpected = (firstByte == 0x76
+            && LoadFromAddress(targetAddr + view_as<Address>(2), NumberType_Int8) == 0xA1);
+    }
+
+    if (!isExpected)
+    {
+        LogError("[BotRouteFix] [Module 5] Reload hide template mismatch @ %X (expected %s, got %02X), patch aborted!",
+            targetAddr, g_bIsWin64 ? "73 .. 48 8B" : "76 .. A1", firstByte);
+        return false;
+    }
+
+    LogMessage("[BotRouteFix] [Module 5] Reload hide block verified @ %X [%s]",
+        targetAddr, g_bIsWin64 ? "64-bit" : "32-bit");
+    return true;
+}
+
+/**
+ * 事项后端：闪避 dhook 写
+ *
+ * 条件 = m_shouldDodge 偏移 + AttackState::OnEnter Detour 挂载。
+ *
+ * @return              true = 闪避事项后端就绪
+ */
+static bool PrepModule5_DodgeBackend()
+{
+    g_iOffset_AttackShouldDodge = GameConfGetOffset(g_hGameConf, "AttackState_ShouldDodge_Offset");
+    if (g_iOffset_AttackShouldDodge <= 0)
+    {
+        LogError("[BotRouteFix] [Module 5] ShouldDodge offset missing; dodge item FAILED.");
+        return false;
+    }
+
+    if (!MountAttackDodgeDetour())
+    {
+        LogError("[BotRouteFix] [Module 5] AttackState::OnEnter hook unavailable; dodge item FAILED.");
+        return false;
+    }
+
+    return true;
+}
+
+/**
+ * 事项后端：后撤 dhook 写
+ *
+ * 条件 = 全部后撤偏移 + AttackState::OnUpdate Detour 挂载 + IsOutnumbered SDKCall。
+ * 任一后端缺失整条后撤停，不允许只跑残血分支。
+ *
+ * @return              true = 后撤事项后端就绪
+ */
+static bool PrepModule5_RetreatBackend()
+{
     g_iOffset_PinnedDownTimestamp = GameConfGetOffset(g_hGameConf, "AttackState_PinnedDownTimestamp_Offset");
     g_iOffset_MRetreatTimer       = GameConfGetOffset(g_hGameConf, "AttackState_MRetreatTimer_Offset");
     g_iOffset_TimerTimestamp      = GameConfGetOffset(g_hGameConf, "CountdownTimer_Timestamp_Offset");
@@ -152,49 +267,80 @@ bool InitModule5_Combat()
     g_iOffset_NearbyFriendCount   = GameConfGetOffset(g_hGameConf, "CCSBot_NearbyFriendCount_Offset");
     g_iOffset_Task                = GameConfGetOffset(g_hGameConf, "CCSBot_Task_Offset");
 
-    if (g_iOffset_AttackShouldDodge == -1 || g_iOffset_PinnedDownTimestamp == -1 ||
-        g_iOffset_MRetreatTimer == -1 || g_iOffset_TimerTimestamp == -1 || g_iOffset_TimerDuration == -1 ||
-        g_iOffset_NearbyFriendCount == -1 || g_iOffset_Task == -1)
+    bool retreatOffsetsOk = (g_iOffset_PinnedDownTimestamp > 0 && g_iOffset_MRetreatTimer > 0
+        && g_iOffset_TimerTimestamp > 0 && g_iOffset_TimerDuration > 0
+        && g_iOffset_NearbyFriendCount > 0 && g_iOffset_Task > 0);
+    if (!retreatOffsetsOk)
     {
-        LogError("[BotRouteFix] [Module 5] Failed to read one or more combat/retreat offsets from gamedata!");
+        LogError("[BotRouteFix] [Module 5] One or more retreat offsets missing; retreat item FAILED.");
         return false;
     }
 
-    // 2. 挂载 AttackState::OnEnter Post Detour (闪避 100% 强制)
-    if (!MountAttackDodgeDetour())
-    {
-        LogError("[BotRouteFix] [Module 5] Failed to hook AttackState::OnEnter detour!");
-        return false;
-    }
-
-    // 3. 挂载 AttackState::OnUpdate Pre Detour (残血 <35 强制后撤)
     if (!MountAttackRetreatDetour())
     {
-        LogError("[BotRouteFix] [Module 5] Failed to hook AttackState::OnUpdate detour!");
-        delete g_hAttackDodgeDetour;
-        g_hAttackDodgeDetour = null;
+        LogError("[BotRouteFix] [Module 5] AttackState::OnUpdate hook unavailable; retreat item FAILED.");
         return false;
     }
 
-    // 4. 套用业务态（补丁 + 双钩子全成或全败）
-    EnableModule5_Combat(true);
-    if (!g_bModule5_Active)
+    if (g_hSDKCall_IsOutnumbered == null)
     {
-        delete g_hAttackDodgeDetour;
-        delete g_hAttackRetreatDetour;
-        g_hAttackDodgeDetour = null;
-        g_hAttackRetreatDetour = null;
-        LogError("[BotRouteFix] [Module 5] Failed to activate combat overhaul!");
+        LogError("[BotRouteFix] [Module 5] IsOutnumbered SDKCall missing; retreat item FAILED.");
         return false;
     }
 
-    LogMessage("[BotRouteFix] [Module 5] Combat overhaul active (Dodge 100%% + Reload Hide 100%% + Low-HP Retreat @ %d HP + Outnumbered Retreat) [%s]",
-        HEALTH_RETREAT_THRESHOLD, g_bIsWin64 ? "64-bit" : "32-bit");
+    return true;
+}
+
+//========================================================================================
+// MODULE 5 LIFECYCLE
+//========================================================================================
+
+/**
+ * 初始化模块 5 的三个独立事项：换弹掩体 NOP / 闪避 dhook 写 / 后撤（整体）
+ *
+ * 分别准备三条事项链并立即武装；任一失败不拖累其他两条。
+ *
+ * @return              true = 至少一个事项武装成功
+ */
+bool InitModule5_Combat()
+{
+    if (g_hGameConf == null)
+    {
+        LogError("[BotRouteFix] [Module 5] Gamedata missing; all items FAILED.");
+        Item_SetReady(ITEM_M5_RELOAD, false);
+        Item_SetReady(ITEM_M5_DODGE, false);
+        Item_SetReady(ITEM_M5_RETREAT, false);
+        return false;
+    }
+
+    // 1-3. 三个事项的后端准备（偏移/挂钩/SDK 缺一即对应事项 FAILED，互不连带）
+    bool reloadReady = PrepModule5_ReloadBackend();
+    Item_SetReady(ITEM_M5_RELOAD, reloadReady);
+
+    bool dodgeReady = PrepModule5_DodgeBackend();
+    Item_SetReady(ITEM_M5_DODGE, dodgeReady);
+
+    bool retreatReady = PrepModule5_RetreatBackend();
+    Item_SetReady(ITEM_M5_RETREAT, retreatReady);
+
+    // 4. 套用业务态（三个事项独立武装）
+    EnableModule5_Combat(true);
+    if (!Item_IsArmed(ITEM_M5_RELOAD) && !Item_IsArmed(ITEM_M5_DODGE) && !Item_IsArmed(ITEM_M5_RETREAT))
+    {
+        LogError("[BotRouteFix] [Module 5] All combat items failed; module will report FAILED.");
+        return false;
+    }
+
+    LogMessage("[BotRouteFix] [Module 5] Combat items armed (reload=%d, dodge=%d, retreat=%d) [%s]",
+        Item_IsArmed(ITEM_M5_RELOAD), Item_IsArmed(ITEM_M5_DODGE), Item_IsArmed(ITEM_M5_RETREAT),
+        g_bIsWin64 ? "64-bit" : "32-bit");
     return true;
 }
 
 /**
- * 动态启用或停用模块 5（幂等；补丁 + 两钩子同步收敛）
+ * 动态启用或停用模块 5（幂等；三个事项分别武装、分别还原，互不连带）
+ *
+ * @param enable        true = 按事项后端就绪情况武装；false = 解除武装并还原资源
  */
 void EnableModule5_Combat(bool enable)
 {
@@ -205,9 +351,9 @@ void EnableModule5_Combat(bool enable)
 
     if (!enable)
     {
-        SyncDetourEnabled(g_hAttackDodgeDetour, g_bDodgeHooked, true, Hook_AttackState_OnEnter_Post, false, "Module 5");
-        SyncDetourEnabled(g_hAttackRetreatDetour, g_bRetreatHooked, false, Hook_AttackState_OnUpdate_Pre, false, "Module 5");
-        g_PatchReloadHide.Restore();
+        RestoreModule5_ReloadBackend();
+        RestoreModule5_DodgeBackend();
+        RestoreModule5_RetreatBackend();
         for (int i = 0; i <= MaxClients; i++)
         {
             g_flNextForcedRetreat[i] = 0.0;
@@ -216,30 +362,22 @@ void EnableModule5_Combat(bool enable)
         return;
     }
 
-    if (!PrepReloadHidePatch())
+    // ITEM_M5_RELOAD / ITEM_M5_DODGE / ITEM_M5_RETREAT 独立武装；任一事项武装即视为模块部分激活
+    bool reload  = ApplyModule5_ReloadBackend();
+    bool dodge   = ApplyModule5_DodgeBackend();
+    bool retreat = ApplyModule5_RetreatBackend();
+    g_bModule5_Active = (reload || dodge || retreat);
+
+    if (g_bModule5_Active && (!reload || !dodge || !retreat))
     {
-        LogError("[BotRouteFix] [Module 5] Reload hide patch failed, combat module stays inactive!");
-        return;
+        LogError("[BotRouteFix] [Module 5] Partial activation (reload=%d, dodge=%d, retreat=%d).", reload, dodge, retreat);
     }
-
-    bool bDodge   = SyncDetourEnabled(g_hAttackDodgeDetour, g_bDodgeHooked, true, Hook_AttackState_OnEnter_Post, true, "Module 5");
-    bool bRetreat = SyncDetourEnabled(g_hAttackRetreatDetour, g_bRetreatHooked, false, Hook_AttackState_OnUpdate_Pre, true, "Module 5");
-
-    if (!bDodge || !bRetreat)
-    {
-        SyncDetourEnabled(g_hAttackDodgeDetour, g_bDodgeHooked, true, Hook_AttackState_OnEnter_Post, false, "Module 5");
-        SyncDetourEnabled(g_hAttackRetreatDetour, g_bRetreatHooked, false, Hook_AttackState_OnUpdate_Pre, false, "Module 5");
-        g_PatchReloadHide.Restore();
-        g_bModule5_Active = false;
-        LogError("[BotRouteFix] [Module 5] Enable aborted (dodge=%d, retreat=%d), all resources rolled back!", bDodge, bRetreat);
-        return;
-    }
-
-    g_bModule5_Active = true;
 }
 
 /**
- * 还原模块 5（插件卸载：摘钩并释放句柄）
+ * 还原模块 5（插件卸载）
+ *
+ * 逐事项还原后释放 Detour 句柄；NOP 补丁与钩子全部复位。
  */
 void RestoreModule5_Combat()
 {
@@ -260,19 +398,136 @@ void RestoreModule5_Combat()
     LogMessage("[BotRouteFix] [Module 5] Combat hooks and memory patches safely restored.");
 }
 
+//========================================================================================
+// MODULE 5 ITEM APPLY / RESTORE BACKENDS
+//========================================================================================
+
 /**
- * 查询模块 5 业务开启态
+ * 应用换弹掩体 NOP 事项：只有 Prep 已就绪才写入 NOP
+ *
+ * 事项 M5 换弹掩体 NOP 的应用入口；不做定位与校验（那是 Prep 的职责）。
+ * 失败时该事项 FAILED，另两项不受影响。
+ *
+ * @return              true = NOP 已驻留
  */
-bool IsModule5_Active()
+static bool ApplyModule5_ReloadBackend()
 {
-    return g_bModule5_Active;
+    if (!Item_IsReady(ITEM_M5_RELOAD) || g_PatchReloadHide.address == Address_Null)
+    {
+        Item_SetArmed(ITEM_M5_RELOAD, false);
+        return false;
+    }
+
+    if (!g_PatchReloadHide.isPatched)
+    {
+        // NOP 穿透该条件跳转，使掩体分支总是 fallthrough
+        if (!g_PatchReloadHide.NopOut())
+        {
+            Item_SetReady(ITEM_M5_RELOAD, false);
+            Item_SetArmed(ITEM_M5_RELOAD, false);
+            LogError("[BotRouteFix] [Module 5] Reload hide NOP write failed; reload item FAILED.");
+            return false;
+        }
+    }
+
+    Item_SetArmed(ITEM_M5_RELOAD, true);
+    return true;
 }
 
-static bool g_bSniperRetreatWanted[MAXPLAYERS + 1];
-static float g_flSniperRetreatUntil[MAXPLAYERS + 1];
+/**
+ * 应用闪避事项：启用 AttackState::OnEnter Post 钩子
+ *
+ * 事项 M5 闪避 dhook 写的唯一应用入口；失败时该事项 FAILED，另两项不受影响。
+ *
+ * @return              true = Post 钩子已启用
+ */
+static bool ApplyModule5_DodgeBackend()
+{
+    if (!Item_IsReady(ITEM_M5_DODGE) || g_hAttackDodgeDetour == null)
+    {
+        Item_SetArmed(ITEM_M5_DODGE, false);
+        return false;
+    }
+
+    bool ok = SyncDetourEnabled(g_hAttackDodgeDetour, g_bDodgeHooked,
+        true, Hook_AttackState_OnEnter_Post, true, "Module 5");
+    Item_SetArmed(ITEM_M5_DODGE, ok);
+    return ok;
+}
+
+/**
+ * 应用后撤事项：启用 AttackState::OnUpdate Pre 钩子
+ *
+ * 事项 M5 后撤（整体）的唯一应用入口；所有后端（偏移 + Detour + SDKCall）已在 Init
+ * 就绪才允许整条链启用，任一缺失整条后撤停，不允许只跑残血分支。
+ * 失败时该事项 FAILED，另两项不受影响。
+ *
+ * @return              true = Pre 钩子已启用
+ */
+static bool ApplyModule5_RetreatBackend()
+{
+    if (!Item_IsReady(ITEM_M5_RETREAT) || g_hAttackRetreatDetour == null)
+    {
+        Item_SetArmed(ITEM_M5_RETREAT, false);
+        return false;
+    }
+
+    bool ok = SyncDetourEnabled(g_hAttackRetreatDetour, g_bRetreatHooked,
+        false, Hook_AttackState_OnUpdate_Pre, true, "Module 5");
+    Item_SetArmed(ITEM_M5_RETREAT, ok);
+    return ok;
+}
+
+/**
+ * 还原换弹掩体 NOP 事项（写回原始字节并解除武装）
+ */
+static void RestoreModule5_ReloadBackend()
+{
+    g_PatchReloadHide.Restore();
+    Item_SetArmed(ITEM_M5_RELOAD, false);
+}
+
+/**
+ * 还原闪避事项（停用 Post 钩子并解除武装）
+ */
+static void RestoreModule5_DodgeBackend()
+{
+    SyncDetourEnabled(g_hAttackDodgeDetour, g_bDodgeHooked, true, Hook_AttackState_OnEnter_Post, false, "Module 5");
+    Item_SetArmed(ITEM_M5_DODGE, false);
+}
+
+/**
+ * 还原后撤事项（停用 Pre 钩子并解除武装）
+ */
+static void RestoreModule5_RetreatBackend()
+{
+    SyncDetourEnabled(g_hAttackRetreatDetour, g_bRetreatHooked, false, Hook_AttackState_OnUpdate_Pre, false, "Module 5");
+    Item_SetArmed(ITEM_M5_RETREAT, false);
+}
+
+//========================================================================================
+// MODULE 5 PUBLIC GETTERS & TELEMETRY
+//========================================================================================
+
+/**
+ * 查询模块 5 是否至少有一个事项处于武装态
+ *
+ * 供可视化等外部消费者读取；事实依据收敛至 Item_IsArmed 契约。
+ *
+ * @return              true = 至少一个事项已武装
+ */
+bool Module5_IsActive()
+{
+    return (Item_IsArmed(ITEM_M5_RELOAD) || Item_IsArmed(ITEM_M5_DODGE) || Item_IsArmed(ITEM_M5_RETREAT));
+}
 
 /**
  * 模块 11 联动接口：请求对指定 Bot 发起狙击手强制撤退（带 TTL）
+ *
+ * 跨模块请求接口；只登记请求，不改变本模块事项状态。
+ * 请求是否生效由事项 M5 后撤的 Pre 钩子在 TTL 窗口内消费时判定。
+ *
+ * @param client        目标 Bot 客户端索引
  */
 void Combat_RequestSniperRetreat(int client)
 {
@@ -285,7 +540,55 @@ void Combat_RequestSniperRetreat(int client)
 }
 
 /**
+ * 查询累计强制闪避生效次数
+ *
+ * @return              自插件加载以来的累计闪避次数
+ */
+int Module5_GetTotalDodgeForced()
+{
+    return g_iTotalDodgeForced;
+}
+
+/**
+ * 查询累计触发后撤的次数
+ *
+ * @return              自插件加载以来的累计后撤次数
+ */
+int Module5_GetTotalRetreatTriggered()
+{
+    return g_iTotalRetreatTriggered;
+}
+
+/**
+ * 获取 Bot 当前后撤原因 (供可视化子系统渲染特效)
+ *
+ * 跨模块只读 getter，不参与本模块事项状态。
+ *
+ * @param client        客户端索引
+ * @return              RETREAT_REASON_* (若未处于后撤或超时则返回 RETREAT_REASON_NONE)
+ */
+int Module5_GetRetreatReason(int client)
+{
+    if (client < 1 || client > MaxClients || !IsClientInGame(client) || !IsPlayerAlive(client))
+    {
+        return RETREAT_REASON_NONE;
+    }
+
+    if (GetGameTime() < g_flRetreatUntil[client])
+    {
+        return g_iRetreatReason[client];
+    }
+    return RETREAT_REASON_NONE;
+}
+
+//========================================================================================
+// MODULE 5 EVENT HANDLERS
+//========================================================================================
+
+/**
  * 回合开始 (OnRoundStart)：新回合清空残留后撤请求与节流时间戳
+ *
+ * 只清理跨回合状态，不执行战术行为；不受事项武装态门控。
  */
 void Module5_OnRoundStart()
 {
@@ -359,123 +662,15 @@ void Module5_OnClientDisconnect(int client)
     }
 }
 
-/**
- * 查询换弹进掩体补丁是否生效
- */
-bool IsReloadHidePatched()
-{
-    return g_PatchReloadHide.isPatched;
-}
-
-/**
- * 查询闪避 Detour 是否已激活
- */
-bool IsAttackDodgeHooked()
-{
-    return (g_hAttackDodgeDetour != null && g_bDodgeHooked);
-}
-
-/**
- * 查询残血/一打多后撤 Detour 与 IsOutnumbered SDKCall 是否完全就绪
- */
-bool IsAttackRetreatHooked()
-{
-    return (g_hAttackRetreatDetour != null && g_bRetreatHooked && g_hSDKCall_IsOutnumbered != null);
-}
-
-/**
- * 获取累计强制闪避生效次数
- */
-int GetTotalDodgeForced()
-{
-    return g_iTotalDodgeForced;
-}
-
-/**
- * 获取累计触发残血后撤的次数
- */
-int GetTotalRetreatTriggered()
-{
-    return g_iTotalRetreatTriggered;
-}
-
 //========================================================================================
-// PATCH: RELOAD HIDE 100% (NOP CONDITIONAL JUMP)
+// MODULE 5 DETOUR & HOOKS (ATTACKSTATE::ONENTER, POST FOR 100% DODGE)
 //========================================================================================
 
-static bool PrepReloadHidePatch()
-{
-    Address sigAddr = GameConfGetAddress(g_hGameConf, "ReloadCheck_HideChance");
-    if (sigAddr == Address_Null)
-    {
-        LogError("[BotRouteFix] [Module 5] Failed to locate signature for ReloadCheck_HideChance!");
-        return false;
-    }
-
-    int patchOffset = GameConfGetOffset(g_hGameConf, "ReloadHide_PatchOffset");
-    if (patchOffset == -1)
-    {
-        LogError("[BotRouteFix] [Module 5] Failed to read ReloadHide_PatchOffset!");
-        return false;
-    }
-
-    Address targetAddr = sigAddr + view_as<Address>(patchOffset);
-    int patchSize = 2;
-
-    g_PatchReloadHide.Init("ReloadHide_100Pct", targetAddr, patchSize);
-
-    // 幂等性检测：检查是否已全部为 NOP (0x90)
-    bool allNop = true;
-    for (int i = 0; i < patchSize; i++)
-    {
-        if (LoadFromAddress(targetAddr + view_as<Address>(i), NumberType_Int8) != 0x90)
-        {
-            allNop = false;
-            break;
-        }
-    }
-
-    if (allNop)
-    {
-        // 有备份 = 自家补丁，保持旗标；无备份 = 外来已旁路，记 false（无基线可还原）
-        if (!g_PatchReloadHide.hasBackup)
-        {
-            g_PatchReloadHide.isPatched = false;
-        }
-        LogMessage("[BotRouteFix] [Module 5] Reload hide patch already present @ %X, skipping", targetAddr);
-        return true;
-    }
-
-    // 预检验证：严格比对跳转指令及相邻操作码 (32位: 76 <rel> A1, 64位: 73 <rel> 48 8B)
-    int firstByte = LoadFromAddress(targetAddr, NumberType_Int8);
-    bool isExpected = false;
-    if (g_bIsWin64)
-    {
-        isExpected = (firstByte == 0x73
-            && LoadFromAddress(targetAddr + view_as<Address>(2), NumberType_Int8) == 0x48
-            && LoadFromAddress(targetAddr + view_as<Address>(3), NumberType_Int8) == 0x8B);
-    }
-    else
-    {
-        isExpected = (firstByte == 0x76
-            && LoadFromAddress(targetAddr + view_as<Address>(2), NumberType_Int8) == 0xA1);
-    }
-
-    if (!isExpected)
-    {
-        LogError("[BotRouteFix] [Module 5] Reload hide template mismatch @ %X (expected %s, got %02X), patch aborted!",
-            targetAddr, g_bIsWin64 ? "73 .. 48 8B" : "76 .. A1", firstByte);
-        return false;
-    }
-
-    // NOP 掉该条件跳转，使掩体分支总是 fallthrough
-    return g_PatchReloadHide.NopOut();
-}
-
-//========================================================================================
-// DETOUR: ATTACKSTATE::ONENTER (POST HOOK FOR 100% DODGE)
-//========================================================================================
-
+/**
+ * 挂载 AttackState::OnEnter Detour（闪避事项的钩子载体）
+ *
+ * @return              true = Detour 句柄已创建并绑定签名
+ */
 static bool MountAttackDodgeDetour()
 {
     g_hAttackDodgeDetour = DHookCreateDetour(Address_Null, CallConv_THISCALL, ReturnType_Void, ThisPointer_Address);
@@ -498,9 +693,18 @@ static bool MountAttackDodgeDetour()
     return true;
 }
 
+/**
+ * AttackState::OnEnter Post：强制 100% 闪避决策
+ *
+ * 事项 M5 闪避 dhook 写的执行点；只在闪避事项武装时写入。
+ *
+ * @param pThis         AttackState 指针
+ * @param hParams       DHook 参数
+ * @return              MRES_Ignored
+ */
 public MRESReturn Hook_AttackState_OnEnter_Post(Address pThis, DHookParam hParams)
 {
-    if (!g_bModule5_Active)
+    if (!Item_IsArmed(ITEM_M5_DODGE))
     {
         return MRES_Ignored;
     }
@@ -530,9 +734,14 @@ public MRESReturn Hook_AttackState_OnEnter_Post(Address pThis, DHookParam hParam
 }
 
 //========================================================================================
-// DETOUR: ATTACKSTATE::ONUPDATE (PRE HOOK FOR LOW-HEALTH FORCED RETREAT)
+// MODULE 5 DETOUR & HOOKS (ATTACKSTATE::ONUPDATE, PRE FOR FORCED RETREAT)
 //========================================================================================
 
+/**
+ * 挂载 AttackState::OnUpdate Detour（后撤事项的钩子载体）
+ *
+ * @return              true = Detour 句柄已创建并绑定签名
+ */
 static bool MountAttackRetreatDetour()
 {
     g_hAttackRetreatDetour = DHookCreateDetour(Address_Null, CallConv_THISCALL, ReturnType_Void, ThisPointer_Address);
@@ -555,9 +764,19 @@ static bool MountAttackRetreatDetour()
     return true;
 }
 
+/**
+ * AttackState::OnUpdate Pre：残血 / 一打多 / 狙击威胁强制后撤
+ *
+ * 事项 M5 后撤（整体）的执行点；只在后撤事项武装时写入。
+ * 触发源优先级：狙击威慑 > 孤身一打多 > 残血；档位由本模块统一裁决。
+ *
+ * @param pThis         AttackState 指针
+ * @param hParams       DHook 参数
+ * @return              MRES_Ignored
+ */
 public MRESReturn Hook_AttackState_OnUpdate_Pre(Address pThis, DHookParam hParams)
 {
-    if (!g_bModule5_Active)
+    if (!Item_IsArmed(ITEM_M5_RETREAT))
     {
         return MRES_Ignored;
     }
@@ -614,8 +833,8 @@ public MRESReturn Hook_AttackState_OnUpdate_Pre(Address pThis, DHookParam hParam
     else
     {
         // CT 拆包使命：DEFUSE_BOMB 任务即硬豁免
-        // 注：M10 开启时只有首席拿此任务；M10 关闭/降级时全员原生拿 DEFUSE_BOMB，
-        //     硬豁免随任务自动 fail-open，不会出现"无首席即无硬豁免"的真空
+        // 注：M10 开启时仅首席持有该任务；M10 关闭/FAILED 时全员原生持有 DEFUSE_BOMB，
+        //     这是原生任务语义（非 M10 fail-open），不会出现"无首席即无硬豁免"的真空
         if (g_iOffset_Task > 0
             && LoadFromAddress(pBot + view_as<Address>(g_iOffset_Task), NumberType_Int32) == BOT_TASK_DEFUSE_BOMB)
         {
@@ -722,24 +941,4 @@ public MRESReturn Hook_AttackState_OnUpdate_Pre(Address pThis, DHookParam hParam
         // DebugLog("[BotRouteFix] [Module 5] Outnumbered bot %N forced retreat via confirm (no dice)", client);
     }
     return MRES_Ignored;
-}
-
-/**
- * 获取 Bot 当前后撤原因枚举 (供可视化子系统渲染特效)
- *
- * @param client        客户端索引
- * @return              RETREAT_REASON_* (若未处于后撤或超时则返回 RETREAT_REASON_NONE)
- */
-int Module5_GetRetreatReason(int client)
-{
-    if (client < 1 || client > MaxClients || !IsClientInGame(client) || !IsPlayerAlive(client))
-    {
-        return RETREAT_REASON_NONE;
-    }
-
-    if (GetGameTime() < g_flRetreatUntil[client])
-    {
-        return g_iRetreatReason[client];
-    }
-    return RETREAT_REASON_NONE;
 }

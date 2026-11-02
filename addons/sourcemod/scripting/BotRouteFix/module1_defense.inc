@@ -49,7 +49,11 @@
 MemoryPatch g_PatchGuardBombsite;
 MemoryPatch g_PatchDefenseRush;
 
-// 业务开启态（唯一事实来源；底层 isPatched 由 MemoryPatch 自己维护）
+// 守点公式机器码暂存（64 位用前 26 字节，32 位用全部 55 字节；写入长度以补丁 Init 时为准）
+// Prep 构造并校验，Apply 原样写入；不做跨函数动态组装。
+static int g_GuardPatchBytes[55];
+
+// 模块内部启用缓存（仅用于 Enable 幂等短路；业务判据统一用 Item_IsArmed）
 static bool g_bModule1_Active = false;
 
 //========================================================================================
@@ -95,8 +99,7 @@ bool InitModule1_Defense()
 /**
  * 动态启用或停用模块 1（幂等；两个事项分别武装/还原，互不连带）
  *
- * 初次武装由 Init 的 Prep 完成；规则关闭后再开启时，补丁已被还原，
- * 这里只对“已就绪但补丁不在位”的事项重新执行 Prep。
+ * @param enable        true = 按事项后端就绪情况武装；false = 解除武装并还原资源
  */
 void EnableModule1_Defense(bool enable)
 {
@@ -105,44 +108,23 @@ void EnableModule1_Defense(bool enable)
         return;
     }
 
-    if (enable)
+    if (!enable)
     {
-        bool guardArmed = false;
-        if (Item_IsReady(ITEM_M1_GUARD))
-        {
-            if (!g_PatchGuardBombsite.isPatched)
-            {
-                Item_SetReady(ITEM_M1_GUARD, PrepModule1_GuardBackend());
-            }
-            guardArmed = g_PatchGuardBombsite.isPatched;
-        }
-
-        bool rushArmed = false;
-        if (Item_IsReady(ITEM_M1_ANTI_RUSH))
-        {
-            if (!g_PatchDefenseRush.isPatched)
-            {
-                Item_SetReady(ITEM_M1_ANTI_RUSH, PrepModule1_AntiRushBackend());
-            }
-            rushArmed = g_PatchDefenseRush.isPatched;
-        }
-
-        Item_SetArmed(ITEM_M1_GUARD, guardArmed);
-        Item_SetArmed(ITEM_M1_ANTI_RUSH, rushArmed);
-        g_bModule1_Active = (guardArmed || rushArmed);
-
-        if (g_bModule1_Active && (!guardArmed || !rushArmed))
-        {
-            LogError("[BotRouteFix] [Module 1] Partial activation (guard=%d, anti-rush=%d).", guardArmed, rushArmed);
-        }
+        RestoreModule1_GuardBackend();
+        RestoreModule1_AntiRushBackend();
+        g_bModule1_Active = false;
         return;
     }
 
-    RestoreModule1_GuardBackend();
-    RestoreModule1_AntiRushBackend();
-    Item_SetArmed(ITEM_M1_GUARD, false);
-    Item_SetArmed(ITEM_M1_ANTI_RUSH, false);
-    g_bModule1_Active = false;
+    // ITEM_M1_GUARD / ITEM_M1_ANTI_RUSH 独立武装；任一事项武装即视为模块部分激活
+    bool guardArmed = ApplyModule1_GuardBackend();
+    bool rushArmed  = ApplyModule1_AntiRushBackend();
+    g_bModule1_Active = (guardArmed || rushArmed);
+
+    if (g_bModule1_Active && (!guardArmed || !rushArmed))
+    {
+        LogError("[BotRouteFix] [Module 1] Partial activation (guard=%d, anti-rush=%d).", guardArmed, rushArmed);
+    }
 }
 
 /**
@@ -183,11 +165,12 @@ float Module1_CalculateGuardBombsiteChance(int morale)
 //========================================================================================
 
 /**
- * 准备并应用守点概率公式补丁（70 - 10 * Morale）
+ * 事项后端：守点概率公式补丁（70 - 10 * Morale）
  *
- * 事项 M1 guard chance formula 的唯一后端入口；失败时该事项 FAILED，另一事项不受影响。
+ * 只定位目标、校验模板、构造机器码并备份原始字节，不写入补丁（写入由 Apply 执行）。
+ * 任一后端失败都返回 false，Init 会把守点事项标记为 FAILED。
  *
- * @return              是否成功写入补丁
+ * @return              true = 守点事项后端就绪
  */
 static bool PrepModule1_GuardBackend()
 {
@@ -264,7 +247,21 @@ static bool PrepModule1_GuardBackend()
             0x90, 0x90, 0x90                    // +23 3x NOPs 填充
         };
 
-        return g_PatchGuardBombsite.Apply(patchBytes64);
+        // 构造结果暂存入全局缓冲，写入由 ApplyModule1_GuardBackend 执行
+        for (int i = 0; i < 26; i++)
+        {
+            g_GuardPatchBytes[i] = patchBytes64[i];
+        }
+
+        if (!g_PatchGuardBombsite.BackupOriginal())
+        {
+            LogError("[BotRouteFix] [Module 1] Guard patch baseline backup failed; guard item FAILED.");
+            return false;
+        }
+
+        LogMessage("[BotRouteFix] [Module 1] Guard patch block verified @ %X [%s]",
+            targetAddr, g_bIsWin64 ? "64-bit" : "32-bit");
+        return true;
     }
     else
     {
@@ -345,16 +342,22 @@ static bool PrepModule1_GuardBackend()
             patchBytes32[51 + b] = (jbeRel >> (b * 8)) & 0xFF;
         }
 
-        return g_PatchGuardBombsite.Apply(patchBytes32);
-    }
-}
+        // 构造结果暂存入全局缓冲，写入由 ApplyModule1_GuardBackend 执行
+        for (int i = 0; i < 55; i++)
+        {
+            g_GuardPatchBytes[i] = patchBytes32[i];
+        }
 
-/**
- * 还原守点概率公式补丁（写回原始字节）
- */
-static void RestoreModule1_GuardBackend()
-{
-    g_PatchGuardBombsite.Restore();
+        if (!g_PatchGuardBombsite.BackupOriginal())
+        {
+            LogError("[BotRouteFix] [Module 1] Guard patch baseline backup failed; guard item FAILED.");
+            return false;
+        }
+
+        LogMessage("[BotRouteFix] [Module 1] Guard patch block verified @ %X [%s]",
+            targetAddr, g_bIsWin64 ? "64-bit" : "32-bit");
+        return true;
+    }
 }
 
 //========================================================================================
@@ -362,11 +365,12 @@ static void RestoreModule1_GuardBackend()
 //========================================================================================
 
 /**
- * 准备并应用防开局前冲补丁（NOP 穿透 IsDefenseRushing 跳转）
+ * 事项后端：防开局前冲补丁（NOP 穿透 IsDefenseRushing 跳转）
  *
- * 事项 M1 anti-rush NOP 的唯一后端入口；失败时该事项 FAILED，另一事项不受影响。
+ * 只定位目标、校验模板并备份原始字节，不写入补丁（写入由 Apply 执行）。
+ * 任一后端失败都返回 false，Init 会把防前冲事项标记为 FAILED。
  *
- * @return              是否成功写入补丁
+ * @return              true = 防前冲事项后端就绪
  */
 static bool PrepModule1_AntiRushBackend()
 {
@@ -433,14 +437,98 @@ static bool PrepModule1_AntiRushBackend()
         }
     }
 
-    // 写入 6 个 NOP (0x90) 穿透该跳转
-    return g_PatchDefenseRush.NopOut();
+    if (!g_PatchDefenseRush.BackupOriginal())
+    {
+        LogError("[BotRouteFix] [Module 1] Anti-Rush baseline backup failed; anti-rush item FAILED.");
+        return false;
+    }
+
+    LogMessage("[BotRouteFix] [Module 1] Anti-Rush block verified @ %X [%s]",
+        targetAddr, g_bIsWin64 ? "64-bit" : "32-bit");
+    return true;
+}
+
+//========================================================================================
+// MODULE 1 ITEM APPLY / RESTORE BACKENDS
+//========================================================================================
+
+/**
+ * 应用守点概率公式事项：只有 Prep 已就绪才写入补丁
+ *
+ * 事项 M1 guard chance formula 的应用入口；不做定位与校验（那是 Prep 的职责）。
+ * 失败时该事项 FAILED，另一事项不受影响。
+ *
+ * @return              true = 补丁已驻留
+ */
+static bool ApplyModule1_GuardBackend()
+{
+    if (!Item_IsReady(ITEM_M1_GUARD) || g_PatchGuardBombsite.address == Address_Null)
+    {
+        Item_SetArmed(ITEM_M1_GUARD, false);
+        return false;
+    }
+
+    if (!g_PatchGuardBombsite.isPatched)
+    {
+        if (!g_PatchGuardBombsite.Apply(g_GuardPatchBytes))
+        {
+            Item_SetReady(ITEM_M1_GUARD, false);
+            Item_SetArmed(ITEM_M1_GUARD, false);
+            LogError("[BotRouteFix] [Module 1] Guard patch apply failed; guard item FAILED.");
+            return false;
+        }
+    }
+
+    Item_SetArmed(ITEM_M1_GUARD, true);
+    return true;
 }
 
 /**
- * 还原防开局前冲补丁（写回原始字节）
+ * 应用防开局前冲事项：只有 Prep 已就绪才写入 NOP
+ *
+ * 事项 M1 anti-rush NOP 的应用入口；不做定位与校验（那是 Prep 的职责）。
+ * 失败时该事项 FAILED，另一事项不受影响。
+ *
+ * @return              true = NOP 已驻留
+ */
+static bool ApplyModule1_AntiRushBackend()
+{
+    if (!Item_IsReady(ITEM_M1_ANTI_RUSH) || g_PatchDefenseRush.address == Address_Null)
+    {
+        Item_SetArmed(ITEM_M1_ANTI_RUSH, false);
+        return false;
+    }
+
+    if (!g_PatchDefenseRush.isPatched)
+    {
+        // NOP 穿透 IsDefenseRushing 跳转，使 CT 永不进入 rush 弃点分支
+        if (!g_PatchDefenseRush.NopOut())
+        {
+            Item_SetReady(ITEM_M1_ANTI_RUSH, false);
+            Item_SetArmed(ITEM_M1_ANTI_RUSH, false);
+            LogError("[BotRouteFix] [Module 1] Anti-Rush NOP write failed; anti-rush item FAILED.");
+            return false;
+        }
+    }
+
+    Item_SetArmed(ITEM_M1_ANTI_RUSH, true);
+    return true;
+}
+
+/**
+ * 还原守点概率公式补丁（写回原始字节并解除武装）
+ */
+static void RestoreModule1_GuardBackend()
+{
+    g_PatchGuardBombsite.Restore();
+    Item_SetArmed(ITEM_M1_GUARD, false);
+}
+
+/**
+ * 还原防开局前冲补丁（写回原始字节并解除武装）
  */
 static void RestoreModule1_AntiRushBackend()
 {
     g_PatchDefenseRush.Restore();
+    Item_SetArmed(ITEM_M1_ANTI_RUSH, false);
 }

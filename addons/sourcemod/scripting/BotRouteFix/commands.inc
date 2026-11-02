@@ -183,10 +183,36 @@ public Action Command_Status(int client, int args)
     }
     PrintModuleLine(client, 4, "Hunt Target Claim & 45s Bypass", m4Detail);
 
-    Format(detail, sizeof(detail), "total: %d dodges, %d retreats", GetTotalDodgeForced(), GetTotalRetreatTriggered());
-    PrintModuleLine(client, 5, "Combat Dodge / Reload Hide / Retreat", detail);
+    // M5 detail 按实际武装的事项生成：只展示已武装事项的计数器，避免失败事项的数据残留。
+    char m5Detail[128];
+    m5Detail[0] = '\0';
+    if (Item_IsArmed(ITEM_M5_RELOAD))
+    {
+        StrCat(m5Detail, sizeof(m5Detail), "reload-hide NOP");
+    }
+    if (Item_IsArmed(ITEM_M5_DODGE))
+    {
+        if (m5Detail[0] != '\0')
+        {
+            StrCat(m5Detail, sizeof(m5Detail), ", ");
+        }
+        char m5Dodge[48];
+        Format(m5Dodge, sizeof(m5Dodge), "dodge writes (total %d forced)", Module5_GetTotalDodgeForced());
+        StrCat(m5Detail, sizeof(m5Detail), m5Dodge);
+    }
+    if (Item_IsArmed(ITEM_M5_RETREAT))
+    {
+        if (m5Detail[0] != '\0')
+        {
+            StrCat(m5Detail, sizeof(m5Detail), ", ");
+        }
+        char m5Retreat[48];
+        Format(m5Retreat, sizeof(m5Retreat), "retreat (total %d triggered)", Module5_GetTotalRetreatTriggered());
+        StrCat(m5Detail, sizeof(m5Detail), m5Retreat);
+    }
+    PrintModuleLine(client, 5, "Combat Dodge / Reload Hide / Retreat", m5Detail);
 
-    Format(detail, sizeof(detail), "total: %d blocked, %d allowed", GetTotalNoiseIntercepted(), GetTotalNoiseAllowed());
+    Format(detail, sizeof(detail), "total: %d blocked, %d allowed", Module6_GetTotalNoiseIntercepted(), Module6_GetTotalNoiseAllowed());
     PrintModuleLine(client, 6, "T Morale Disposition & Noise Gate", detail);
 
     int carrier = Escort_GetCarrier();
@@ -243,7 +269,22 @@ public Action Command_Status(int client, int args)
             Format(m2PlantDelay, sizeof(m2PlantDelay), " | Plant delay %.1fs", Module2_GetCurrentPlantDelay());
         }
 
-        int liveCarrier = Escort_GetCarrier();
+        // M7 名册是事项数据：武装时读名册缓存，未武装时读全局持包状态并标记 escort 不可用，
+        // 避免展示 M7 停运后的 stale 名册。
+        char m7Escorts[48];
+        int liveCarrier;
+        if (Item_IsArmed(ITEM_M7_ESCORT))
+        {
+            liveCarrier = Escort_GetCarrier();
+            Format(m7Escorts, sizeof(m7Escorts), "%d/%d",
+                Escort_GetBodyguardCount(), Escort_GetTargetCount());
+        }
+        else
+        {
+            liveCarrier = GetC4Carrier();
+            strcopy(m7Escorts, sizeof(m7Escorts), "--/-- (escort disabled)");
+        }
+
         if (IsValidClient(liveCarrier, true))
         {
             char liveMoraleStr[16];
@@ -252,13 +293,13 @@ public Action Command_Status(int client, int args)
 
             if (IsHumanPlayer(liveCarrier))
             {
-                ReplyToCommand(client, "[BotRouteFix] [Live] T Carrier: %N (Human, Team Morale: %d %s) | Escorts %d/%d%s",
-                    liveCarrier, liveMorale, liveMoraleStr, Escort_GetBodyguardCount(), Escort_GetTargetCount(), m2PlantDelay);
+                ReplyToCommand(client, "[BotRouteFix] [Live] T Carrier: %N (Human, Team Morale: %d %s) | Escorts %s%s",
+                    liveCarrier, liveMorale, liveMoraleStr, m7Escorts, m2PlantDelay);
             }
             else
             {
-                ReplyToCommand(client, "[BotRouteFix] [Live] T Carrier: %N (Morale: %d %s) | Escorts %d/%d%s",
-                    liveCarrier, liveMorale, liveMoraleStr, Escort_GetBodyguardCount(), Escort_GetTargetCount(), m2PlantDelay);
+                ReplyToCommand(client, "[BotRouteFix] [Live] T Carrier: %N (Morale: %d %s) | Escorts %s%s",
+                    liveCarrier, liveMorale, liveMoraleStr, m7Escorts, m2PlantDelay);
             }
         }
         else
@@ -279,12 +320,32 @@ public Action Command_Status(int client, int args)
             strcopy(m1GuardChance, sizeof(m1GuardChance), "disabled");
         }
 
+        char m13BuyChance[48];
+        if (Item_IsArmed(ITEM_M13_BUY))
+        {
+            Format(m13BuyChance, sizeof(m13BuyChance), "T %.0f%% / CT %.0f%%",
+                CalculateSniperBuyChance(tMorale), CalculateSniperBuyChance(ctMorale));
+        }
+        else
+        {
+            strcopy(m13BuyChance, sizeof(m13BuyChance), "disabled");
+        }
+
+        char m14RushChance[48];
+        if (Item_IsArmed(ITEM_M14_DEFEND))
+        {
+            Format(m14RushChance, sizeof(m14RushChance), "T %.0f%% / CT %.0f%%",
+                CalculateDefendRushChance(tMorale), CalculateDefendRushChance(ctMorale));
+        }
+        else
+        {
+            strcopy(m14RushChance, sizeof(m14RushChance), "disabled");
+        }
+
         ReplyToCommand(client, "[BotRouteFix] [Live] Bomb: %s | Morale AVG T %d / CT %d",
             g_bBombPlanted ? "PLANTED" : "NOT PLANTED", tMorale, ctMorale);
-        ReplyToCommand(client, "[BotRouteFix] [Live] Dice @ AVG morale - CT Guard: %s | SniperBuy: T %.0f%% / CT %.0f%% | DefendRush: T %.0f%% / CT %.0f%%",
-            m1GuardChance,
-            CalculateSniperBuyChance(tMorale), CalculateSniperBuyChance(ctMorale),
-            CalculateDefendRushChance(tMorale), CalculateDefendRushChance(ctMorale));
+        ReplyToCommand(client, "[BotRouteFix] [Live] Dice @ AVG morale - CT Guard: %s | SniperBuy: %s | DefendRush: %s",
+            m1GuardChance, m13BuyChance, m14RushChance);
     }
 
     ReplyToCommand(client, "[BotRouteFix] ============================================================");

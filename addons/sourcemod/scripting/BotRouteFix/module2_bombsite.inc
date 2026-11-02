@@ -690,6 +690,69 @@ bool Module2_GetTargetBombsitePosition(float pos[3])
 }
 
 /**
+ * 获取距离给定坐标最近的包点世界中心（引擎原生就近语义，供可视化读取）
+ *
+ * 跨模块只读 getter，不参与本模块事项状态；M2 关闭时可视化用它绘制原生下包目标。
+ *
+ * @param fromPos     起点坐标（通常为包匪位置）
+ * @param pos         输出最近包点中心三维坐标
+ * @return            true = 成功解析；false = 容器/偏移不可用
+ */
+bool Module2_GetNativeClosestBombsitePosition(const float fromPos[3], float pos[3])
+{
+    if (g_pTheCSBotsPtr == Address_Null || g_iOffset_ZoneCount <= 0 || g_iOffset_ZoneBase <= 0 || g_iZoneStride <= 0)
+    {
+        return false;
+    }
+
+    Address pTheCSBots = LoadAddressFromAddress(g_pTheCSBotsPtr);
+    if (pTheCSBots == Address_Null)
+    {
+        return false;
+    }
+
+    int zoneCount = LoadFromAddress(pTheCSBots + view_as<Address>(g_iOffset_ZoneCount), NumberType_Int32);
+    if (zoneCount <= 0)
+    {
+        return false;
+    }
+
+    int offsetCenter = g_bIsWin64 ? 140 : 72;
+    int bestZone = -1;
+    float bestDistSq = 0.0;
+
+    for (int i = 0; i < zoneCount; i++)
+    {
+        Address pZone = pTheCSBots + view_as<Address>(g_iOffset_ZoneBase + i * g_iZoneStride);
+        float center[3];
+        center[0] = view_as<float>(LoadFromAddress(pZone + view_as<Address>(offsetCenter),     NumberType_Int32));
+        center[1] = view_as<float>(LoadFromAddress(pZone + view_as<Address>(offsetCenter + 4), NumberType_Int32));
+        center[2] = view_as<float>(LoadFromAddress(pZone + view_as<Address>(offsetCenter + 8), NumberType_Int32));
+
+        float dx = center[0] - fromPos[0];
+        float dy = center[1] - fromPos[1];
+        float dz = center[2] - fromPos[2];
+        float distSq = dx * dx + dy * dy + dz * dz;
+        if (bestZone < 0 || distSq < bestDistSq)
+        {
+            bestZone = i;
+            bestDistSq = distSq;
+        }
+    }
+
+    if (bestZone < 0)
+    {
+        return false;
+    }
+
+    Address pBest = pTheCSBots + view_as<Address>(g_iOffset_ZoneBase + bestZone * g_iZoneStride);
+    pos[0] = view_as<float>(LoadFromAddress(pBest + view_as<Address>(offsetCenter),     NumberType_Int32));
+    pos[1] = view_as<float>(LoadFromAddress(pBest + view_as<Address>(offsetCenter + 4), NumberType_Int32));
+    pos[2] = view_as<float>(LoadFromAddress(pBest + view_as<Address>(offsetCenter + 8), NumberType_Int32));
+    return true;
+}
+
+/**
  * 获取当前对局最早允许下包的时间戳（引擎原生字段，供可视化读取）
  *
  * @return              m_earliestBombPlantTimestamp；不可读时返回 0.0
