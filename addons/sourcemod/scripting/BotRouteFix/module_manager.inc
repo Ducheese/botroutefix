@@ -467,8 +467,8 @@ void ApplyModulesConfig()
         }
 
         LogMessage("[BotRouteFix] [ModuleRules] Applying module rule: '%s'", rule);
-        LogMessage("[BotRouteFix] [ModuleRules] Active modules  : [ %s]", activeList[0] ? activeList : "NONE ");
-        LogMessage("[BotRouteFix] [ModuleRules] Inactive modules: [ %s]", inactiveList[0] ? inactiveList : "NONE ");
+        LogMessage("[BotRouteFix] [ModuleRules] Rule-enabled modules : [ %s]", activeList[0] ? activeList : "NONE ");
+        LogMessage("[BotRouteFix] [ModuleRules] Rule-disabled modules: [ %s]", inactiveList[0] ? inactiveList : "NONE ");
     }
 
     // 逐模块调用底层通断封装

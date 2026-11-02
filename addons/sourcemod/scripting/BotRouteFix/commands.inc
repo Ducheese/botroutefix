@@ -159,11 +159,29 @@ public Action Command_Status(int client, int args)
     }
     PrintModuleLine(client, 2, "T Plant Clock & Site Lock", m2Detail);
 
-    Format(detail, sizeof(detail), "live: %d areas tracked", GetTotalNavAreaCount());
+    Format(detail, sizeof(detail), "live: %d areas tracked", Module3_GetTotalNavAreaCount());
     PrintModuleLine(client, 3, "NavArea Danger Soft-Decay", detail);
 
-    Format(detail, sizeof(detail), "total: %d claims", GetTotalHuntClaims());
-    PrintModuleLine(client, 4, "Hunt Target Claim & 45s Bypass", detail);
+    // M4 detail 按实际武装的事项生成：HuntState 失败时不再展示累计认领数，避免“失败事项还在产出数据”的假象。
+    char m4Detail[128];
+    m4Detail[0] = '\0';
+    if (Item_IsArmed(ITEM_M4_NOP))
+    {
+        StrCat(m4Detail, sizeof(m4Detail), "random-overwrite NOP");
+    }
+    if (Item_IsArmed(ITEM_M4_HUNT))
+    {
+        if (m4Detail[0] != '\0')
+        {
+            StrCat(m4Detail, sizeof(m4Detail), ", ");
+        }
+        StrCat(m4Detail, sizeof(m4Detail), "HuntState writes");
+
+        char m4Claims[48];
+        Format(m4Claims, sizeof(m4Claims), " | total: %d claims", Module4_GetTotalHuntClaims());
+        StrCat(m4Detail, sizeof(m4Detail), m4Claims);
+    }
+    PrintModuleLine(client, 4, "Hunt Target Claim & 45s Bypass", m4Detail);
 
     Format(detail, sizeof(detail), "total: %d dodges, %d retreats", GetTotalDodgeForced(), GetTotalRetreatTriggered());
     PrintModuleLine(client, 5, "Combat Dodge / Reload Hide / Retreat", detail);

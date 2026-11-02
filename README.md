@@ -295,6 +295,85 @@
 
 ---
 
+## 模块代码习惯 (Module Code Conventions)
+
+> M1–M4 重构定稿。M5–M15 迁移时照此执行；本节是风格契约，不是建议。
+
+### 分区横幅
+
+每个模块文件按固定顺序分区（M1 按事项拆成 `ITEM n BACKEND`，其余用集合式 `ITEM BACKENDS`）：
+
+```text
+MODULE X DEFINES & GLOBALS
+MODULE X ITEM BACKENDS [(called by Init [/ MapStart])]
+MODULE X LIFECYCLE
+MODULE X PUBLIC GETTERS [& TELEMETRY / & FORMULA]
+MODULE X EVENT HANDLERS
+MODULE X ... PRIMITIVES / DETOUR & HOOKS / ITEM APPLY / RESTORE BACKENDS
+```
+
+调用顺序从上往下可读：`Prep → Mount → Lifecycle → Public → Events → Hooks → Apply/Restore → Validation`。被调用者尽量出现在调用者附近（如 M4 的 `MountHuntStateDetour` 紧跟 `PrepModule4_HuntBackend`），而不是扔在文件尾。
+
+### 函数命名
+
+| 角色 | 命名 | 例 |
+| :--- | :--- | :--- |
+| 生命周期 | `Init / Enable / Restore + ModuleX_<动词>` | `InitModule3_Danger` / `EnableModule4_Hunt` / `RestoreModule2_Bombsite` |
+| 事项后端 | `Prep / Apply / Restore + ModuleX_<事项> + Backend`，一律 `static` | `PrepModule1_GuardBackend` / `ApplyModule4_HuntBackend` |
+| 事件处理 | `ModuleX_On<Event>` | `Module3_OnRoundStart` / `Module2_OnRoundFreezeEnd` |
+| 公共读取 | `ModuleX_<动词><名词>` | `Module2_IsBombsiteLocked` / `Module4_GetTotalHuntClaims` |
+| 内部公式/原语 | 描述性命名，一律 `static` | `CalculatePlantDelay` / `DecayAllNavAreaDanger` |
+
+散查询（`IsModuleX_Active` / `Is...Patched`）不再作为公共接口；状态唯一出口是 `items.inc` + `status` 命令。
+
+### 函数头注释
+
+每个函数必须有头注释，且必须写清三件事：
+
+1. 这个函数属于哪个事项（如“事项 M4 HuntState dhook writes 的唯一后端入口”）；
+2. 失败语义（如“失败时该事项 FAILED，另一事项不受影响”）；
+3. 特殊豁免必须显式标注（如 M3 `OnMapStart` 的“【例外：不随业务态守卫】”）。
+
+### 生命周期链（固定模板）
+
+```sourcepawn
+Init:
+  GameConf 缺失 -> 全部事项 Ready=false, return false;
+  PrepModuleX_<A>Backend(); PrepModuleX_<B>Backend();
+  Item_SetReady(ITEM_MX_A, aReady); Item_SetReady(ITEM_MX_B, bReady);
+  EnableModuleX(true);
+  return (至少一件 Armed);
+
+Enable(true):
+  只武装 Ready 的事项；失败只清对应事项的 Armed，不回滚另一件；
+  g_bModuleX_Active = OR(Armed)；部分成功打 Partial activation 日志（全败不打）。
+
+Enable(false) / Restore:
+  逐事项 Restore 后端 + Item_SetArmed(false)。
+```
+
+- `g_bModuleX_Active` 只是 `Enable` 幂等短路的内部缓存；业务判据一律 `Item_IsArmed`。
+- `Prep` 只回答“能不能用”（定位/校验/备份），`Apply` 回答“这次生不生效”（写补丁/挂钩子）；无常驻资源的事项（如 M3）可以没有 `Apply`。
+- 单事项模块不可能 `DEGRADED`（如 M3）；双事项以上才可能（如 M1/M2/M4）。
+
+### 事件门控
+
+事件处理函数第一行必须是事项门控，不看模块级 `Active`：
+
+```sourcepawn
+if (!Item_IsArmed(ITEM_M2_LOCK)) return;
+```
+
+可视化/调试读取是跨模块 getter，不参与事项状态（见“调试可视化”）。
+
+### 日志用词
+
+- `[ModuleRules]` 只说规则意图：`Rule-enabled modules` / `Rule-disabled modules`，不说 Active/Inactive。
+- 事项失败用 `LogError`，必须带模块号和事项名（如 `[Module 4] ... HuntState item FAILED`）。
+- `status` 行：`INACTIVE` 显示 `disabled by rule`；`FAILED` 显示 `items x/y armed (x/y ready) | failed: <事项名>`，不拼宣传性 detail；`DEGRADED` 才追加活跃事项的实时 detail。
+
+---
+
 ## 目录结构
 
 ```
