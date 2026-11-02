@@ -242,7 +242,7 @@ public Action Timer_RenderVisualsFast(Handle timer)
     //------------------------------------------------------------------------------------
     // [M5] 战斗后撤三色标识 (不画贴地光圈，用 TE_SetupBeamFollow 拖尾)
     //------------------------------------------------------------------------------------
-    if (Module5_IsActive())
+    if (Item_IsArmed(ITEM_M5_RETREAT))
     {
         static const int colorM5_LowHp[4]       = {255, 30, 30, 220};     // 残血：红色
         static const int colorM5_Outnumbered[4] = {180, 0, 255, 220};    // 一打多：紫色
@@ -331,9 +331,9 @@ public Action Timer_RenderVisualsFast(Handle timer)
     //------------------------------------------------------------------------------------
     // [M7] 保镖连包匪的绿色光索
     //------------------------------------------------------------------------------------
-    if (IsModule7_Active())
+    if (Item_IsArmed(ITEM_M7_ESCORT))
     {
-        int carrier = Escort_GetCarrier();
+        int carrier = Module7_GetCarrier();
         if (carrier > 0 && carrier <= MaxClients && IsClientInGame(carrier) && IsPlayerAlive(carrier))
         {
             int bodyguards[MAXPLAYERS + 1];
@@ -359,7 +359,7 @@ public Action Timer_RenderVisualsFast(Handle timer)
     //------------------------------------------------------------------------------------
     // [M8] 死锁打破电光冲击波 (跟随人物)
     //------------------------------------------------------------------------------------
-    if (IsModule8_Active())
+    if (Item_IsArmed(ITEM_M8_DEADLOCK))
     {
         static const int colorM8Deadlock[4] = {150, 220, 255, 255}; // 白蓝色电光
 
@@ -388,7 +388,7 @@ public Action Timer_RenderVisualsFast(Handle timer)
     //------------------------------------------------------------------------------------
     // [M9] 捡包花名册 T 连掉落 C4
     //------------------------------------------------------------------------------------
-    if (IsModule9_Active())
+    if (Item_IsArmed(ITEM_M9_LOOT))
     {
         int roster[LOOT_ROSTER_SIZE];
         float c4Pos[3];
@@ -412,7 +412,7 @@ public Action Timer_RenderVisualsFast(Handle timer)
     //------------------------------------------------------------------------------------
     // [M10] 首席拆包 CT 直连安放 C4 激光
     //------------------------------------------------------------------------------------
-    if (IsModule10_Active())
+    if (Item_IsArmed(ITEM_M10_DEFUSE))
     {
         float c4Pos[3];
         int chief = Module10_GetChiefDefuser(c4Pos);
@@ -449,7 +449,7 @@ public Action Timer_RenderVisualsSlow(Handle timer)
     //------------------------------------------------------------------------------------
     // [M8] 堵路 NavArea 红色 3D 警戒框 (持续至少 1 分钟)
     //------------------------------------------------------------------------------------
-    if (IsModule8_Active())
+    if (Item_IsArmed(ITEM_M8_QUEUE))
     {
         Address areas[MAX_BLOCKED_AREAS];
         float expires[MAX_BLOCKED_AREAS];

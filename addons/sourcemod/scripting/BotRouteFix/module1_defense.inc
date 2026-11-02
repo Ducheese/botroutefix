@@ -57,110 +57,6 @@ static int g_GuardPatchBytes[55];
 static bool g_bModule1_Active = false;
 
 //========================================================================================
-// MODULE 1 LIFECYCLE
-//========================================================================================
-
-/**
- * 初始化模块 1 的两个独立事项：守点公式与防前冲
- *
- * 分别准备两条事项链并立即武装；任一失败不拖累另一条。
- *
- * @return              是否至少有一个事项武装成功
- */
-bool InitModule1_Defense()
-{
-    if (g_hGameConf == null)
-    {
-        LogError("[BotRouteFix] [Module 1] Gamedata missing; both items FAILED.");
-        Item_SetReady(ITEM_M1_GUARD, false);
-        Item_SetReady(ITEM_M1_ANTI_RUSH, false);
-        return false;
-    }
-
-    bool guardReady = PrepModule1_GuardBackend();
-    bool rushReady  = PrepModule1_AntiRushBackend();
-
-    Item_SetReady(ITEM_M1_GUARD, guardReady);
-    Item_SetReady(ITEM_M1_ANTI_RUSH, rushReady);
-
-    EnableModule1_Defense(true);
-    if (!g_bModule1_Active)
-    {
-        LogError("[BotRouteFix] [Module 1] Both defense items failed; module will report FAILED.");
-        return false;
-    }
-
-    LogMessage("[BotRouteFix] [Module 1] Defense items armed (guard=%d, anti-rush=%d) [%s]",
-        Item_IsArmed(ITEM_M1_GUARD), Item_IsArmed(ITEM_M1_ANTI_RUSH),
-        g_bIsWin64 ? "64-bit" : "32-bit");
-    return true;
-}
-
-/**
- * 动态启用或停用模块 1（幂等；两个事项分别武装/还原，互不连带）
- *
- * @param enable        true = 按事项后端就绪情况武装；false = 解除武装并还原资源
- */
-void EnableModule1_Defense(bool enable)
-{
-    if (enable == g_bModule1_Active)
-    {
-        return;
-    }
-
-    if (!enable)
-    {
-        RestoreModule1_GuardBackend();
-        RestoreModule1_AntiRushBackend();
-        g_bModule1_Active = false;
-        return;
-    }
-
-    // ITEM_M1_GUARD / ITEM_M1_ANTI_RUSH 独立武装；任一事项武装即视为模块部分激活
-    bool guardArmed = ApplyModule1_GuardBackend();
-    bool rushArmed  = ApplyModule1_AntiRushBackend();
-    g_bModule1_Active = (guardArmed || rushArmed);
-
-    if (g_bModule1_Active && (!guardArmed || !rushArmed))
-    {
-        LogError("[BotRouteFix] [Module 1] Partial activation (guard=%d, anti-rush=%d).", guardArmed, rushArmed);
-    }
-}
-
-/**
- * 还原模块 1（插件卸载：恢复原始字节并复位业务态）
- */
-void RestoreModule1_Defense()
-{
-    EnableModule1_Defense(false);
-    LogMessage("[BotRouteFix] [Module 1] Patches safely restored to original bytes.");
-}
-
-//========================================================================================
-// MODULE 1 PUBLIC API / FORMULA
-//========================================================================================
-
-/**
- * 计算给定士气值对应的理论守点概率 (百分比 0.0 ~ 100.0)
- *
- * @param morale        Bot 士气数值 (-3 ~ +3)
- * @return              守点概率 (0.0 ~ 100.0)
- */
-float Module1_CalculateGuardBombsiteChance(int morale)
-{
-    float chance = GUARD_CHANCE_BASE - GUARD_CHANCE_STEP * float(morale);
-    if (chance > GUARD_CHANCE_MAX)
-    {
-        chance = GUARD_CHANCE_MAX;
-    }
-    if (chance < GUARD_CHANCE_MIN)
-    {
-        chance = GUARD_CHANCE_MIN;
-    }
-    return chance;
-}
-
-//========================================================================================
 // ITEM 1 BACKEND: GUARD BOMBSITE CHANCE FORMULA REWRITE (70 - 10 * Morale)
 //========================================================================================
 
@@ -446,6 +342,110 @@ static bool PrepModule1_AntiRushBackend()
     LogMessage("[BotRouteFix] [Module 1] Anti-Rush block verified @ %X [%s]",
         targetAddr, g_bIsWin64 ? "64-bit" : "32-bit");
     return true;
+}
+
+//========================================================================================
+// MODULE 1 LIFECYCLE
+//========================================================================================
+
+/**
+ * 初始化模块 1 的两个独立事项：守点公式与防前冲
+ *
+ * 分别准备两条事项链并立即武装；任一失败不拖累另一条。
+ *
+ * @return              是否至少有一个事项武装成功
+ */
+bool InitModule1_Defense()
+{
+    if (g_hGameConf == null)
+    {
+        LogError("[BotRouteFix] [Module 1] Gamedata missing; both items FAILED.");
+        Item_SetReady(ITEM_M1_GUARD, false);
+        Item_SetReady(ITEM_M1_ANTI_RUSH, false);
+        return false;
+    }
+
+    bool guardReady = PrepModule1_GuardBackend();
+    bool rushReady  = PrepModule1_AntiRushBackend();
+
+    Item_SetReady(ITEM_M1_GUARD, guardReady);
+    Item_SetReady(ITEM_M1_ANTI_RUSH, rushReady);
+
+    EnableModule1_Defense(true);
+    if (!g_bModule1_Active)
+    {
+        LogError("[BotRouteFix] [Module 1] Both defense items failed; module will report FAILED.");
+        return false;
+    }
+
+    LogMessage("[BotRouteFix] [Module 1] Defense items armed (guard=%d, anti-rush=%d) [%s]",
+        Item_IsArmed(ITEM_M1_GUARD), Item_IsArmed(ITEM_M1_ANTI_RUSH),
+        g_bIsWin64 ? "64-bit" : "32-bit");
+    return true;
+}
+
+/**
+ * 动态启用或停用模块 1（幂等；两个事项分别武装/还原，互不连带）
+ *
+ * @param enable        true = 按事项后端就绪情况武装；false = 解除武装并还原资源
+ */
+void EnableModule1_Defense(bool enable)
+{
+    if (enable == g_bModule1_Active)
+    {
+        return;
+    }
+
+    if (!enable)
+    {
+        RestoreModule1_GuardBackend();
+        RestoreModule1_AntiRushBackend();
+        g_bModule1_Active = false;
+        return;
+    }
+
+    // ITEM_M1_GUARD / ITEM_M1_ANTI_RUSH 独立武装；任一事项武装即视为模块部分激活
+    bool guardArmed = ApplyModule1_GuardBackend();
+    bool rushArmed  = ApplyModule1_AntiRushBackend();
+    g_bModule1_Active = (guardArmed || rushArmed);
+
+    if (g_bModule1_Active && (!guardArmed || !rushArmed))
+    {
+        LogError("[BotRouteFix] [Module 1] Partial activation (guard=%d, anti-rush=%d).", guardArmed, rushArmed);
+    }
+}
+
+/**
+ * 还原模块 1（插件卸载：恢复原始字节并复位业务态）
+ */
+void RestoreModule1_Defense()
+{
+    EnableModule1_Defense(false);
+    LogMessage("[BotRouteFix] [Module 1] Patches safely restored to original bytes.");
+}
+
+//========================================================================================
+// MODULE 1 PUBLIC API / FORMULA
+//========================================================================================
+
+/**
+ * 计算给定士气值对应的理论守点概率 (百分比 0.0 ~ 100.0)
+ *
+ * @param morale        Bot 士气数值 (-3 ~ +3)
+ * @return              守点概率 (0.0 ~ 100.0)
+ */
+float Module1_CalculateGuardBombsiteChance(int morale)
+{
+    float chance = GUARD_CHANCE_BASE - GUARD_CHANCE_STEP * float(morale);
+    if (chance > GUARD_CHANCE_MAX)
+    {
+        chance = GUARD_CHANCE_MAX;
+    }
+    if (chance < GUARD_CHANCE_MIN)
+    {
+        chance = GUARD_CHANCE_MIN;
+    }
+    return chance;
 }
 
 //========================================================================================

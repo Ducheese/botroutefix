@@ -351,7 +351,7 @@ void Module2_OnMapStart()
  */
 void Module2_OnRoundFreezeEnd()
 {
-    if (!g_bModule2_Active)
+    if (!Item_IsArmed(ITEM_M2_CLOCK) && !Item_IsArmed(ITEM_M2_LOCK))
     {
         return;
     }

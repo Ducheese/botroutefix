@@ -181,40 +181,6 @@ void RestoreModule6_TMorale()
 }
 
 //========================================================================================
-// MODULE 6 ITEM APPLY / RESTORE BACKENDS
-//========================================================================================
-
-/**
- * 应用噪声事项：启用 InvestigateNoise Pre 钩子
- *
- * 事项 M6 噪声控制的唯一应用入口；失败时该事项 FAILED。
- *
- * @return              true = Pre 钩子已启用
- */
-static bool ApplyModule6_NoiseBackend()
-{
-    if (!Item_IsReady(ITEM_M6_NOISE) || g_hInvestigateNoiseDetour == null)
-    {
-        Item_SetArmed(ITEM_M6_NOISE, false);
-        return false;
-    }
-
-    bool ok = SyncDetourEnabled(g_hInvestigateNoiseDetour, g_bNoiseDetourEnabled,
-        false, Hook_InvestigateNoise_Pre, true, "Module 6");
-    Item_SetArmed(ITEM_M6_NOISE, ok);
-    return ok;
-}
-
-/**
- * 还原噪声事项：停用 Pre 钩子并解除武装
- */
-static void RestoreModule6_NoiseBackend()
-{
-    SyncDetourEnabled(g_hInvestigateNoiseDetour, g_bNoiseDetourEnabled, false, Hook_InvestigateNoise_Pre, false, "Module 6");
-    Item_SetArmed(ITEM_M6_NOISE, false);
-}
-
-//========================================================================================
 // MODULE 6 PUBLIC GETTERS & TELEMETRY
 //========================================================================================
 
@@ -318,82 +284,6 @@ void Module6_OnBombPlanted()
     }
 
     ApplyPlantedBombTMoraleDisposition();
-}
-
-//========================================================================================
-// MODULE 6 DISPOSITION PRIMITIVES
-//========================================================================================
-
-/**
- * 根据持包者士气更新其接战策略
- * 低士气 (<= -1) -> OPPORTUNITY_FIRE (1) 专注运包
- * 高士气 (>= 0)  -> ENGAGE_AND_INVESTIGATE (0)
- *
- * 内部原语，只被本模块事件处理调用。
- */
-static void ApplyCarrierMoraleDisposition()
-{
-    int carrier = GetC4Carrier();
-    if (!IsBot(carrier, true))
-    {
-        return;
-    }
-
-    Address pCarrier = GetEntityAddress(carrier);
-    if (pCarrier == Address_Null || g_iOffset_Morale <= 0 || g_iOffset_Disposition <= 0)
-    {
-        return;
-    }
-
-    int morale = GetBotMorale(carrier);
-    if (morale <= MORALE_HOLD_THRESHOLD)
-    {
-        StoreToAddress(pCarrier + view_as<Address>(g_iOffset_Disposition), 1, NumberType_Int32); // OPPORTUNITY_FIRE
-        DebugLog("[BotRouteFix] [Module 6] C4 Carrier %N (Morale %d) set to OPPORTUNITY_FIRE (Focused Plant)", carrier, morale);
-    }
-    else
-    {
-        StoreToAddress(pCarrier + view_as<Address>(g_iOffset_Disposition), 0, NumberType_Int32); // ENGAGE_AND_INVESTIGATE
-        DebugLog("[BotRouteFix] [Module 6] C4 Carrier %N (Morale %d) kept as ENGAGE_AND_INVESTIGATE", carrier, morale);
-    }
-}
-
-/**
- * 下包后根据全队 T 士气配置守点梯度
- * 低士气 (<= -1) -> OPPORTUNITY_FIRE (1) 死守掩体
- * 高士气 (>= 0)  -> ENGAGE_AND_INVESTIGATE (0) 动态架枪
- *
- * 内部原语，只被本模块事件处理调用。
- */
-static void ApplyPlantedBombTMoraleDisposition()
-{
-    for (int i = 1; i <= MaxClients; i++)
-    {
-        if (IsTeamBot(i, 2, true))
-        {
-            Address pBot = GetEntityAddress(i);
-            if (pBot == Address_Null || g_iOffset_Morale <= 0 || g_iOffset_Disposition <= 0)
-            {
-                continue;
-            }
-
-            int morale = GetBotMorale(i);
-            if (morale <= MORALE_HOLD_THRESHOLD)
-            {
-                StoreToAddress(pBot + view_as<Address>(g_iOffset_Disposition), 1, NumberType_Int32); // OPPORTUNITY_FIRE
-                if (g_iOffset_NoiseTimestamp > 0)
-                {
-                    StoreToAddress(pBot + view_as<Address>(g_iOffset_NoiseTimestamp), view_as<int>(0.0), NumberType_Int32);
-                }
-                DebugLog("[BotRouteFix] [Module 6] Post-Plant T %N (Morale %d) -> OPPORTUNITY_FIRE (Site Camp)", i, morale);
-            }
-            else
-            {
-                StoreToAddress(pBot + view_as<Address>(g_iOffset_Disposition), 0, NumberType_Int32); // ENGAGE_AND_INVESTIGATE
-                DebugLog("[BotRouteFix] [Module 6] Post-Plant T %N (Morale %d) -> ENGAGE_AND_INVESTIGATE (Dynamic Guard)", i, morale);
-            }
-        }
-    }
 }
 
 //========================================================================================
@@ -532,4 +422,114 @@ public MRESReturn Hook_InvestigateNoise_Pre(int client, DHookParam hParams)
     DebugLog("[BotRouteFix] [Module 6] Bot %N allowed to investigate noise (dist %.1f, morale %d)",
         client, dist, morale);
     return MRES_Ignored;
+}
+
+//========================================================================================
+// MODULE 6 ITEM APPLY / RESTORE BACKENDS
+//========================================================================================
+
+/**
+ * 应用噪声事项：启用 InvestigateNoise Pre 钩子
+ *
+ * 事项 M6 噪声控制的唯一应用入口；失败时该事项 FAILED。
+ *
+ * @return              true = Pre 钩子已启用
+ */
+static bool ApplyModule6_NoiseBackend()
+{
+    if (!Item_IsReady(ITEM_M6_NOISE) || g_hInvestigateNoiseDetour == null)
+    {
+        Item_SetArmed(ITEM_M6_NOISE, false);
+        return false;
+    }
+
+    bool ok = SyncDetourEnabled(g_hInvestigateNoiseDetour, g_bNoiseDetourEnabled,
+        false, Hook_InvestigateNoise_Pre, true, "Module 6");
+    Item_SetArmed(ITEM_M6_NOISE, ok);
+    return ok;
+}
+
+/**
+ * 还原噪声事项：停用 Pre 钩子并解除武装
+ */
+static void RestoreModule6_NoiseBackend()
+{
+    SyncDetourEnabled(g_hInvestigateNoiseDetour, g_bNoiseDetourEnabled, false, Hook_InvestigateNoise_Pre, false, "Module 6");
+    Item_SetArmed(ITEM_M6_NOISE, false);
+}
+
+//========================================================================================
+// MODULE 6 DISPOSITION PRIMITIVES
+//========================================================================================
+
+/**
+ * 根据持包者士气更新其接战策略
+ * 低士气 (<= -1) -> OPPORTUNITY_FIRE (1) 专注运包
+ * 高士气 (>= 0)  -> ENGAGE_AND_INVESTIGATE (0)
+ *
+ * 内部原语，只被本模块事件处理调用。
+ */
+static void ApplyCarrierMoraleDisposition()
+{
+    int carrier = GetC4Carrier();
+    if (!IsBot(carrier, true))
+    {
+        return;
+    }
+
+    Address pCarrier = GetEntityAddress(carrier);
+    if (pCarrier == Address_Null || g_iOffset_Morale <= 0 || g_iOffset_Disposition <= 0)
+    {
+        return;
+    }
+
+    int morale = GetBotMorale(carrier);
+    if (morale <= MORALE_HOLD_THRESHOLD)
+    {
+        StoreToAddress(pCarrier + view_as<Address>(g_iOffset_Disposition), 1, NumberType_Int32); // OPPORTUNITY_FIRE
+        DebugLog("[BotRouteFix] [Module 6] C4 Carrier %N (Morale %d) set to OPPORTUNITY_FIRE (Focused Plant)", carrier, morale);
+    }
+    else
+    {
+        StoreToAddress(pCarrier + view_as<Address>(g_iOffset_Disposition), 0, NumberType_Int32); // ENGAGE_AND_INVESTIGATE
+        DebugLog("[BotRouteFix] [Module 6] C4 Carrier %N (Morale %d) kept as ENGAGE_AND_INVESTIGATE", carrier, morale);
+    }
+}
+
+/**
+ * 下包后根据全队 T 士气配置守点梯度
+ * 低士气 (<= -1) -> OPPORTUNITY_FIRE (1) 死守掩体
+ * 高士气 (>= 0)  -> ENGAGE_AND_INVESTIGATE (0) 动态架枪
+ *
+ * 内部原语，只被本模块事件处理调用。
+ */
+static void ApplyPlantedBombTMoraleDisposition()
+{
+    for (int i = 1; i <= MaxClients; i++)
+    {
+        if (IsTeamBot(i, 2, true))
+        {
+            Address pBot = GetEntityAddress(i);
+            if (pBot == Address_Null || g_iOffset_Morale <= 0 || g_iOffset_Disposition <= 0)
+            {
+                continue;
+            }
+
+            int morale = GetBotMorale(i);
+            if (morale <= MORALE_HOLD_THRESHOLD)
+            {
+                StoreToAddress(pBot + view_as<Address>(g_iOffset_Disposition), 1, NumberType_Int32); // OPPORTUNITY_FIRE
+                if (g_iOffset_NoiseTimestamp > 0)
+                {
+                    StoreToAddress(pBot + view_as<Address>(g_iOffset_NoiseTimestamp), view_as<int>(0.0), NumberType_Int32);
+                }
+                DebugLog("[BotRouteFix] [Module 6] Post-Plant T %N (Morale %d) -> OPPORTUNITY_FIRE (Site Camp)", i, morale);
+            }
+            else
+            {
+                StoreToAddress(pBot + view_as<Address>(g_iOffset_Disposition), 0, NumberType_Int32); // ENGAGE_AND_INVESTIGATE
+                DebugLog("[BotRouteFix] [Module 6] Post-Plant T %N (Morale %d) -> ENGAGE_AND_INVESTIGATE (Dynamic Guard)", i, morale);
+            }
+        }
+    }
 }

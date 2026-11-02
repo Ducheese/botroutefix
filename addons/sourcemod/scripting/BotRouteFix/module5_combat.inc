@@ -398,128 +398,11 @@ void RestoreModule5_Combat()
     LogMessage("[BotRouteFix] [Module 5] Combat hooks and memory patches safely restored.");
 }
 
-//========================================================================================
-// MODULE 5 ITEM APPLY / RESTORE BACKENDS
-//========================================================================================
-
-/**
- * 应用换弹掩体 NOP 事项：只有 Prep 已就绪才写入 NOP
- *
- * 事项 M5 换弹掩体 NOP 的应用入口；不做定位与校验（那是 Prep 的职责）。
- * 失败时该事项 FAILED，另两项不受影响。
- *
- * @return              true = NOP 已驻留
- */
-static bool ApplyModule5_ReloadBackend()
-{
-    if (!Item_IsReady(ITEM_M5_RELOAD) || g_PatchReloadHide.address == Address_Null)
-    {
-        Item_SetArmed(ITEM_M5_RELOAD, false);
-        return false;
-    }
-
-    if (!g_PatchReloadHide.isPatched)
-    {
-        // NOP 穿透该条件跳转，使掩体分支总是 fallthrough
-        if (!g_PatchReloadHide.NopOut())
-        {
-            Item_SetReady(ITEM_M5_RELOAD, false);
-            Item_SetArmed(ITEM_M5_RELOAD, false);
-            LogError("[BotRouteFix] [Module 5] Reload hide NOP write failed; reload item FAILED.");
-            return false;
-        }
-    }
-
-    Item_SetArmed(ITEM_M5_RELOAD, true);
-    return true;
-}
-
-/**
- * 应用闪避事项：启用 AttackState::OnEnter Post 钩子
- *
- * 事项 M5 闪避 dhook 写的唯一应用入口；失败时该事项 FAILED，另两项不受影响。
- *
- * @return              true = Post 钩子已启用
- */
-static bool ApplyModule5_DodgeBackend()
-{
-    if (!Item_IsReady(ITEM_M5_DODGE) || g_hAttackDodgeDetour == null)
-    {
-        Item_SetArmed(ITEM_M5_DODGE, false);
-        return false;
-    }
-
-    bool ok = SyncDetourEnabled(g_hAttackDodgeDetour, g_bDodgeHooked,
-        true, Hook_AttackState_OnEnter_Post, true, "Module 5");
-    Item_SetArmed(ITEM_M5_DODGE, ok);
-    return ok;
-}
-
-/**
- * 应用后撤事项：启用 AttackState::OnUpdate Pre 钩子
- *
- * 事项 M5 后撤（整体）的唯一应用入口；所有后端（偏移 + Detour + SDKCall）已在 Init
- * 就绪才允许整条链启用，任一缺失整条后撤停，不允许只跑残血分支。
- * 失败时该事项 FAILED，另两项不受影响。
- *
- * @return              true = Pre 钩子已启用
- */
-static bool ApplyModule5_RetreatBackend()
-{
-    if (!Item_IsReady(ITEM_M5_RETREAT) || g_hAttackRetreatDetour == null)
-    {
-        Item_SetArmed(ITEM_M5_RETREAT, false);
-        return false;
-    }
-
-    bool ok = SyncDetourEnabled(g_hAttackRetreatDetour, g_bRetreatHooked,
-        false, Hook_AttackState_OnUpdate_Pre, true, "Module 5");
-    Item_SetArmed(ITEM_M5_RETREAT, ok);
-    return ok;
-}
-
-/**
- * 还原换弹掩体 NOP 事项（写回原始字节并解除武装）
- */
-static void RestoreModule5_ReloadBackend()
-{
-    g_PatchReloadHide.Restore();
-    Item_SetArmed(ITEM_M5_RELOAD, false);
-}
-
-/**
- * 还原闪避事项（停用 Post 钩子并解除武装）
- */
-static void RestoreModule5_DodgeBackend()
-{
-    SyncDetourEnabled(g_hAttackDodgeDetour, g_bDodgeHooked, true, Hook_AttackState_OnEnter_Post, false, "Module 5");
-    Item_SetArmed(ITEM_M5_DODGE, false);
-}
-
-/**
- * 还原后撤事项（停用 Pre 钩子并解除武装）
- */
-static void RestoreModule5_RetreatBackend()
-{
-    SyncDetourEnabled(g_hAttackRetreatDetour, g_bRetreatHooked, false, Hook_AttackState_OnUpdate_Pre, false, "Module 5");
-    Item_SetArmed(ITEM_M5_RETREAT, false);
-}
 
 //========================================================================================
 // MODULE 5 PUBLIC GETTERS & TELEMETRY
 //========================================================================================
 
-/**
- * 查询模块 5 是否至少有一个事项处于武装态
- *
- * 供可视化等外部消费者读取；事实依据收敛至 Item_IsArmed 契约。
- *
- * @return              true = 至少一个事项已武装
- */
-bool Module5_IsActive()
-{
-    return (Item_IsArmed(ITEM_M5_RELOAD) || Item_IsArmed(ITEM_M5_DODGE) || Item_IsArmed(ITEM_M5_RETREAT));
-}
 
 /**
  * 模块 11 联动接口：请求对指定 Bot 发起狙击手强制撤退（带 TTL）
@@ -893,8 +776,8 @@ public MRESReturn Hook_AttackState_OnUpdate_Pre(Address pThis, DHookParam hParam
     {
         // T 残血/一打多（下包前）：包匪、M9 捡包名册、M7 保镖短蹲；其他 T 放行
         bShortHide = (client == GetC4Carrier())
-            || Loot_IsInRoster(client)
-            || Escort_IsBodyguard(client);
+            || Module9_IsInRoster(client)
+            || Module7_IsBodyguard(client);
     }
 
     if (bShortHide)
@@ -941,4 +824,111 @@ public MRESReturn Hook_AttackState_OnUpdate_Pre(Address pThis, DHookParam hParam
         // DebugLog("[BotRouteFix] [Module 5] Outnumbered bot %N forced retreat via confirm (no dice)", client);
     }
     return MRES_Ignored;
+}
+
+//========================================================================================
+// MODULE 5 ITEM APPLY / RESTORE BACKENDS
+//========================================================================================
+
+/**
+ * 应用换弹掩体 NOP 事项：只有 Prep 已就绪才写入 NOP
+ *
+ * 事项 M5 换弹掩体 NOP 的应用入口；不做定位与校验（那是 Prep 的职责）。
+ * 失败时该事项 FAILED，另两项不受影响。
+ *
+ * @return              true = NOP 已驻留
+ */
+static bool ApplyModule5_ReloadBackend()
+{
+    if (!Item_IsReady(ITEM_M5_RELOAD) || g_PatchReloadHide.address == Address_Null)
+    {
+        Item_SetArmed(ITEM_M5_RELOAD, false);
+        return false;
+    }
+
+    if (!g_PatchReloadHide.isPatched)
+    {
+        // NOP 穿透该条件跳转，使掩体分支总是 fallthrough
+        if (!g_PatchReloadHide.NopOut())
+        {
+            Item_SetReady(ITEM_M5_RELOAD, false);
+            Item_SetArmed(ITEM_M5_RELOAD, false);
+            LogError("[BotRouteFix] [Module 5] Reload hide NOP write failed; reload item FAILED.");
+            return false;
+        }
+    }
+
+    Item_SetArmed(ITEM_M5_RELOAD, true);
+    return true;
+}
+
+/**
+ * 应用闪避事项：启用 AttackState::OnEnter Post 钩子
+ *
+ * 事项 M5 闪避 dhook 写的唯一应用入口；失败时该事项 FAILED，另两项不受影响。
+ *
+ * @return              true = Post 钩子已启用
+ */
+static bool ApplyModule5_DodgeBackend()
+{
+    if (!Item_IsReady(ITEM_M5_DODGE) || g_hAttackDodgeDetour == null)
+    {
+        Item_SetArmed(ITEM_M5_DODGE, false);
+        return false;
+    }
+
+    bool ok = SyncDetourEnabled(g_hAttackDodgeDetour, g_bDodgeHooked,
+        true, Hook_AttackState_OnEnter_Post, true, "Module 5");
+    Item_SetArmed(ITEM_M5_DODGE, ok);
+    return ok;
+}
+
+/**
+ * 应用后撤事项：启用 AttackState::OnUpdate Pre 钩子
+ *
+ * 事项 M5 后撤（整体）的唯一应用入口；所有后端（偏移 + Detour + SDKCall）已在 Init
+ * 就绪才允许整条链启用，任一缺失整条后撤停，不允许只跑残血分支。
+ * 失败时该事项 FAILED，另两项不受影响。
+ *
+ * @return              true = Pre 钩子已启用
+ */
+static bool ApplyModule5_RetreatBackend()
+{
+    if (!Item_IsReady(ITEM_M5_RETREAT) || g_hAttackRetreatDetour == null)
+    {
+        Item_SetArmed(ITEM_M5_RETREAT, false);
+        return false;
+    }
+
+    bool ok = SyncDetourEnabled(g_hAttackRetreatDetour, g_bRetreatHooked,
+        false, Hook_AttackState_OnUpdate_Pre, true, "Module 5");
+    Item_SetArmed(ITEM_M5_RETREAT, ok);
+    return ok;
+}
+
+/**
+ * 还原换弹掩体 NOP 事项（写回原始字节并解除武装）
+ */
+static void RestoreModule5_ReloadBackend()
+{
+    g_PatchReloadHide.Restore();
+    Item_SetArmed(ITEM_M5_RELOAD, false);
+}
+
+/**
+ * 还原闪避事项（停用 Post 钩子并解除武装）
+ */
+static void RestoreModule5_DodgeBackend()
+{
+    SyncDetourEnabled(g_hAttackDodgeDetour, g_bDodgeHooked, true, Hook_AttackState_OnEnter_Post, false, "Module 5");
+    Item_SetArmed(ITEM_M5_DODGE, false);
+}
+
+/**
+ * 还原后撤事项（停用 Pre 钩子并解除武装）
+ */
+static void RestoreModule5_RetreatBackend()
+{
+    SyncDetourEnabled(g_hAttackRetreatDetour, g_bRetreatHooked, false, Hook_AttackState_OnUpdate_Pre, false, "Module 5");
+    Item_SetArmed(ITEM_M5_RETREAT, false);
 }

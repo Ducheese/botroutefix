@@ -25,6 +25,10 @@
 // 全程事件驱动，无 timer 轮询。
 //========================================================================================
 
+//========================================================================================
+// MODULE 9 DEFINES & GLOBALS
+//========================================================================================
+
 #define LOOT_ROSTER_SIZE 3
 
 // 本模块私有状态（static，名册与句柄不出本文件）
@@ -39,8 +43,118 @@ static float g_fDropPos[3];
 static int g_iTotalLootGated = 0;
 static int g_iTotalLootElections = 0;
 
-// 名册内查找（-1 槽位跳过）；模块 5 后撤档位裁决复用
-bool Loot_IsInRoster(int client)
+//========================================================================================
+// MODULE 9 ITEM BACKEND: LOOSE-BOMB FETCH ROSTER (NoticeLooseBomb pre-hook + NavMeasure)
+//========================================================================================
+
+/**
+ * 事项后端：掉包抢包花名册（ITEM_M9_LOOT）
+ *
+ * 只创建 Detour、绑定签名、校验测距子系统，不启用钩子（启用由 Apply 执行）。
+ * 任一后端失败返回 false，Init 会把抢包事项标记为 FAILED。
+ *
+ * @return              true = 抢包事项后端就绪
+ */
+static bool PrepModule9_LootBackend()
+{
+    g_hLooseDetour = DHookCreateDetour(Address_Null, CallConv_THISCALL, ReturnType_Bool, ThisPointer_CBaseEntity);
+    if (g_hLooseDetour == null)
+    {
+        LogError("[BotRouteFix] [Module 9] NoticeLooseBomb detour creation failed; loot item FAILED.");
+        return false;
+    }
+
+    if (!DHookSetFromConf(g_hLooseDetour, g_hGameConf, SDKConf_Signature, "CCSBot_NoticeLooseBomb"))
+    {
+        LogError("[BotRouteFix] [Module 9] NoticeLooseBomb signature missing; loot item FAILED.");
+        delete g_hLooseDetour;
+        g_hLooseDetour = null;
+        return false;
+    }
+
+    if (!BotNavReady())
+    {
+        LogError("[BotRouteFix] [Module 9] NavMeasure unavailable; loot item FAILED (no fail-open roster).");
+        delete g_hLooseDetour;
+        g_hLooseDetour = null;
+        return false;
+    }
+
+    // NoticeLooseBomb(void)：无参数，this 即 bot 本体
+    return true;
+}
+
+
+//========================================================================================
+// MODULE 9 LIFECYCLE
+//========================================================================================
+
+/**
+ * 初始化模块 9（挂 NoticeLooseBomb Pre）
+ * 签名双架构现成，缺失即 fail-fast（与待机模块不同：这里缺 = gamedata 坏了）
+ */
+bool InitModule9_Loot()
+{
+    if (g_hGameConf == null)
+    {
+        LogError("[BotRouteFix] [Module 9] GameConf missing; loot item FAILED.");
+        Item_SetReady(ITEM_M9_LOOT, false);
+        return false;
+    }
+
+    Item_SetReady(ITEM_M9_LOOT, PrepModule9_LootBackend());
+    EnableModule9_Loot(true);
+
+    LogMessage("[BotRouteFix] [Module 9] Loose-bomb item armed=%d (NoticeLooseBomb Pre hook)",
+        Item_IsArmed(ITEM_M9_LOOT));
+    return g_bModule9_Active;
+}
+
+/**
+ * 动态启用或停用模块 9（幂等；停用即清空名册 = 全放行回原生）
+ */
+void EnableModule9_Loot(bool enable)
+{
+    if (enable == g_bModule9_Active)
+    {
+        return;
+    }
+
+    if (!enable)
+    {
+        RestoreModule9_LootBackend();
+        g_bModule9_Active = false;
+        return;
+    }
+
+    g_bModule9_Active = ApplyModule9_LootBackend();
+}
+
+/**
+ * 还原模块 9（插件卸载：摘钩并释放句柄）
+ */
+void RestoreModule9_Loot()
+{
+    EnableModule9_Loot(false);
+
+    if (g_hLooseDetour != null)
+    {
+        delete g_hLooseDetour;
+        g_hLooseDetour = null;
+    }
+}
+
+
+//========================================================================================
+// MODULE 9 PUBLIC GETTERS & TELEMETRY
+//========================================================================================
+
+/**
+ * 事项 M9 抢包花名册的名单查询（模块 5 后撤档位裁决复用）
+ *
+ * -1 槽位跳过；纯内存判断。
+ */
+bool Module9_IsInRoster(int client)
 {
     for (int i = 0; i < LOOT_ROSTER_SIZE; i++)
     {
@@ -52,7 +166,259 @@ bool Loot_IsInRoster(int client)
     return false;
 }
 
-// 清空名册（fail-open：无名册 = 全体放行回原生）
+/**
+ * 获取当前名册有效人数
+ */
+int Module9_GetRosterCount()
+{
+    int count = 0;
+    for (int i = 0; i < LOOT_ROSTER_SIZE; i++)
+    {
+        if (g_iLootRoster[i] != -1 && IsBot(g_iLootRoster[i], true))
+        {
+            count++;
+        }
+    }
+    return count;
+}
+
+/**
+ * 获取抢包花名册容量上限
+ */
+int Module9_GetRosterSize()
+{
+    return LOOT_ROSTER_SIZE;
+}
+
+/**
+ * 获取累计选举次数
+ */
+int Module9_GetTotalElections()
+{
+    return g_iTotalLootElections;
+}
+
+/**
+ * 获取累计拦截非名册哄抢次数
+ */
+int Module9_GetTotalGated()
+{
+    return g_iTotalLootGated;
+}
+
+/**
+ * 获取当前捡包花名册 Bot 列表与掉落 C4 坐标 (供可视化子系统渲染牵引光束)
+ *
+ * @param roster        输出候选人 client 索引数组 (容量 LOOT_ROSTER_SIZE)
+ * @param c4Pos         输出掉落 C4 的世界坐标
+ * @return              实际有效候选人数量
+ */
+int Module9_GetFetchRoster(int roster[LOOT_ROSTER_SIZE], float c4Pos[3])
+{
+    if (!g_bHasRoster)
+    {
+        return 0;
+    }
+
+    if (!Loot_FindDropPos(c4Pos))
+    {
+        return 0;
+    }
+
+    int count = 0;
+    for (int i = 0; i < LOOT_ROSTER_SIZE; i++)
+    {
+        int bot = g_iLootRoster[i];
+        if (bot > 0 && bot <= MaxClients && IsClientInGame(bot) && IsPlayerAlive(bot))
+        {
+            roster[count++] = bot;
+        }
+    }
+    return count;
+}
+
+
+//========================================================================================
+// MODULE 9 EVENT HANDLERS
+//========================================================================================
+
+/**
+ * 掉包事件：递延一帧再选举（等 C4 归属落定，模块 7 FrameRefresh 同款；直接查必 miss）
+ */
+void Module9_OnBombDropped()
+{
+    if (!Item_IsArmed(ITEM_M9_LOOT))
+    {
+        return;
+    }
+
+    RequestFrame(Module9_FrameElect);
+}
+
+/**
+ * 递延选举帧（RequestFrame 回调）
+ */
+public void Module9_FrameElect(any data)
+{
+    // 递延帧可能在停用之后才到，必须二次校验业务态
+    if (!Item_IsArmed(ITEM_M9_LOOT))
+    {
+        return;
+    }
+
+    Loot_ElectRoster();
+}
+
+/**
+ * 死亡事件：成员阵亡递补下家（防死锁必选项）
+ */
+void Module9_OnPlayerDeath(int victim)
+{
+    Loot_RemoveAndBackfill(victim, "fallen member");
+}
+
+/**
+ * 客户端掉线 (OnClientDisconnect)：无死亡事件，槽位会烂掉——同递补逻辑
+ */
+void Module9_OnClientDisconnect(int client)
+{
+    Loot_RemoveAndBackfill(client, "disconnect");
+}
+
+/**
+ * 捡包事件：有人捡起 C4 即解散（FetchBombState 自己散伙）
+ */
+void Module9_OnItemPickup(int client, const char[] item)
+{
+    if (!g_bHasRoster)
+    {
+        return;
+    }
+
+    // 冻结期系统发包不触发（与 module2/6/7 同守卫；此时名册恒空，本是 no-op，防后人加逻辑踩坑）
+    if (GameRules_GetProp("m_bFreezePeriod") != 0)
+    {
+        return;
+    }
+
+    if (StrEqual(item, "c4") || StrEqual(item, "weapon_c4"))
+    {
+        Loot_ClearRoster();
+        DebugLog("[BotRouteFix] [Module 9] Bomb picked up by %N, roster disbanded", client);
+    }
+}
+
+/**
+ * 回合开始：清名册
+ */
+void Module9_OnRoundStart()
+{
+    Loot_ClearRoster();
+}
+
+/**
+ * 地图加载 (OnMapStart)：名单索引随实体全废，必须清（round_start 也会清，显式正确）
+ */
+void Module9_OnMapStart()
+{
+    Loot_ClearRoster();
+}
+
+
+//========================================================================================
+// MODULE 9 DETOUR & HOOKS (NOTICELOOSEBOMB::PRE)
+//========================================================================================
+
+/**
+ * 事项 M9 抢包花名册的唯一入口钩子（NoticeLooseBomb Pre）
+ *
+ * ITEM_M9_LOOT 武装且名册有效时才掐非名册者；只会把 true 掐成 false，
+ * 且 CT 一律 Supercede（阵营门补漏）。名册空即全体放行回原生。
+ */
+public MRESReturn Hook_NoticeLooseBomb_Pre(int client, DHookParam hParams)
+{
+    if (!Item_IsArmed(ITEM_M9_LOOT))
+    {
+        return MRES_Ignored;
+    }
+
+    if (!IsBot(client, true))
+    {
+        return MRES_Ignored;
+    }
+
+    // 阵营门补漏：原生 NoticeLooseBomb 注释写 "for T's only"（虽底层调用点均有阵营包裹，此处作为纵深防御兜底）
+    if (GetClientTeam(client) != 2)
+    {
+        DHookSetReturn(hParams, false);
+        return MRES_Supercede;
+    }
+
+    if (!g_bHasRoster || Module9_IsInRoster(client))
+    {
+        return MRES_Ignored;
+    }
+
+    DHookSetReturn(hParams, false);
+    g_iTotalLootGated++;
+    // DebugLog("[BotRouteFix] [Module 9] Bot %N denied loose-bomb fetch (off-roster)", client);
+    return MRES_Supercede;
+}
+
+
+//========================================================================================
+// MODULE 9 ITEM APPLY / RESTORE BACKENDS
+//========================================================================================
+
+/**
+ * 应用抢包事项：只有 Prep 已就绪才启用 Pre 钩子
+ *
+ * 事项 ITEM_M9_LOOT 的应用入口；不做 Detour 创建与签名绑定（那是 Prep 的职责）。
+ * 失败时该事项 FAILED。
+ *
+ * @return              true = 抢包钩子已驻留
+ */
+static bool ApplyModule9_LootBackend()
+{
+    if (!Item_IsReady(ITEM_M9_LOOT) || g_hLooseDetour == null)
+    {
+        Item_SetArmed(ITEM_M9_LOOT, false);
+        return false;
+    }
+
+    if (!SyncDetourEnabled(g_hLooseDetour, g_bLooseHooked,
+        false, Hook_NoticeLooseBomb_Pre, true, "Module 9"))
+    {
+        // 挂钩失败属动态环境抖动，不证伪探测结论：只清 Armed 保留 Ready，下次 Enable 重试
+        Item_SetArmed(ITEM_M9_LOOT, false);
+        LogError("[BotRouteFix] [Module 9] Loot detour enable failed; loot item unarmed.");
+        return false;
+    }
+
+    Item_SetArmed(ITEM_M9_LOOT, true);
+    return true;
+}
+
+/**
+ * 还原抢包事项：摘钩、清空名册（= 全体放行回原生）并解除武装
+ */
+static void RestoreModule9_LootBackend()
+{
+    SyncDetourEnabled(g_hLooseDetour, g_bLooseHooked, false, Hook_NoticeLooseBomb_Pre, false, "Module 9");
+    Loot_ClearRoster();
+    Item_SetArmed(ITEM_M9_LOOT, false);
+}
+
+
+//========================================================================================
+// MODULE 9 ROSTER PRIMITIVES
+//========================================================================================
+
+/**
+ * 事项 M9 抢包花名册的清空：fail-open（无名册 = 全体放行回原生）
+ *
+ * 停用 / 捡包 / 回合重置 / 换图共用；只清名单不动钩子。
+ */
 static void Loot_ClearRoster()
 {
     for (int i = 0; i < LOOT_ROSTER_SIZE; i++)
@@ -62,7 +428,11 @@ static void Loot_ClearRoster()
     g_bHasRoster = false;
 }
 
-// 找无主掉包坐标（m_hOwnerEntity == -1 的 weapon_c4）
+/**
+ * 事项 M9 抢包花名册的掉包定位：找无主掉包（m_hOwnerEntity == -1 的 weapon_c4）
+ *
+ * 找不到返回 false，调用方按 fail-open 回原生（不等、不猜）。
+ */
 static bool Loot_FindDropPos(float dropPos[3])
 {
     int ent = -1;
@@ -77,7 +447,11 @@ static bool Loot_FindDropPos(float dropPos[3])
     return false;
 }
 
-// 选举：掉包点真实地面行走距离 (NavMeasure) 最近 3 存活 T bot
+/**
+ * 事项 M9 抢包花名册的选举：掉包点真实地面行走距离最近 3 存活 T bot
+ *
+ * 测距未就绪 / 找不到掉包 / 无存活 T bot 即空名册回原生（不拿欧氏混分，不可达跳过）。
+ */
 static void Loot_ElectRoster()
 {
     Loot_ClearRoster();
@@ -148,214 +522,13 @@ static void Loot_ElectRoster()
         (g_iLootRoster[2] != -1) ? g_iLootRoster[2] : g_iLootRoster[0]);
 }
 
-public MRESReturn Hook_NoticeLooseBomb_Pre(int client, DHookParam hParams)
-{
-    if (!g_bModule9_Active)
-    {
-        return MRES_Ignored;
-    }
-
-    if (!IsBot(client, true))
-    {
-        return MRES_Ignored;
-    }
-
-    // 阵营门补漏：原生 NoticeLooseBomb 注释写 "for T's only"（虽底层调用点均有阵营包裹，此处作为纵深防御兜底）
-    if (GetClientTeam(client) != 2)
-    {
-        DHookSetReturn(hParams, false);
-        return MRES_Supercede;
-    }
-
-    if (!g_bHasRoster || Loot_IsInRoster(client))
-    {
-        return MRES_Ignored;
-    }
-
-    DHookSetReturn(hParams, false);
-    g_iTotalLootGated++;
-    // DebugLog("[BotRouteFix] [Module 9] Bot %N denied loose-bomb fetch (off-roster)", client);
-    return MRES_Supercede;
-}
-
-/**
- * 查询掉包感知 Detour 是否处于就绪/已挂载状态
- */
-bool IsLootHooked()
-{
-    return (g_hLooseDetour != null && g_bLooseHooked);
-}
-
-/**
- * 获取当前名册有效人数
- */
-int Loot_GetRosterCount()
-{
-    int count = 0;
-    for (int i = 0; i < LOOT_ROSTER_SIZE; i++)
-    {
-        if (g_iLootRoster[i] != -1 && IsBot(g_iLootRoster[i], true))
-        {
-            count++;
-        }
-    }
-    return count;
-}
-
-/**
- * 获取抢包花名册容量上限
- */
-int Loot_GetRosterSize()
-{
-    return LOOT_ROSTER_SIZE;
-}
-
-/**
- * 获取累计选举次数
- */
-int GetTotalLootElections()
-{
-    return g_iTotalLootElections;
-}
-
-/**
- * 获取累计拦截非名册哄抢次数
- */
-int GetTotalLootGated()
-{
-    return g_iTotalLootGated;
-}
-
-
-/**
- * 初始化模块 9（挂 NoticeLooseBomb Pre）
- * 签名双架构现成，缺失即 fail-fast（与待机模块不同：这里缺 = gamedata 坏了）
- */
-bool InitModule9_Loot()
-{
-    g_hLooseDetour = DHookCreateDetour(Address_Null, CallConv_THISCALL, ReturnType_Bool, ThisPointer_CBaseEntity);
-    if (g_hLooseDetour == null)
-    {
-        LogError("[BotRouteFix] [Module 9] Failed to create DHook detour instance for NoticeLooseBomb!");
-        return false;
-    }
-
-    if (!DHookSetFromConf(g_hLooseDetour, g_hGameConf, SDKConf_Signature, "CCSBot_NoticeLooseBomb"))
-    {
-        LogError("[BotRouteFix] [Module 9] Failed to set NoticeLooseBomb signature from gamedata!");
-        delete g_hLooseDetour;
-        g_hLooseDetour = null;
-        return false;
-    }
-
-    // NoticeLooseBomb(void)：无参数，this 即 bot 本体
-    EnableModule9_Loot(true);
-    if (!g_bModule9_Active)
-    {
-        delete g_hLooseDetour;
-        g_hLooseDetour = null;
-        LogError("[BotRouteFix] [Module 9] Failed to enable NoticeLooseBomb Pre detour!");
-        return false;
-    }
-
-    LogMessage("[BotRouteFix] [Module 9] Loose-bomb Top3 roster online (NoticeLooseBomb Pre hook)");
-    return true;
-}
-
-/**
- * 动态启用或停用模块 9（幂等；停用即清空名册 = 全放行回原生）
- */
-void EnableModule9_Loot(bool enable)
-{
-    if (enable == g_bModule9_Active)
-    {
-        return;
-    }
-
-    if (enable)
-    {
-        g_bModule9_Active = SyncDetourEnabled(g_hLooseDetour, g_bLooseHooked,
-            false, Hook_NoticeLooseBomb_Pre, true, "Module 9");
-        return;
-    }
-
-    SyncDetourEnabled(g_hLooseDetour, g_bLooseHooked, false, Hook_NoticeLooseBomb_Pre, false, "Module 9");
-    Loot_ClearRoster();
-    g_bModule9_Active = false;
-}
-
-/**
- * 还原模块 9（插件卸载：摘钩并释放句柄）
- */
-void RestoreModule9_Loot()
-{
-    EnableModule9_Loot(false);
-
-    if (g_hLooseDetour != null)
-    {
-        delete g_hLooseDetour;
-        g_hLooseDetour = null;
-    }
-}
-
-/**
- * 查询模块 9 业务开启态
- */
-bool IsModule9_Active()
-{
-    return g_bModule9_Active;
-}
-
-/**
- * 掉包事件：递延一帧再选举（等 C4 归属落定，模块 7 FrameRefresh 同款；直接查必 miss）
- */
-void Module9_OnBombDropped()
-{
-    if (!g_bModule9_Active)
-    {
-        return;
-    }
-
-    RequestFrame(Module9_FrameElect);
-}
-
-/**
- * 递延选举帧（RequestFrame 回调）
- */
-public void Module9_FrameElect(any data)
-{
-    // 递延帧可能在停用之后才到，必须二次校验业务态
-    if (!g_bModule9_Active)
-    {
-        return;
-    }
-
-    Loot_ElectRoster();
-}
-
-/**
- * 死亡事件：成员阵亡递补下家（防死锁必选项）
- */
-void Module9_OnPlayerDeath(int victim)
-{
-    Loot_RemoveAndBackfill(victim, "fallen member");
-}
-
-/**
- * 客户端掉线 (OnClientDisconnect)：无死亡事件，槽位会烂掉——同递补逻辑
- */
-void Module9_OnClientDisconnect(int client)
-{
-    Loot_RemoveAndBackfill(client, "disconnect");
-}
-
 /**
  * 除名 + 按掉包点就近回补 + 全灭 fail-open（死亡与掉线共用）
  * 名单有效时 C4 必躺在掉包点（谁捡起名单即散），按掉包点招人即按 C4 位置招人
  */
 static void Loot_RemoveAndBackfill(int client, const char[] reason)
 {
-    if (!g_bHasRoster || !Loot_IsInRoster(client))
+    if (!g_bHasRoster || !Module9_IsInRoster(client))
     {
         return;
     }
@@ -373,7 +546,7 @@ static void Loot_RemoveAndBackfill(int client, const char[] reason)
     float bestDist = 9999999.0;
     for (int i = 1; i <= MaxClients; i++)
     {
-        if (!IsTeamBot(i, 2, true) || Loot_IsInRoster(i))
+        if (!IsTeamBot(i, 2, true) || Module9_IsInRoster(i))
         {
             continue;
         }
@@ -405,79 +578,9 @@ static void Loot_RemoveAndBackfill(int client, const char[] reason)
     }
 
     // 全灭则解散回原生（fail-open）
-    if (Loot_GetRosterCount() == 0)
+    if (Module9_GetRosterCount() == 0)
     {
         Loot_ClearRoster();
         DebugLog("[BotRouteFix] [Module 9] Roster wiped, fail-open to native");
     }
-}
-
-/**
- * 捡包事件：有人捡起 C4 即解散（FetchBombState 自己散伙）
- */
-void Module9_OnItemPickup(int client, const char[] item)
-{
-    if (!g_bHasRoster)
-    {
-        return;
-    }
-
-    // 冻结期系统发包不触发（与 module2/6/7 同守卫；此时名册恒空，本是 no-op，防后人加逻辑踩坑）
-    if (GameRules_GetProp("m_bFreezePeriod") != 0)
-    {
-        return;
-    }
-
-    if (StrEqual(item, "c4") || StrEqual(item, "weapon_c4"))
-    {
-        Loot_ClearRoster();
-        DebugLog("[BotRouteFix] [Module 9] Bomb picked up by %N, roster disbanded", client);
-    }
-}
-
-/**
- * 回合开始：清名册
- */
-void Module9_OnRoundStart()
-{
-    Loot_ClearRoster();
-}
-
-/**
- * 地图加载 (OnMapStart)：名单索引随实体全废，必须清（round_start 也会清，显式正确）
- */
-void Module9_OnMapStart()
-{
-    Loot_ClearRoster();
-}
-
-/**
- * 获取当前捡包花名册 Bot 列表与掉落 C4 坐标 (供可视化子系统渲染牵引光束)
- *
- * @param roster        输出候选人 client 索引数组 (容量 LOOT_ROSTER_SIZE)
- * @param c4Pos         输出掉落 C4 的世界坐标
- * @return              实际有效候选人数量
- */
-int Module9_GetFetchRoster(int roster[LOOT_ROSTER_SIZE], float c4Pos[3])
-{
-    if (!g_bHasRoster)
-    {
-        return 0;
-    }
-
-    if (!Loot_FindDropPos(c4Pos))
-    {
-        return 0;
-    }
-
-    int count = 0;
-    for (int i = 0; i < LOOT_ROSTER_SIZE; i++)
-    {
-        int bot = g_iLootRoster[i];
-        if (bot > 0 && bot <= MaxClients && IsClientInGame(bot) && IsPlayerAlive(bot))
-        {
-            roster[count++] = bot;
-        }
-    }
-    return count;
 }

@@ -17,35 +17,50 @@ Handle g_hSDKCall_ComputePath      = null;
 Handle g_hSDKCall_IsOutnumbered    = null;
 Handle g_hSDKCall_Hunt             = null;
 
-/**
- * 初始化底层 SDKCall 调用表
- */
-bool InitSDKCalls()
-{
-    if (g_hGameConf == null)
-    {
-        return false;
-    }
+//========================================================================================
+// PER-CALL PREPARATION
+//
+// 每个 SDKCall 是独立后端：单独准备、单独失败，不再让一个缺失签名拖死整张表。
+//========================================================================================
 
+/**
+ * 事项 M7 护送花名册的 Follow 后端准备；缺失则 M7 事项 FAILED。
+ */
+static bool PrepSDKCall_Follow()
+{
     StartPrepSDKCall(SDKCall_Entity);
     PrepSDKCall_SetFromConf(g_hGameConf, SDKConf_Signature, "CCSBot_Follow");
     PrepSDKCall_AddParameter(SDKType_CBaseEntity, SDKPass_Pointer);
     g_hSDKCall_Follow = EndPrepSDKCall();
     if (g_hSDKCall_Follow == null)
     {
-        LogError("[BotRouteFix] [SDKCalls] Failed to create SDKCall for CCSBot_Follow!");
+        LogError("[BotRouteFix] [SDKCalls] CCSBot_Follow unavailable (M7 will FAIL).");
         return false;
     }
+    return true;
+}
 
+/**
+ * 事项 M7 护送花名册的 StopFollowing 后端准备；缺失则 M7 事项 FAILED。
+ */
+static bool PrepSDKCall_StopFollowing()
+{
     StartPrepSDKCall(SDKCall_Entity);
     PrepSDKCall_SetFromConf(g_hGameConf, SDKConf_Signature, "CCSBot_StopFollowing");
     g_hSDKCall_StopFollowing = EndPrepSDKCall();
     if (g_hSDKCall_StopFollowing == null)
     {
-        LogError("[BotRouteFix] [SDKCalls] Failed to create SDKCall for CCSBot_StopFollowing!");
+        LogError("[BotRouteFix] [SDKCalls] CCSBot_StopFollowing unavailable (M7 will FAIL).");
         return false;
     }
+    return true;
+}
 
+/**
+ * 事项 M9 抢包 / M10 拆包 / M11 走廊的测距后端准备（nav_measure 快照探测）；缺失则相关事项 FAILED。
+ */
+static bool PrepSDKCall_ComputePath()
+{
     StartPrepSDKCall(SDKCall_Entity);
     PrepSDKCall_SetFromConf(g_hGameConf, SDKConf_Signature, "CCSBot_ComputePath");
     PrepSDKCall_AddParameter(SDKType_Vector, SDKPass_ByRef);
@@ -54,32 +69,68 @@ bool InitSDKCalls()
     g_hSDKCall_ComputePath = EndPrepSDKCall();
     if (g_hSDKCall_ComputePath == null)
     {
-        LogError("[BotRouteFix] [SDKCalls] Failed to create SDKCall for CCSBot_ComputePath!");
+        LogError("[BotRouteFix] [SDKCalls] CCSBot_ComputePath unavailable (M9/M10/M11 nav items will FAIL).");
         return false;
     }
+    return true;
+}
 
+/**
+ * 事项 M5 后撤的一打多判定后端准备；缺失则 M5 retreat 事项 FAILED。
+ */
+static bool PrepSDKCall_IsOutnumbered()
+{
     StartPrepSDKCall(SDKCall_Entity);
     PrepSDKCall_SetFromConf(g_hGameConf, SDKConf_Signature, "CCSBot_IsOutnumbered");
     PrepSDKCall_SetReturnInfo(SDKType_Bool, SDKPass_Plain);
     g_hSDKCall_IsOutnumbered = EndPrepSDKCall();
     if (g_hSDKCall_IsOutnumbered == null)
     {
-        LogError("[BotRouteFix] [SDKCalls] Failed to create SDKCall for CCSBot_IsOutnumbered!");
+        LogError("[BotRouteFix] [SDKCalls] CCSBot_IsOutnumbered unavailable (M5 retreat will FAIL).");
         return false;
     }
+    return true;
+}
 
+/**
+ * 事项 M8 死锁 / M12 门禁的 Hunt 后端准备；缺失则相关事项 FAILED。
+ */
+static bool PrepSDKCall_Hunt()
+{
     StartPrepSDKCall(SDKCall_Entity);
     PrepSDKCall_SetFromConf(g_hGameConf, SDKConf_Signature, "CCSBot_Hunt");
     g_hSDKCall_Hunt = EndPrepSDKCall();
     if (g_hSDKCall_Hunt == null)
     {
-        LogError("[BotRouteFix] [SDKCalls] Failed to create SDKCall for CCSBot_Hunt!");
+        LogError("[BotRouteFix] [SDKCalls] CCSBot_Hunt unavailable (M8 deadlock/M12 camp items will FAIL).");
+        return false;
+    }
+    return true;
+}
+
+/**
+ * 初始化底层 SDKCall 调用表（逐项准备，汇总返回，不 fail-fast）
+ */
+bool InitSDKCalls()
+{
+    if (g_hGameConf == null)
+    {
         return false;
     }
 
-    LogMessage("[BotRouteFix] [SDKCalls] Core SDKCall table ready (Follow, StopFollowing, ComputePath, IsOutnumbered, Hunt)");
+    bool allReady = true;
+    if (!PrepSDKCall_Follow())         allReady = false;
+    if (!PrepSDKCall_StopFollowing())  allReady = false;
+    if (!PrepSDKCall_ComputePath())    allReady = false;
+    if (!PrepSDKCall_IsOutnumbered())  allReady = false;
+    if (!PrepSDKCall_Hunt())           allReady = false;
 
-    return true;
+    if (allReady)
+    {
+        LogMessage("[BotRouteFix] [SDKCalls] All SDKCall backends ready (Follow, StopFollowing, ComputePath, IsOutnumbered, Hunt)");
+    }
+
+    return allReady;
 }
 
 /**

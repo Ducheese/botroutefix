@@ -215,34 +215,35 @@ public Action Command_Status(int client, int args)
     Format(detail, sizeof(detail), "total: %d blocked, %d allowed", Module6_GetTotalNoiseIntercepted(), Module6_GetTotalNoiseAllowed());
     PrintModuleLine(client, 6, "T Morale Disposition & Noise Gate", detail);
 
-    int carrier = Escort_GetCarrier();
+    int carrier = Module7_GetCarrier();
     if (IsValidClient(carrier, true))
     {
         Format(detail, sizeof(detail), "live: %d/%d guards, carrier %N",
-            Escort_GetBodyguardCount(), Escort_GetTargetCount(), carrier);
+            Module7_GetBodyguardCount(), Module7_GetTargetCount(), carrier);
     }
     else
     {
         Format(detail, sizeof(detail), "live: %d/%d guards, no carrier",
-            Escort_GetBodyguardCount(), Escort_GetTargetCount());
+            Module7_GetBodyguardCount(), Module7_GetTargetCount());
     }
     PrintModuleLine(client, 7, "Carrier Escort Roster", detail);
 
-    Format(detail, sizeof(detail), "total: %d shattered, %d deadlock hunts", GetTotalQueueShattered(), GetTotalDeadlockHunt());
+    Format(detail, sizeof(detail), "total: %d shattered, %d deadlock hunts", Module8_GetTotalQueueShattered(), Module8_GetTotalDeadlockHunt());
     PrintModuleLine(client, 8, "Polite Queue Breaker", detail);
 
     Format(detail, sizeof(detail), "live: %d/%d roster | total: %d elected, %d gated",
-        Loot_GetRosterCount(), Loot_GetRosterSize(), GetTotalLootElections(), GetTotalLootGated());
+        Module9_GetRosterCount(), Module9_GetRosterSize(), Module9_GetTotalElections(), Module9_GetTotalGated());
     PrintModuleLine(client, 9, "T Loose-Bomb Fetch Roster", detail);
 
-    int chief = GetChiefDefuser();
+    float dummyPos[3];
+    int chief = Module10_GetChiefDefuser(dummyPos);
     if (chief != -1)
     {
-        Format(detail, sizeof(detail), "live: chief %N | total: %d elected, %d gated", chief, GetTotalChiefs(), GetTotalScenarioGated());
+        Format(detail, sizeof(detail), "live: chief %N | total: %d elected, %d gated", chief, Module10_GetTotalChiefs(), Module10_GetTotalGated());
     }
     else
     {
-        Format(detail, sizeof(detail), "live: none | total: %d elected, %d gated", GetTotalChiefs(), GetTotalScenarioGated());
+        Format(detail, sizeof(detail), "live: none | total: %d elected, %d gated", Module10_GetTotalChiefs(), Module10_GetTotalGated());
     }
     PrintModuleLine(client, 10, "CT Chief Defuser", detail);
 
@@ -275,9 +276,9 @@ public Action Command_Status(int client, int args)
         int liveCarrier;
         if (Item_IsArmed(ITEM_M7_ESCORT))
         {
-            liveCarrier = Escort_GetCarrier();
+            liveCarrier = Module7_GetCarrier();
             Format(m7Escorts, sizeof(m7Escorts), "%d/%d",
-                Escort_GetBodyguardCount(), Escort_GetTargetCount());
+                Module7_GetBodyguardCount(), Module7_GetTargetCount());
         }
         else
         {

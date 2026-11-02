@@ -321,6 +321,7 @@ MODULE X ... PRIMITIVES / DETOUR & HOOKS / ITEM APPLY / RESTORE BACKENDS
 | 生命周期 | `Init / Enable / Restore + ModuleX_<动词>` | `InitModule3_Danger` / `EnableModule4_Hunt` / `RestoreModule2_Bombsite` |
 | 事项后端 | `Prep / Apply / Restore + ModuleX_<事项> + Backend`，一律 `static` | `PrepModule1_GuardBackend` / `ApplyModule4_HuntBackend` |
 | 事件处理 | `ModuleX_On<Event>` | `Module3_OnRoundStart` / `Module2_OnRoundFreezeEnd` |
+| 钩子回调 | `Hook_<目标>_<Pre/Post>`，一律 `public` | `Hook_HuntState_OnUpdate_Pre` / `Hook_AttackState_OnEnter_Post` |
 | 公共读取 | `ModuleX_<动词><名词>` | `Module2_IsBombsiteLocked` / `Module4_GetTotalHuntClaims` |
 | 内部公式/原语 | 描述性命名，一律 `static` | `CalculatePlantDelay` / `DecayAllNavAreaDanger` |
 
@@ -332,7 +333,7 @@ MODULE X ... PRIMITIVES / DETOUR & HOOKS / ITEM APPLY / RESTORE BACKENDS
 
 1. 这个函数属于哪个事项（如“事项 M4 HuntState dhook writes 的唯一后端入口”）；
 2. 失败语义（如“失败时该事项 FAILED，另一事项不受影响”）；
-3. 特殊豁免必须显式标注（如 M3 `OnMapStart` 的“【例外：不随业务态守卫】”）。
+3. 确需偏离门禁的特殊情形必须显式标注（如 M3 `OnMapStart` 的“【例外：不随业务态守卫】”）；纯幂等清理依底层契约天然豁免，无需标注。
 
 ### 生命周期链（固定模板）
 
@@ -368,11 +369,14 @@ Enable(false) / Restore:
 
 ### 事件门控
 
-事件处理函数第一行必须是事项门控，不看模块级 `Active`：
+以 `events.inc` 接收方契约为准：
 
+a) 有业务副作用的处理器，函数首行必须自守（不看模块级 `Active`）：
 ```sourcepawn
 if (!Item_IsArmed(ITEM_M2_LOCK)) return;
 ```
+b) 纯幂等清理（关闭态下本就是 no-op：清计数/清名单）可豁免守卫，无需逐处标注；
+c) 换图必须执行的底层重建（如 M3 重解导航容器）【不得】加守卫。
 
 可视化/调试读取是跨模块 getter，不参与事项状态（见“调试可视化”）。
 
@@ -499,7 +503,7 @@ addons\sourcemod\
 - **唯一裁决点**：残血 / 孤身一打多 / 狙击威慑三大触发源的"硬豁免 / 短蹲 / 放行"全部由模块 5 的 `AttackState::OnUpdate` Pre 钩子裁决；模块 11 与 15 不感知身份矩阵。
 - **M11 → M5**：模块 11 只钉走廊 danger 并调用 `Combat_RequestSniperRetreat(client)`，请求带 2 秒 TTL；命中后模块 5 穿透残血门控与节流阀，再按矩阵决定档位。
 - **M5 → M15**：软豁免时模块 5 调用 `HideDuration_RequestShort(client)`（一次性 + 2 秒 TTL），模块 15 在 `HideState::OnEnter` Post 中优先消费，写 1 秒并跳过士气缩放。
-- **M5 → M7/M9（只读）**：`Escort_IsBodyguard()` / `Loot_IsInRoster()` 是名册内的常数级小循环；M5 同一判定还包括一次 `GetC4Carrier()` 的 O(MaxClients) 持包扫描。后撤判定内不做寻路。
+- **M5 → M7/M9（只读）**：`Module7_IsBodyguard()` / `Module9_IsInRoster()` 是名册内的常数级小循环；M5 同一判定还包括一次 `GetC4Carrier()` 的 O(MaxClients) 持包扫描。后撤判定内不做寻路。
 - **失效行为**：模块 10 未就绪/无首席时，CT 通常全员原生持有 `DEFUSE_BOMB`，下包后硬豁免自动覆盖所有 CT（这是原生任务语义，不是 M10 fail-open）；M10 自身状态为 FAILED。M15 规则关闭或事项 FAILED（含 morale 缺失）时，短蹲与缩放一起停，M5 软豁免退化为普通后撤（`TryToRetreat` 默认 3~15 秒，而非守包 Hide 的 30~60 秒）。M12 借钩只保持宿主 Detour 挂载，不恢复 M15 的短蹲/缩放代码路径。
 
 ### 事项状态机与 DHook 收敛 (Item State Machine & Detour Sync)
