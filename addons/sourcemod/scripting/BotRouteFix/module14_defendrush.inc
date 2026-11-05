@@ -32,159 +32,73 @@
 //    ★ 机器码立即数与常量固化说明: 当前注入的机器码已将公式 40.0 - 10.0 * Morale (即 -10.0*(M-4))
 //      固化为底层汇编立即数 4 (sub/lea 4) 与共享只读常量池 float (-10.0f)；下方的 DEFEND_RUSH_CHANCE_*
 //      宏定义仅用于 CalculateDefendRushChance 等辅助查询与理论对齐，修改宏不会直接驱动机器码修改。
+//
+// 事项契约:
+//   - 唯一事项 = 前沿架枪公式重写（ITEM_M14_DEFEND）；4 lea + 1 float 是该事项的后端链。
+//   - 全成或全败：任一站点失败即回滚全部，绝不允许 -17*(M-4) 之类错公式半态驻留。
+//   - 物理写入失败证伪探测结论 → Ready 清空并回滚。
 //========================================================================================
+
+//========================================================================================
+// MODULE 14 DEFINES & GLOBALS
+//========================================================================================
+
 // 开局前沿架枪概率公式宏定义 (Chance = BASE - STEP * Morale，注：当前机器码内已固化立即数 4 与常量 -10.0f)
 #define DEFEND_RUSH_CHANCE_BASE 40.0    // 基础前沿架枪概率 (士气 0 时 40%)
 #define DEFEND_RUSH_CHANCE_STEP 10.0    // 每级士气增减步长 (百分比)
 #define DEFEND_RUSH_CHANCE_MIN  0.0     // 前沿架枪概率下限
 #define DEFEND_RUSH_CHANCE_MAX  100.0   // 前沿架枪概率上限
 
-MemoryPatch g_PatchDefendRush14_Lea[4];
-MemoryPatch g_PatchDefendRush14_Float;
+static MemoryPatch g_PatchDefendRush14_Lea[4];
+static MemoryPatch g_PatchDefendRush14_Float;
 
-// 业务开启态
+// Prep 构造、Apply 原样写入的补丁字节
+static int g_D14SiteByte[4];
+static int g_D14FloatBytes[4];
+
+// 模块规则开启态（Enable 幂等缓存；业务判据统一用 Item_IsArmed）
 static bool g_bModule14_Active = false;
 
+//========================================================================================
+// MODULE 14 ITEM BACKENDS (called by Init)
+//========================================================================================
+
 /**
- * 初始化并激活模块 14 所有内存补丁（4 lea + 1 float，全成或全败）
+ * 事项后端：前沿架枪公式重写（ITEM_M14_DEFEND）
  *
- * @return              是否全部成功激活
+ * 逐站点定位/校验/备份，再校验共享 float 常量池；不写入代码段（写入由 Apply 执行）。
+ * 任一后端失败返回 false，Init 会把事项标记为 FAILED。
+ *
+ * @return              true = 4 lea + 1 float 全部就绪
  */
-bool InitModule14_DefendRush()
+static bool PrepModule14_DefendBackend()
 {
     if (g_hGameConf == null)
     {
-        LogError("[BotRouteFix] [Module 14] Error: Gamedata is not loaded, cannot initialize defendRush patches!");
+        LogError("[BotRouteFix] [Module 14] Gamedata missing; defend-rush item FAILED.");
         return false;
-    }
-
-    EnableModule14_DefendRush(true);
-    if (!g_bModule14_Active)
-    {
-        LogError("[BotRouteFix] [Module 14] Failed to inject defendRush patches!");
-        return false;
-    }
-
-    LogMessage("[BotRouteFix] [Module 14] defendRushChance (40-10*M) patches activated [%s]",
-        g_bIsWin64 ? "64-bit" : "32-bit");
-    return true;
-}
-
-/**
- * 动态启用或停用模块 14（幂等；4 lea + 1 float 全成或全败）
- */
-void EnableModule14_DefendRush(bool enable)
-{
-    if (enable == g_bModule14_Active)
-    {
-        return;
-    }
-
-    if (enable)
-    {
-        bool ok = true;
-        for (int i = 0; i < 4; i++)
-        {
-            if (!PrepDefendRush14_Site(i))
-            {
-                LogError("[BotRouteFix] [Module 14] Failed to inject defendRush lea patch at site %d!", i + 1);
-                ok = false;
-                break;
-            }
-        }
-
-        if (ok && !PrepDefendRush14_Float())
-        {
-            LogError("[BotRouteFix] [Module 14] Failed to inject defendRush shared float patch!");
-            ok = false;
-        }
-
-        if (!ok)
-        {
-            // 全成或全败：已驻留的 lea 必须回滚，否则与旧 float 组成 -17*(M-4) 错公式半态驻留
-            for (int i = 0; i < 4; i++)
-            {
-                g_PatchDefendRush14_Lea[i].Restore();
-            }
-            RestoreDefendRush14_Float();
-            g_bModule14_Active = false;
-            LogError("[BotRouteFix] [Module 14] Enable aborted, all patches rolled back!");
-            return;
-        }
-
-        g_bModule14_Active = true;
-        return;
     }
 
     for (int i = 0; i < 4; i++)
     {
-        g_PatchDefendRush14_Lea[i].Restore();
-    }
-    RestoreDefendRush14_Float();
-    g_bModule14_Active = false;
-}
-
-/**
- * 还原模块 14（插件卸载：恢复原始字节并复位业务态）
- */
-void RestoreModule14_DefendRush()
-{
-    EnableModule14_DefendRush(false);
-    LogMessage("[BotRouteFix] [Module 14] Patches safely restored to original bytes.");
-}
-
-/**
- * 查询模块 14 业务开启态
- */
-bool IsModule14_Active()
-{
-    return g_bModule14_Active;
-}
-
-/**
- * 查询模块 14 补丁是否完整生效（4 lea 全挂 + float 已改）
- */
-bool IsDefendRush14Patched()
-{
-    if (!g_PatchDefendRush14_Float.isPatched)
-    {
-        return false;
-    }
-    for (int i = 0; i < 4; i++)
-    {
-        if (!g_PatchDefendRush14_Lea[i].isPatched)
+        if (!PrepModule14_Site(i))
         {
             return false;
         }
     }
-    return true;
+
+    return PrepModule14_FloatBackend();
 }
 
 /**
- * 计算给定士气值对应的理论架前沿概率 (百分比 0.0 ~ 100.0)
+ * 事项 M14 前沿架枪公式重写的单站点后端准备：-2 → -4（1 字节）
  *
- * @param morale        Bot 士气数值 (-3 ~ +3)
- * @return              架前沿概率 (0.0 ~ 100.0)
+ * 失败语义：签名/偏移/操作码/立即数/备份任一失败返回 false，整个事项 FAILED（全成或全败）。
+ *
+ * @param siteIndex     0..3
+ * @return              true = 该站点后端就绪
  */
-float CalculateDefendRushChance(int morale)
-{
-    float chance = DEFEND_RUSH_CHANCE_BASE - DEFEND_RUSH_CHANCE_STEP * float(morale);
-    if (chance > DEFEND_RUSH_CHANCE_MAX)
-    {
-        chance = DEFEND_RUSH_CHANCE_MAX;
-    }
-    else if (chance < DEFEND_RUSH_CHANCE_MIN)
-    {
-        chance = DEFEND_RUSH_CHANCE_MIN;
-    }
-    return chance;
-}
-
-//========================================================================================
-// 单站点 lea/sub 补丁：-2 → -4（1 字节）
-//========================================================================================
-
-bool PrepDefendRush14_Site(int siteIndex)
+static bool PrepModule14_Site(int siteIndex)
 {
     char sigName[32];
     Format(sigName, sizeof(sigName), "DefendRush14_Site%d", siteIndex + 1);
@@ -207,73 +121,81 @@ bool PrepDefendRush14_Site(int siteIndex)
     Address targetAddr = sigAddr + view_as<Address>(immOffset);
     char patchName[32];
     Format(patchName, sizeof(patchName), "DefendRush14_Lea%d", siteIndex + 1);
+
+    // Init 必须在幂等检测之前：同目标重入时它保留原始基线备份
     g_PatchDefendRush14_Lea[siteIndex].Init(patchName, targetAddr, 1);
 
     int b0 = LoadFromAddress(targetAddr - view_as<Address>(2), NumberType_Int8);
     int b1 = LoadFromAddress(targetAddr - view_as<Address>(1), NumberType_Int8);
     int b2 = LoadFromAddress(targetAddr, NumberType_Int8);
 
+    int expect0, expect1, origImm, newImm;
     if (g_bIsWin64)
     {
         // 64 位：83 E8 02（sub eax, 2）→ 83 E8 04
-        if (b0 != 0x83 || b1 != 0xE8)
-        {
-            LogError("[BotRouteFix] [Module 14] 64-bit opcode mismatch at site %d (expected 83 E8, got %02X %02X), patch aborted!",
-                siteIndex + 1, b0, b1);
-            return false;
-        }
-        if (b2 == 0x04)
-        {
-            if (!g_PatchDefendRush14_Lea[siteIndex].hasBackup)
-            {
-                g_PatchDefendRush14_Lea[siteIndex].isPatched = false;
-            }
-            LogMessage("[BotRouteFix] [Module 14] Site %d patch already present @ %X, skipping", siteIndex + 1, targetAddr);
-            return true;
-        }
-        if (b2 != 0x02)
-        {
-            LogError("[BotRouteFix] [Module 14] 64-bit imm mismatch at site %d (expected 02, got %02X), patch aborted!",
-                siteIndex + 1, b2);
-            return false;
-        }
-        int oneByte[1] = {0x04};
-        return g_PatchDefendRush14_Lea[siteIndex].Apply(oneByte);
+        expect0 = 0x83;
+        expect1 = 0xE8;
+        origImm = 0x02;
+        newImm = 0x04;
     }
     else
     {
         // 32 位：8D 46 FE（lea eax, [esi-2]）→ 8D 46 FC
-        if (b0 != 0x8D || b1 != 0x46)
-        {
-            LogError("[BotRouteFix] [Module 14] 32-bit opcode mismatch at site %d (expected 8D 46, got %02X %02X), patch aborted!",
-                siteIndex + 1, b0, b1);
-            return false;
-        }
-        if (b2 == 0xFC)
-        {
-            if (!g_PatchDefendRush14_Lea[siteIndex].hasBackup)
-            {
-                g_PatchDefendRush14_Lea[siteIndex].isPatched = false;
-            }
-            LogMessage("[BotRouteFix] [Module 14] Site %d patch already present @ %X, skipping", siteIndex + 1, targetAddr);
-            return true;
-        }
-        if (b2 != 0xFE)
-        {
-            LogError("[BotRouteFix] [Module 14] 32-bit imm mismatch at site %d (expected FE, got %02X), patch aborted!",
-                siteIndex + 1, b2);
-            return false;
-        }
-        int oneByte[1] = {0xFC};
-        return g_PatchDefendRush14_Lea[siteIndex].Apply(oneByte);
+        expect0 = 0x8D;
+        expect1 = 0x46;
+        origImm = 0xFE;
+        newImm = 0xFC;
     }
+
+    // 操作码前缀不受补丁影响，任何状态下都必须匹配
+    if (b0 != expect0 || b1 != expect1)
+    {
+        LogError("[BotRouteFix] [Module 14] Opcode mismatch at site %d (expected %02X %02X, got %02X %02X), patch aborted!",
+            siteIndex + 1, expect0, expect1, b0, b1);
+        return false;
+    }
+
+    if (b2 == newImm)
+    {
+        // 幂等：已驻留。有备份=自家补丁；无备份=外来改写，无基线可还原
+        if (!g_PatchDefendRush14_Lea[siteIndex].hasBackup)
+        {
+            g_PatchDefendRush14_Lea[siteIndex].isPatched = false;
+            LogError("[BotRouteFix] [Module 14] Site %d already patched without baseline @ %X; defend-rush item FAILED.",
+                siteIndex + 1, targetAddr);
+            return false;
+        }
+        LogMessage("[BotRouteFix] [Module 14] Site %d patch already present @ %X, skipping", siteIndex + 1, targetAddr);
+    }
+    else
+    {
+        if (b2 != origImm)
+        {
+            LogError("[BotRouteFix] [Module 14] Immediate mismatch at site %d (expected %02X, got %02X), patch aborted!",
+                siteIndex + 1, origImm, b2);
+            return false;
+        }
+
+        if (!g_PatchDefendRush14_Lea[siteIndex].BackupOriginal())
+        {
+            LogError("[BotRouteFix] [Module 14] Site %d baseline backup failed; defend-rush item FAILED.", siteIndex + 1);
+            return false;
+        }
+    }
+
+    g_D14SiteByte[siteIndex] = newImm;
+    return true;
 }
 
-//========================================================================================
-// 共享 float 补丁：-17.0f → -10.0f（地址从 Site1 的乘法操作数动态推导）
-//========================================================================================
-
-bool PrepDefendRush14_Float()
+/**
+ * 事项 M14 前沿架枪公式重写的共享常量后端准备：-17.0f → -10.0f
+ *
+ * 地址从 Site1 的乘法操作数动态推导，并校验 Site2~4 共用同一常量池。
+ * 失败语义：任一校验失败返回 false，整个事项 FAILED（全成或全败）。
+ *
+ * @return              true = 共享常量后端就绪
+ */
+static bool PrepModule14_FloatBackend()
 {
     Address sigAddr = GameConfGetAddress(g_hGameConf, "DefendRush14_Site1");
     if (sigAddr == Address_Null)
@@ -316,21 +238,34 @@ bool PrepDefendRush14_Float()
         floatAddr = view_as<Address>(LoadFromAddress(sigAddr + view_as<Address>(relOffset), NumberType_Int32));
     }
 
-    // 语义锚点验证：该常量必须确为 -17.0f（四处共用，他处无引用已在逆向时验明）
+    // Init 必须在幂等检测之前：同目标重入时它保留原始基线备份
+    g_PatchDefendRush14_Float.Init("DefendRush14_Float", floatAddr, 4);
+
+    // 语义锚点验证：该常量必须是 -17.0f（原始）或 -10.0f（自家已改）
     float fval = view_as<float>(LoadFromAddress(floatAddr, NumberType_Int32));
     if (fval == -10.0)
     {
         if (!g_PatchDefendRush14_Float.hasBackup)
         {
             g_PatchDefendRush14_Float.isPatched = false;
+            LogError("[BotRouteFix] [Module 14] Float already patched without baseline @ %X; defend-rush item FAILED.", floatAddr);
+            return false;
         }
         LogMessage("[BotRouteFix] [Module 14] Shared float patch already present @ %X, skipping", floatAddr);
-        return true;
     }
-    if (fval != -17.0)
+    else
     {
-        LogError("[BotRouteFix] [Module 14] Constant mismatch (expected -17.0f, got %f), float patch aborted!", fval);
-        return false;
+        if (fval != -17.0)
+        {
+            LogError("[BotRouteFix] [Module 14] Constant mismatch (expected -17.0f, got %f), float patch aborted!", fval);
+            return false;
+        }
+
+        if (!g_PatchDefendRush14_Float.BackupOriginal())
+        {
+            LogError("[BotRouteFix] [Module 14] Float baseline backup failed; defend-rush item FAILED.");
+            return false;
+        }
     }
 
     // 共池断言：Site2~4 的乘法操作数必须指向同一常量，否则说明 DLL 换了常量池布局
@@ -367,12 +302,161 @@ bool PrepDefendRush14_Float()
         }
     }
 
-    g_PatchDefendRush14_Float.Init("DefendRush14_Float", floatAddr, 4);
-    int floatBytes[4] = {0x00, 0x00, 0x20, 0xC1}; // -10.0f 小端
-    return g_PatchDefendRush14_Float.Apply(floatBytes);
+    g_D14FloatBytes[0] = 0x00;
+    g_D14FloatBytes[1] = 0x00;
+    g_D14FloatBytes[2] = 0x20;  // -10.0f 小端
+    g_D14FloatBytes[3] = 0xC1;
+
+    return true;
 }
 
-void RestoreDefendRush14_Float()
+//========================================================================================
+// MODULE 14 LIFECYCLE
+//========================================================================================
+
+/**
+ * 初始化模块 14 的唯一事项：前沿架枪公式重写
+ *
+ * @return              true = 事项已武装
+ */
+bool InitModule14_DefendRush()
 {
-    g_PatchDefendRush14_Float.Restore();
+    if (g_hGameConf == null)
+    {
+        Item_SetReady(ITEM_M14_DEFEND, false);
+        LogError("[BotRouteFix] [Module 14] Gamedata missing; defend-rush item FAILED.");
+        return false;
+    }
+
+    Item_SetReady(ITEM_M14_DEFEND, PrepModule14_DefendBackend());
+    EnableModule14_DefendRush(true);
+
+    LogMessage("[BotRouteFix] [Module 14] defendRushChance (40-10*M) armed=%d [%s]",
+        Item_IsArmed(ITEM_M14_DEFEND), g_bIsWin64 ? "64-bit" : "32-bit");
+    return Item_IsArmed(ITEM_M14_DEFEND);
 }
+
+/**
+ * 动态启用或停用模块 14（幂等；4 lea + 1 float 全成或全败）
+ *
+ * @param enable        true = 按事项后端就绪情况武装；false = 还原并解除武装
+ */
+void EnableModule14_DefendRush(bool enable)
+{
+    if (enable == g_bModule14_Active)
+    {
+        return;
+    }
+
+    if (!enable)
+    {
+        RestoreModule14_DefendBackend();
+        g_bModule14_Active = false;
+        return;
+    }
+
+    g_bModule14_Active = ApplyModule14_DefendBackend();
+}
+
+/**
+ * 还原模块 14（插件卸载：恢复原始字节并复位业务态）
+ */
+void RestoreModule14_DefendRush()
+{
+    EnableModule14_DefendRush(false);
+    LogMessage("[BotRouteFix] [Module 14] Patches safely restored to original bytes.");
+}
+
+//========================================================================================
+// MODULE 14 PUBLIC GETTERS & FORMULA
+//========================================================================================
+
+/**
+ * 计算给定士气值对应的理论架前沿概率 (百分比 0.0 ~ 100.0)
+ *
+ * @param morale        Bot 士气数值 (-3 ~ +3)
+ * @return              架前沿概率 (0.0 ~ 100.0)
+ */
+float Module14_CalculateDefendRushChance(int morale)
+{
+    float chance = DEFEND_RUSH_CHANCE_BASE - DEFEND_RUSH_CHANCE_STEP * float(morale);
+    if (chance > DEFEND_RUSH_CHANCE_MAX)
+    {
+        chance = DEFEND_RUSH_CHANCE_MAX;
+    }
+    else if (chance < DEFEND_RUSH_CHANCE_MIN)
+    {
+        chance = DEFEND_RUSH_CHANCE_MIN;
+    }
+    return chance;
+}
+
+//========================================================================================
+// MODULE 14 ITEM APPLY / RESTORE BACKENDS
+//========================================================================================
+
+/**
+ * 应用前沿架枪事项：全成或全败
+ *
+ * 物理写入失败证伪了 Prep 的模板校验，必须同步清 Ready 并回滚已写站点。
+ *
+ * @return              true = 4 lea + 1 float 全部驻留
+ */
+static bool ApplyModule14_DefendBackend()
+{
+    if (!Item_IsReady(ITEM_M14_DEFEND))
+    {
+        Item_SetArmed(ITEM_M14_DEFEND, false);
+        return false;
+    }
+
+    for (int i = 0; i < 4; i++)
+    {
+        int oneByte[1];
+        oneByte[0] = g_D14SiteByte[i];
+
+        if (!g_PatchDefendRush14_Lea[i].Apply(oneByte))
+        {
+            for (int j = 0; j < 4; j++)
+            {
+                g_PatchDefendRush14_Lea[j].Restore();
+            }
+            g_PatchDefendRush14_Float.Restore();
+            Item_SetReady(ITEM_M14_DEFEND, false);
+            Item_SetArmed(ITEM_M14_DEFEND, false);
+            LogError("[BotRouteFix] [Module 14] Site %d write failed; all patches rolled back, defend-rush item FAILED.", i + 1);
+            return false;
+        }
+    }
+
+    if (!g_PatchDefendRush14_Float.Apply(g_D14FloatBytes))
+    {
+        // 已驻留的 lea 必须回滚，否则与旧 float 组成 -17*(M-4) 错公式半态驻留
+        for (int j = 0; j < 4; j++)
+        {
+            g_PatchDefendRush14_Lea[j].Restore();
+        }
+        g_PatchDefendRush14_Float.Restore();
+        Item_SetReady(ITEM_M14_DEFEND, false);
+        Item_SetArmed(ITEM_M14_DEFEND, false);
+        LogError("[BotRouteFix] [Module 14] Shared float write failed; all patches rolled back, defend-rush item FAILED.");
+        return false;
+    }
+
+    Item_SetArmed(ITEM_M14_DEFEND, true);
+    return true;
+}
+
+/**
+ * 还原前沿架枪事项：写回 4 站点与共享 float 的原始字节并解除武装
+ */
+static void RestoreModule14_DefendBackend()
+{
+    for (int i = 0; i < 4; i++)
+    {
+        g_PatchDefendRush14_Lea[i].Restore();
+    }
+    g_PatchDefendRush14_Float.Restore();
+    Item_SetArmed(ITEM_M14_DEFEND, false);
+}
+

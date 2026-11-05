@@ -247,16 +247,16 @@ public Action Command_Status(int client, int args)
     }
     PrintModuleLine(client, 10, "CT Chief Defuser", detail);
 
-    Format(detail, sizeof(detail), "total: %d requests", GetTotalSniperRequests());
+    Format(detail, sizeof(detail), "total: %d requests", Module11_GetTotalSniperRequests());
     PrintModuleLine(client, 11, "Sniper Corridor Deterrence", detail);
 
-    Format(detail, sizeof(detail), "total: %d redirected", GetTotalCampRedirected());
+    Format(detail, sizeof(detail), "total: %d redirected", Module12_GetTotalCampRedirected());
     PrintModuleLine(client, 12, "Sniper Camp Gate", detail);
 
     PrintModuleLine(client, 13, "Sniper Buy Chance", "formula 50-10*M, dynamic rifle dice");
     PrintModuleLine(client, 14, "Defend Rush Chance", "formula 40-10*M, 4 lea sites patched");
 
-    Format(detail, sizeof(detail), "total: %d rescaled, %d short", GetTotalHideRescaled(), GetTotalShortHides());
+    Format(detail, sizeof(detail), "total: %d rescaled, %d short", Module15_GetTotalHideRescaled(), Module15_GetTotalShortHides());
     PrintModuleLine(client, 15, "Hide Duration x(1-0.15*M)", detail);
 
     ReplyToCommand(client, "[BotRouteFix] ------------------------------------------------------------");
@@ -325,7 +325,7 @@ public Action Command_Status(int client, int args)
         if (Item_IsArmed(ITEM_M13_BUY))
         {
             Format(m13BuyChance, sizeof(m13BuyChance), "T %.0f%% / CT %.0f%%",
-                CalculateSniperBuyChance(tMorale), CalculateSniperBuyChance(ctMorale));
+                Module13_CalculateSniperBuyChance(tMorale), Module13_CalculateSniperBuyChance(ctMorale));
         }
         else
         {
@@ -336,7 +336,7 @@ public Action Command_Status(int client, int args)
         if (Item_IsArmed(ITEM_M14_DEFEND))
         {
             Format(m14RushChance, sizeof(m14RushChance), "T %.0f%% / CT %.0f%%",
-                CalculateDefendRushChance(tMorale), CalculateDefendRushChance(ctMorale));
+                Module14_CalculateDefendRushChance(tMorale), Module14_CalculateDefendRushChance(ctMorale));
         }
         else
         {

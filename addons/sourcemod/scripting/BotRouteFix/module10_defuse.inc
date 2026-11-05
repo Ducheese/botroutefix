@@ -212,10 +212,17 @@ void Module10_OnBombPlanted()
 }
 
 /**
- * 死亡事件：首席倒地立即按缓存包坐标接力
+ * 事项 M10 首席拆包的死亡处理：首席倒地立即按缓存包坐标接力
+ *
+ * 未武装时直接返回，不做任何业务副作用。
  */
 void Module10_OnPlayerDeath(int victim)
 {
+    if (!Item_IsArmed(ITEM_M10_DEFUSE))
+    {
+        return;
+    }
+
     if (victim != g_iChief)
     {
         return;
@@ -225,10 +232,17 @@ void Module10_OnPlayerDeath(int victim)
 }
 
 /**
- * 客户端掉线 (OnClientDisconnect)：无死亡事件，首席掉线不断档
+ * 事项 M10 首席拆包的掉线处理（OnClientDisconnect）：无死亡事件，首席掉线不断档
+ *
+ * 未武装时直接返回，不做任何业务副作用。
  */
 void Module10_OnClientDisconnect(int client)
 {
+    if (!Item_IsArmed(ITEM_M10_DEFUSE))
+    {
+        return;
+    }
+
     if (client != g_iChief)
     {
         return;

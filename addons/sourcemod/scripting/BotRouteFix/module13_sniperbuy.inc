@@ -39,133 +39,65 @@
 //    ★ 机器码立即数固化说明: 当前注入的机器码已将公式 (50.0 - 10.0 * Morale)
 //      固化为底层汇编立即数 (add ecx/eax, 50 与 imul ecx/eax, -10)；下方的 SNIPER_BUY_CHANCE_*
 //      宏定义仅供 CalculateSniperBuyChance 等辅助查询与理论对齐，修改宏不会直接改变底层汇编立即数。
+//
+// 事项契约:
+//   - 唯一事项 = 买狙公式重写（ITEM_M13_BUY）。
+//   - 32 位单段整窗重写；64 位 jmp-in + cave 双段，全成或全败。
+//   - 物理写入失败证伪探测结论 → Ready 清空并回滚，不允许半态驻留。
 //========================================================================================
+
+//========================================================================================
+// MODULE 13 DEFINES & GLOBALS
+//========================================================================================
+
 // 随机买狙击枪意愿概率公式宏定义 (Chance = BASE - STEP * Morale，注：当前机器码内已固化立即数 50 与 -10)
 #define SNIPER_BUY_CHANCE_BASE  50.0    // 基础买狙意愿概率 (士气 0 时 50%)
 #define SNIPER_BUY_CHANCE_STEP  10.0    // 每级士气增减步长 (百分比)
 #define SNIPER_BUY_CHANCE_MIN   0.0     // 买狙意愿概率下限
 #define SNIPER_BUY_CHANCE_MAX   100.0   // 买狙意愿概率上限
 
-MemoryPatch g_PatchSniperBuy13_Main;
-MemoryPatch g_PatchSniperBuy13_Cave;
+static MemoryPatch g_PatchSniperBuy13_Main;
+static MemoryPatch g_PatchSniperBuy13_Cave;
 
-// 业务开启态
+// Prep 构造、Apply 原样写入的机器码缓冲
+static int g_Buy13MainBytes[66];
+static int g_Buy13CaveBytes[25];
+static bool g_bBuy13UseCave = false;    // true = 64 位 jmp-in + cave 双段
+
+// 模块规则开启态（Enable 幂等缓存；业务判据统一用 Item_IsArmed）
 static bool g_bModule13_Active = false;
 
+//========================================================================================
+// MODULE 13 ITEM BACKENDS (called by Init)
+//========================================================================================
+
 /**
- * 初始化并激活模块 13
+ * 事项后端：买狙公式重写（ITEM_M13_BUY）
  *
- * @return              是否成功激活
+ * 按架构定位/校验/备份并构造机器码，不写入代码段（写入由 Apply 执行）。
+ * 任一后端失败返回 false，Init 会把事项标记为 FAILED。
+ *
+ * @return              true = 买狙事项后端就绪
  */
-bool InitModule13_SniperBuy()
+static bool PrepModule13_BuyBackend()
 {
     if (g_hGameConf == null)
     {
-        LogError("[BotRouteFix] [Module 13] Error: Gamedata is not loaded, cannot initialize sniper-buy patch!");
+        LogError("[BotRouteFix] [Module 13] Gamedata missing; sniper-buy item FAILED.");
         return false;
     }
 
     if (g_iOffset_Morale <= 0)
     {
-        LogError("[BotRouteFix] [Module 13] Error: Morale offset not cached, cannot build chance math!");
+        LogError("[BotRouteFix] [Module 13] Morale offset missing; sniper-buy item FAILED.");
         return false;
     }
 
-    EnableModule13_SniperBuy(true);
-    if (!g_bModule13_Active)
-    {
-        LogError("[BotRouteFix] [Module 13] Failed to inject sniper-buy patch!");
-        return false;
-    }
-
-    LogMessage("[BotRouteFix] [Module 13] sniperRifleChance (50-10*M) patch activated [%s]",
-        g_bIsWin64 ? "64-bit" : "32-bit");
-    return true;
+    g_bBuy13UseCave = g_bIsWin64;
+    return g_bBuy13UseCave ? PrepModule13_CaveSite() : PrepModule13_RewriteSite();
 }
 
-/**
- * 动态启用或停用模块 13（幂等；main/cave 两段补丁全成或全败）
- */
-void EnableModule13_SniperBuy(bool enable)
-{
-    if (enable == g_bModule13_Active)
-    {
-        return;
-    }
-
-    if (enable)
-    {
-        bool ok = g_bIsWin64 ? PrepSniperBuy13_Cave() : PrepSniperBuy13_Rewrite();
-        if (!ok)
-        {
-            // 全成或全败：失败立即写回，杜绝"jmp 已挂、cave 未写"的半态
-            g_PatchSniperBuy13_Main.Restore();
-            g_PatchSniperBuy13_Cave.Restore();
-            g_bModule13_Active = false;
-            LogError("[BotRouteFix] [Module 13] Enable aborted (%s), all patches rolled back!",
-                g_bIsWin64 ? "64-bit cave" : "32-bit rewrite");
-            return;
-        }
-
-        g_bModule13_Active = true;
-        return;
-    }
-
-    g_PatchSniperBuy13_Main.Restore();
-    g_PatchSniperBuy13_Cave.Restore();
-    g_bModule13_Active = false;
-}
-
-/**
- * 还原模块 13（插件卸载：恢复原始字节并复位业务态）
- */
-void RestoreModule13_SniperBuy()
-{
-    EnableModule13_SniperBuy(false);
-    LogMessage("[BotRouteFix] [Module 13] Patch safely restored to original bytes.");
-}
-
-/**
- * 查询模块 13 业务开启态
- */
-bool IsModule13_Active()
-{
-    return g_bModule13_Active;
-}
-
-/**
- * 查询模块 13 补丁是否完全生效（64位需 Main 与 Cave 双段补丁均生效）
- */
-bool IsSniperBuy13Patched()
-{
-    if (g_bIsWin64)
-    {
-        return (g_PatchSniperBuy13_Main.isPatched && g_PatchSniperBuy13_Cave.isPatched);
-    }
-    return g_PatchSniperBuy13_Main.isPatched;
-}
-
-/**
- * 计算给定士气值对应的理论想买狙概率 (百分比 0.0 ~ 100.0)
- *
- * @param morale        Bot 士气数值 (-3 ~ +3)
- * @return              概率 (0.0 ~ 100.0)
- */
-float CalculateSniperBuyChance(int morale)
-{
-    float chance = SNIPER_BUY_CHANCE_BASE - SNIPER_BUY_CHANCE_STEP * float(morale);
-    if (chance > SNIPER_BUY_CHANCE_MAX)
-    {
-        chance = SNIPER_BUY_CHANCE_MAX;
-    }
-    else if (chance < SNIPER_BUY_CHANCE_MIN)
-    {
-        chance = SNIPER_BUY_CHANCE_MIN;
-    }
-    return chance;
-}
-
-//========================================================================================
+//----------------------------------------------------------------------------------------
 // 32-BIT: 66 字节整窗重写（v91/v92 同形）
 // 窗布局（相对签名起点）：
 //   +0  D9 05 <a100>      fld [100.0]          +6  83 F8 02      cmp eax,2
@@ -178,9 +110,16 @@ float CalculateSniperBuyChance(int morale)
 //   +54 DF F1             fcomip               +56 DD D8         fstp st
 //   +58 76 04             jbe                  +60 B1 01         mov cl,1
 //   +62 EB 02             jmp                  +64 32 C9         xor cl,cl
-//========================================================================================
+//----------------------------------------------------------------------------------------
 
-static bool PrepSniperBuy13_Rewrite()
+/**
+ * 事项 M13 买狙公式重写的 32 位后端准备：定位/校验/备份并构造 66 字节
+ *
+ * 失败语义：签名/模板/常量/备份任一失败返回 false，整个买狙事项 FAILED。
+ *
+ * @return              true = 重写后端就绪
+ */
+static bool PrepModule13_RewriteSite()
 {
     Address sigAddr = GameConfGetAddress(g_hGameConf, "SniperBuy13_Dice");
     if (sigAddr == Address_Null)
@@ -192,37 +131,61 @@ static bool PrepSniperBuy13_Rewrite()
     g_PatchSniperBuy13_Main.Init("SniperBuy13_Rewrite", sigAddr, 66);
 
     // 幂等性检测：+21 已是 push imm32（0x68）说明重写已驻留（原生此处是 0xCA/cmovnz 尾字节，sub esp 在 +22）；
-    // 有备份=自家补丁，保持旗标；无备份才记 false
-    if (LoadFromAddress(sigAddr + view_as<Address>(21), NumberType_Int8) == 0x68)
+    // 有备份=自家补丁；无备份=外来改写，记 false（无基线可还原）
+    bool alreadyPatched = (LoadFromAddress(sigAddr + view_as<Address>(21), NumberType_Int8) == 0x68);
+    if (alreadyPatched && !g_PatchSniperBuy13_Main.hasBackup)
     {
-        if (!g_PatchSniperBuy13_Main.hasBackup)
-        {
-            g_PatchSniperBuy13_Main.isPatched = false;
-        }
+        g_PatchSniperBuy13_Main.isPatched = false;
+        LogError("[BotRouteFix] [Module 13] Rewrite already present without baseline @ %X; sniper-buy item FAILED.", sigAddr);
+        return false;
+    }
+
+    if (alreadyPatched)
+    {
         LogMessage("[BotRouteFix] [Module 13] Rewrite patch already present @ %X, skipping", sigAddr);
-        return true;
     }
-
-    // 预检：比对关键操作码（漂移的地址/槽位字节跳过；33 F6 / 32 C9 必须成对出现）
-    int chkOff[24] = {0,1,6,7,8,9,14,19,20,21,22,23,24,25,28,29,39,40,54,55,56,57,64,65};
-    int chkVal[24] = {0xD9,0x05,0x83,0xF8,0x02,0xBA,0xB9,0x0F,0x45,0xCA,0x83,0xEC,0x08,0x89,0x33,0xF6,0xFF,0x15,0xDF,0xF1,0xDD,0xD8,0x32,0xC9};
-    for (int i = 0; i < 24; i++)
+    else
     {
-        int got = LoadFromAddress(sigAddr + view_as<Address>(chkOff[i]), NumberType_Int8);
-        if (got != chkVal[i])
+        // 预检：比对关键操作码（漂移的地址/槽位字节跳过；33 F6 / 32 C9 必须成对出现）
+        int chkOff[24] = {0,1,6,7,8,9,14,19,20,21,22,23,24,25,28,29,39,40,54,55,56,57,64,65};
+        int chkVal[24] = {0xD9,0x05,0x83,0xF8,0x02,0xBA,0xB9,0x0F,0x45,0xCA,0x83,0xEC,0x08,0x89,0x33,0xF6,0xFF,0x15,0xDF,0xF1,0xDD,0xD8,0x32,0xC9};
+        for (int i = 0; i < 24; i++)
         {
-            LogError("[BotRouteFix] [Module 13] 32-bit template mismatch at +%d (expected %02X, got %02X), patch aborted!",
-                chkOff[i], chkVal[i], got);
-            return false;
+            int got = LoadFromAddress(sigAddr + view_as<Address>(chkOff[i]), NumberType_Int8);
+            if (got != chkVal[i])
+            {
+                LogError("[BotRouteFix] [Module 13] 32-bit template mismatch at +%d (expected %02X, got %02X), patch aborted!",
+                    chkOff[i], chkVal[i], got);
+                return false;
+            }
         }
     }
 
-    // 动态提取版本相关地址与槽位
-    int addr100 = LoadFromAddress(sigAddr + view_as<Address>(2), NumberType_Int32);
-    int addrT   = LoadFromAddress(sigAddr + view_as<Address>(10), NumberType_Int32);
-    int addrCT  = LoadFromAddress(sigAddr + view_as<Address>(15), NumberType_Int32);
-    int var10   = LoadFromAddress(sigAddr + view_as<Address>(27), NumberType_Int8);
-    int addrRF  = LoadFromAddress(sigAddr + view_as<Address>(41), NumberType_Int32);
+    if (!g_PatchSniperBuy13_Main.BackupOriginal())
+    {
+        LogError("[BotRouteFix] [Module 13] Rewrite baseline backup failed; sniper-buy item FAILED.");
+        return false;
+    }
+
+    // 版本相关地址与槽位一律从原始基线读取：已驻留时当前字节已被本插件覆盖，
+    // 只有备份里还留着真实操作数（addrT/addrCT/var10/addrRF）。
+    int addr100 = g_PatchSniperBuy13_Main.originalBytes[2]
+        | (g_PatchSniperBuy13_Main.originalBytes[3] << 8)
+        | (g_PatchSniperBuy13_Main.originalBytes[4] << 16)
+        | (g_PatchSniperBuy13_Main.originalBytes[5] << 24);
+    int addrT = g_PatchSniperBuy13_Main.originalBytes[10]
+        | (g_PatchSniperBuy13_Main.originalBytes[11] << 8)
+        | (g_PatchSniperBuy13_Main.originalBytes[12] << 16)
+        | (g_PatchSniperBuy13_Main.originalBytes[13] << 24);
+    int addrCT = g_PatchSniperBuy13_Main.originalBytes[15]
+        | (g_PatchSniperBuy13_Main.originalBytes[16] << 8)
+        | (g_PatchSniperBuy13_Main.originalBytes[17] << 16)
+        | (g_PatchSniperBuy13_Main.originalBytes[18] << 24);
+    int var10 = g_PatchSniperBuy13_Main.originalBytes[27];
+    int addrRF = g_PatchSniperBuy13_Main.originalBytes[41]
+        | (g_PatchSniperBuy13_Main.originalBytes[42] << 8)
+        | (g_PatchSniperBuy13_Main.originalBytes[43] << 16)
+        | (g_PatchSniperBuy13_Main.originalBytes[44] << 24);
 
     // 语义锚点：100.0 常量校验（50.0 不再被引用，无需校验）
     if (view_as<float>(LoadFromAddress(view_as<Address>(addr100), NumberType_Int32)) != 100.0)
@@ -265,15 +228,27 @@ static bool PrepSniperBuy13_Rewrite()
     }
     p[18] = var10;
 
-    return g_PatchSniperBuy13_Main.Apply(p);
+    for (int i = 0; i < 66; i++)
+    {
+        g_Buy13MainBytes[i] = p[i];
+    }
+
+    return true;
 }
 
-//========================================================================================
+//----------------------------------------------------------------------------------------
 // 64-BIT: jmp-out cave（comiss 7B → E9 + 2 NOP）
 // cave @ comiss + 0xC5AB3（前驱 C3，21×CC + 10B 对齐 NOP 共 31B，写前全量校验）
-//========================================================================================
+//----------------------------------------------------------------------------------------
 
-static bool PrepSniperBuy13_Cave()
+/**
+ * 事项 M13 买狙公式重写的 64 位后端准备：jmp-in + cave 定位/校验/备份并构造两段字节
+ *
+ * 失败语义：签名/模板/常量/常量池/备份任一失败返回 false，整个买狙事项 FAILED。
+ *
+ * @return              true = 双段后端就绪
+ */
+static bool PrepModule13_CaveSite()
 {
     Address sigAddr = GameConfGetAddress(g_hGameConf, "SniperBuy13_Dice");
     if (sigAddr == Address_Null)
@@ -285,35 +260,6 @@ static bool PrepSniperBuy13_Cave()
     // comiss 在签名 +12（0F 2F 05），back-target（mov r11）在 comiss+7
     Address comissAddr = sigAddr + view_as<Address>(12);
 
-    // 幂等性检测：comiss 已被 E9 替换说明 cave 已挂（必须先查，否则 opcode 预检误报）；
-    // 有备份=自家补丁，保持旗标；无备份才记 false
-    if (LoadFromAddress(comissAddr, NumberType_Int8) == 0xE9)
-    {
-        if (!g_PatchSniperBuy13_Main.hasBackup)
-        {
-            g_PatchSniperBuy13_Main.isPatched = false;
-        }
-        LogMessage("[BotRouteFix] [Module 13] Cave hook already present @ %X, skipping", comissAddr);
-        return true;
-    }
-
-    if (LoadFromAddress(comissAddr, NumberType_Int8) != 0x0F
-        || LoadFromAddress(comissAddr + view_as<Address>(1), NumberType_Int8) != 0x2F
-        || LoadFromAddress(comissAddr + view_as<Address>(2), NumberType_Int8) != 0x05)
-    {
-        LogError("[BotRouteFix] [Module 13] 64-bit comiss opcode mismatch, patch aborted!");
-        return false;
-    }
-
-    // 语义锚点：comiss 的比较常量必须确为 50.0f（RIP 解算）
-    int rel50 = LoadFromAddress(comissAddr + view_as<Address>(3), NumberType_Int32);
-    Address float50 = comissAddr + view_as<Address>(7 + rel50);
-    if (view_as<float>(LoadFromAddress(float50, NumberType_Int32)) != 50.0)
-    {
-        LogError("[BotRouteFix] [Module 13] Constant mismatch (expected 50.0f), patch aborted!");
-        return false;
-    }
-
     // cave 地址 = comiss + caveOffset（同模块相对位移，ASLR 安全；优先从 gamedata 读取，默认兜底 0xC5B13）
     int caveOffset = GameConfGetOffset(g_hGameConf, "SniperBuy13_CaveOffset");
     if (caveOffset <= 0)
@@ -322,30 +268,73 @@ static bool PrepSniperBuy13_Cave()
     }
     Address caveAddr = comissAddr + view_as<Address>(caveOffset);
 
-    // 前驱必须是 C3（ret），排除 fall-through 落入 cave 的可能
-    if (LoadFromAddress(caveAddr - view_as<Address>(1), NumberType_Int8) != 0xC3)
+    g_PatchSniperBuy13_Main.Init("SniperBuy13_JmpIn", comissAddr, 7);
+    g_PatchSniperBuy13_Cave.Init("SniperBuy13_Cave", caveAddr, 25);
+
+    // 幂等性检测：comiss 已被 E9 替换说明 cave 已挂（必须先查，否则 opcode 预检误报）；
+    // 有备份=自家补丁；无备份=外来改写，记 false（无基线可还原）
+    bool alreadyPatched = (LoadFromAddress(comissAddr, NumberType_Int8) == 0xE9);
+    if (alreadyPatched && (!g_PatchSniperBuy13_Main.hasBackup || !g_PatchSniperBuy13_Cave.hasBackup))
     {
-        LogError("[BotRouteFix] [Module 13] Cave predecessor is not C3, patch aborted!");
+        g_PatchSniperBuy13_Main.isPatched = false;
+        g_PatchSniperBuy13_Cave.isPatched = false;
+        LogError("[BotRouteFix] [Module 13] Cave hook already present without baseline @ %X; sniper-buy item FAILED.", comissAddr);
         return false;
     }
 
-    int caveExpect[31] = {
-        0xCC,0xCC,0xCC,0xCC,0xCC,0xCC,0xCC,0xCC,0xCC,0xCC,0xCC,0xCC,0xCC,0xCC,0xCC,0xCC,
-        0xCC,0xCC,0xCC,0xCC,0xCC,0x66,0x66,0x0F,0x1F,0x84,0x00,0x00,0x00,0x00,0x00
-    };
-    for (int i = 0; i < 31; i++)
+    if (alreadyPatched)
     {
-        int got = LoadFromAddress(caveAddr + view_as<Address>(i), NumberType_Int8);
-        if (got != caveExpect[i])
+        LogMessage("[BotRouteFix] [Module 13] Cave hook already present @ %X, skipping", comissAddr);
+    }
+    else
+    {
+        if (LoadFromAddress(comissAddr, NumberType_Int8) != 0x0F
+            || LoadFromAddress(comissAddr + view_as<Address>(1), NumberType_Int8) != 0x2F
+            || LoadFromAddress(comissAddr + view_as<Address>(2), NumberType_Int8) != 0x05)
         {
-            LogError("[BotRouteFix] [Module 13] Cave site mismatch at +%d (expected %02X, got %02X), patch aborted!",
-                i, caveExpect[i], got);
+            LogError("[BotRouteFix] [Module 13] 64-bit comiss opcode mismatch, patch aborted!");
             return false;
+        }
+
+        // 语义锚点：comiss 的比较常量必须确为 50.0f（RIP 解算）
+        int rel50 = LoadFromAddress(comissAddr + view_as<Address>(3), NumberType_Int32);
+        Address float50 = comissAddr + view_as<Address>(7 + rel50);
+        if (view_as<float>(LoadFromAddress(float50, NumberType_Int32)) != 50.0)
+        {
+            LogError("[BotRouteFix] [Module 13] Constant mismatch (expected 50.0f), patch aborted!");
+            return false;
+        }
+
+        // 前驱必须是 C3（ret），排除 fall-through 落入 cave 的可能
+        if (LoadFromAddress(caveAddr - view_as<Address>(1), NumberType_Int8) != 0xC3)
+        {
+            LogError("[BotRouteFix] [Module 13] Cave predecessor is not C3, patch aborted!");
+            return false;
+        }
+
+        int caveExpect[31] = {
+            0xCC,0xCC,0xCC,0xCC,0xCC,0xCC,0xCC,0xCC,0xCC,0xCC,0xCC,0xCC,0xCC,0xCC,0xCC,0xCC,
+            0xCC,0xCC,0xCC,0xCC,0xCC,0x66,0x66,0x0F,0x1F,0x84,0x00,0x00,0x00,0x00,0x00
+        };
+        for (int i = 0; i < 31; i++)
+        {
+            int got = LoadFromAddress(caveAddr + view_as<Address>(i), NumberType_Int8);
+            if (got != caveExpect[i])
+            {
+                LogError("[BotRouteFix] [Module 13] Cave site mismatch at +%d (expected %02X, got %02X), patch aborted!",
+                    i, caveExpect[i], got);
+                return false;
+            }
         }
     }
 
-    // 先写 cave（25B），再挂 jmp-in，避免 jmp 指向 int3 的窗口
-    // cave: ecx/xmm1 已死（后均重载），eax/xmm0/r14 不碰，flags 由 comiss 重建
+    if (!g_PatchSniperBuy13_Main.BackupOriginal() || !g_PatchSniperBuy13_Cave.BackupOriginal())
+    {
+        LogError("[BotRouteFix] [Module 13] Cave/jmp-in baseline backup failed; sniper-buy item FAILED.");
+        return false;
+    }
+
+    // 构造 cave（25B）：ecx/xmm1 已死（后均重载），eax/xmm0/r14 不碰，flags 由 comiss 重建
     Address backAddr = comissAddr + view_as<Address>(7);
     int backRel = view_as<int>(backAddr - (caveAddr + view_as<Address>(25)));
     int caveBytes[25] = {
@@ -362,13 +351,7 @@ static bool PrepSniperBuy13_Cave()
         caveBytes[21 + b] = (backRel >> (b * 8)) & 0xFF;
     }
 
-    g_PatchSniperBuy13_Cave.Init("SniperBuy13_Cave", caveAddr, 25);
-    if (!g_PatchSniperBuy13_Cave.Apply(caveBytes))
-    {
-        return false;
-    }
-
-    // 挂 jmp-in：E9 <cave> + 2 NOP（盖掉 7B comiss）；失败则回滚 cave，不留半态
+    // 构造 jmp-in（7B）：E9 <cave> + 2 NOP（盖掉 7B comiss）
     int jmpRel = view_as<int>(caveAddr - (comissAddr + view_as<Address>(5)));
     int jmpBytes[7] = {0xE9, 0, 0, 0, 0, 0x90, 0x90};
     for (int b = 0; b < 4; b++)
@@ -376,11 +359,160 @@ static bool PrepSniperBuy13_Cave()
         jmpBytes[1 + b] = (jmpRel >> (b * 8)) & 0xFF;
     }
 
-    g_PatchSniperBuy13_Main.Init("SniperBuy13_JmpIn", comissAddr, 7);
-    if (!g_PatchSniperBuy13_Main.Apply(jmpBytes))
+    for (int i = 0; i < 25; i++)
     {
-        g_PatchSniperBuy13_Cave.Restore();
-        return false;
+        g_Buy13CaveBytes[i] = caveBytes[i];
     }
+    for (int i = 0; i < 7; i++)
+    {
+        g_Buy13MainBytes[i] = jmpBytes[i];
+    }
+
     return true;
 }
+
+//========================================================================================
+// MODULE 13 LIFECYCLE
+//========================================================================================
+
+/**
+ * 初始化模块 13 的唯一事项：随机买狙公式重写
+ *
+ * @return              true = 事项已武装
+ */
+bool InitModule13_SniperBuy()
+{
+    if (g_hGameConf == null)
+    {
+        Item_SetReady(ITEM_M13_BUY, false);
+        LogError("[BotRouteFix] [Module 13] Gamedata missing; sniper-buy item FAILED.");
+        return false;
+    }
+
+    Item_SetReady(ITEM_M13_BUY, PrepModule13_BuyBackend());
+    EnableModule13_SniperBuy(true);
+
+    LogMessage("[BotRouteFix] [Module 13] sniperRifleChance (50-10*M) armed=%d [%s]",
+        Item_IsArmed(ITEM_M13_BUY), g_bIsWin64 ? "64-bit" : "32-bit");
+    return Item_IsArmed(ITEM_M13_BUY);
+}
+
+/**
+ * 动态启用或停用模块 13
+ *
+ * @param enable        true = 按事项后端就绪情况武装；false = 还原并解除武装
+ */
+void EnableModule13_SniperBuy(bool enable)
+{
+    if (enable == g_bModule13_Active)
+    {
+        return;
+    }
+
+    if (!enable)
+    {
+        RestoreModule13_BuyBackend();
+        g_bModule13_Active = false;
+        return;
+    }
+
+    g_bModule13_Active = ApplyModule13_BuyBackend();
+}
+
+/**
+ * 还原模块 13（插件卸载：恢复原始字节并复位业务态）
+ */
+void RestoreModule13_SniperBuy()
+{
+    EnableModule13_SniperBuy(false);
+    LogMessage("[BotRouteFix] [Module 13] Patch safely restored to original bytes.");
+}
+
+//========================================================================================
+// MODULE 13 PUBLIC GETTERS & FORMULA
+//========================================================================================
+
+/**
+ * 计算给定士气值对应的理论想买狙概率 (百分比 0.0 ~ 100.0)
+ *
+ * @param morale        Bot 士气数值 (-3 ~ +3)
+ * @return              概率 (0.0 ~ 100.0)
+ */
+float Module13_CalculateSniperBuyChance(int morale)
+{
+    float chance = SNIPER_BUY_CHANCE_BASE - SNIPER_BUY_CHANCE_STEP * float(morale);
+    if (chance > SNIPER_BUY_CHANCE_MAX)
+    {
+        chance = SNIPER_BUY_CHANCE_MAX;
+    }
+    else if (chance < SNIPER_BUY_CHANCE_MIN)
+    {
+        chance = SNIPER_BUY_CHANCE_MIN;
+    }
+    return chance;
+}
+
+//========================================================================================
+// MODULE 13 ITEM APPLY / RESTORE BACKENDS
+//========================================================================================
+
+/**
+ * 应用买狙公式事项：全成或全败
+ *
+ * 物理写入失败证伪了 Prep 的模板校验，必须同步清 Ready 并回滚已写段落。
+ *
+ * @return              true = 补丁已驻留
+ */
+static bool ApplyModule13_BuyBackend()
+{
+    if (!Item_IsReady(ITEM_M13_BUY))
+    {
+        Item_SetArmed(ITEM_M13_BUY, false);
+        return false;
+    }
+
+    if (g_bBuy13UseCave)
+    {
+        // 先写 cave 再挂 jmp-in，避免 jmp 指向未初始化 cave 的窗口
+        if (!g_PatchSniperBuy13_Cave.Apply(g_Buy13CaveBytes))
+        {
+            Item_SetReady(ITEM_M13_BUY, false);
+            Item_SetArmed(ITEM_M13_BUY, false);
+            LogError("[BotRouteFix] [Module 13] Cave write failed; sniper-buy item FAILED.");
+            return false;
+        }
+
+        if (!g_PatchSniperBuy13_Main.Apply(g_Buy13MainBytes))
+        {
+            g_PatchSniperBuy13_Cave.Restore();
+            Item_SetReady(ITEM_M13_BUY, false);
+            Item_SetArmed(ITEM_M13_BUY, false);
+            LogError("[BotRouteFix] [Module 13] Jmp-in write failed; cave rolled back, sniper-buy item FAILED.");
+            return false;
+        }
+    }
+    else
+    {
+        if (!g_PatchSniperBuy13_Main.Apply(g_Buy13MainBytes))
+        {
+            Item_SetReady(ITEM_M13_BUY, false);
+            Item_SetArmed(ITEM_M13_BUY, false);
+            LogError("[BotRouteFix] [Module 13] Rewrite write failed; sniper-buy item FAILED.");
+            return false;
+        }
+    }
+
+    Item_SetArmed(ITEM_M13_BUY, true);
+    return true;
+}
+
+/**
+ * 还原买狙公式事项：写回两段原始字节并解除武装
+ */
+static void RestoreModule13_BuyBackend()
+{
+    g_PatchSniperBuy13_Main.Restore();
+    g_PatchSniperBuy13_Cave.Restore();
+    Item_SetArmed(ITEM_M13_BUY, false);
+}
+

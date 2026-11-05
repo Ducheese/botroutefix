@@ -23,10 +23,10 @@
 
 // 本模块私有状态：花名册（不出本文件，对外只暴露 Escort_* 与 Module7_*）
 static bool g_bModule7_Active = false;   // 业务开启态
-int g_iEscortCarrier = 0;
-int g_iBodyguardList[MAXPLAYERS + 1];
-int g_iBodyguardCount = 0;
-int g_iEscortTarget = 0;
+static int g_iEscortCarrier = 0;
+static int g_iBodyguardList[MAXPLAYERS + 1];
+static int g_iBodyguardCount = 0;
+static int g_iEscortTarget = 0;
 
 enum struct EscortCandidate
 {
@@ -116,176 +116,7 @@ void RestoreModule7_Escort()
 }
 
 //========================================================================================
-// MODULE 7 ROSTER MANAGEMENT PRIMITIVES
-//========================================================================================
-
-/**
- * 事项 M7 护送花名册的全量重算：开局 / 换包匪 / 中途捡包 / 热重载 / 重启用
- *
- * 只做 diff，不扫全队；换包匪先解散旧名单；死/飞/转队/变成包匪本人的一律除名。
- * 永不写运包时钟（那是模块 2 的事项）。
- */
-static void Escort_Refresh()
-{
-    Escort_ClampRoster();
-    int carrier = GetC4Carrier();
-    if (!IsValidClient(carrier, true))
-    {
-        Escort_ReleaseAll();
-        return;
-    }
-
-    // 换了包匪：先解散旧名单（只停名单内的人；空名单时 ReleaseAll 本就是 no-op）
-    if (g_iEscortCarrier != carrier)
-        Escort_ReleaseAll();
-    g_iEscortCarrier = carrier;
-
-    int morale = GetEffectiveCarrierMorale(carrier);
-    int desired = Escort_DesiredCount(morale);
-    g_iEscortTarget = desired;
-
-    float anchor[3];
-    GetClientAbsOrigin(carrier, anchor);
-
-    // 名单 pruning：死/飞/转队/变成包匪本人的一律除名（死人不再发 Stop）
-    for (int i = g_iBodyguardCount - 1; i >= 0; i--)
-    {
-        int bot = g_iBodyguardList[i];
-        if (bot == carrier || !IsTeamBot(bot, 2, true))
-        {
-            Escort_RemoveFromRoster(bot);
-        }
-    }
-
-    // 按 desired 一次配平
-    Escort_Rebalance(carrier, anchor, desired);
-
-    char moraleStr[16];
-    GetMoraleName(morale, moraleStr, sizeof(moraleStr));
-    DebugLog("[BotRouteFix] [Module 7] Carrier %N (Morale: %d %s) roster %d/%d",
-        carrier, morale, moraleStr, g_iBodyguardCount, desired);
-}
-
-/**
- * 事项 M7 护送花名册的解散：释放全部保镖（bomb_dropped / 包匪丢失 / 停用）
- *
- * 快照隔离 + 只停存活名单内的人 + 清空花名册；空名单时调用即 no-op。
- */
-static void Escort_ReleaseAll()
-{
-    int count = g_iBodyguardCount;
-    if (count <= 0)
-    {
-        g_iBodyguardCount = 0;
-        g_iEscortCarrier = 0;
-        g_iEscortTarget = 0;
-        return;
-    }
-
-    int tempList[MAXPLAYERS + 1];
-    for (int i = 0; i < count && i <= MAXPLAYERS; i++)
-    {
-        tempList[i] = g_iBodyguardList[i];
-    }
-
-    // 立即清零全局计数与包匪记录，阻断重入
-    g_iBodyguardCount = 0;
-    g_iEscortCarrier = 0;
-    g_iEscortTarget = 0;
-
-    for (int i = 0; i < count && i <= MAXPLAYERS; i++)
-    {
-        int bot = tempList[i];
-        BotStopFollowing(bot);
-    }
-}
-
-/**
- * 事项 M7 护送花名册的静默清空：round_start / map_start 用
- *
- * 新回合与换图实体索引重置，不发 SDKCall（旧索引对应的跟随早已随实体失效）。
- */
-static void Escort_ClearSilent()
-{
-    g_iBodyguardCount = 0;
-    g_iEscortCarrier = 0;
-    g_iEscortTarget = 0;
-}
-
-/**
- * 事项 M7 护送花名册的回合重置入口：Escort_ClearSilent 的对外别名
- */
-static void Escort_Reset()
-{
-    Escort_ClearSilent();
-}
-
-/**
- * 事项 M7 护送花名册的包匪身份查询（供 player_death 用）
- *
- * @return              client 是否为当前包匪
- */
-static bool Escort_IsCarrier(int client)
-{
-    return client > 0 && client == g_iEscortCarrier;
-}
-
-/**
- * 事项 M7 护送花名册的减员处理：阵亡/掉线除名 + 按当前士气重算编制多退少补
- *
- * 名单外的人调用即 no-op；包匪无效（没包匪）只除名不重补。
- */
-static void Escort_OnRosterLost(int bot, bool logIt = true)
-{
-    Escort_ClampRoster();
-    if (Escort_Find(bot) == -1)
-        return;
-
-    Escort_RemoveFromRoster(bot);
-
-    int carrier = g_iEscortCarrier;
-    if (!IsValidClient(carrier, true))
-        return;
-
-    // 人类包匪同样按调用时的 T 均值士气重算编制
-    int morale = GetEffectiveCarrierMorale(carrier);
-    g_iEscortTarget = Escort_DesiredCount(morale);
-
-    float anchor[3];
-    GetClientAbsOrigin(carrier, anchor);
-
-    int before = g_iBodyguardCount;
-    Escort_Rebalance(carrier, anchor, g_iEscortTarget);
-
-    if (logIt && g_iBodyguardCount > before)
-    {
-        DebugLog("[BotRouteFix] [Module 7] Replenished bodyguard %N for carrier %N (%d/%d)",
-            g_iBodyguardList[g_iBodyguardCount - 1], carrier, g_iBodyguardCount, g_iEscortTarget);
-    }
-}
-
-/**
- * 事项 M7 护送花名册的掉线处理：包匪掉线解散名册；保镖掉线除名+多退少补
- *
- * 掉包事件随后接管残局；保镖掉线走减员回补。
- */
-static void Escort_OnClientDisconnect(int client)
-{
-    if (client <= 0 || client > MaxClients)
-    {
-        return;
-    }
-
-    if (client == g_iEscortCarrier)
-    {
-        Escort_ReleaseAll();
-        return;
-    }
-    Escort_OnRosterLost(client, false);
-}
-
-//========================================================================================
-// MODULE 7 TELEMETRY GETTERS
+// MODULE 7 PUBLIC GETTERS & TELEMETRY
 //========================================================================================
 
 /**
@@ -331,6 +162,16 @@ int Module7_GetBodyguards(int[] bodyguards, int maxCount)
         }
     }
     return count;
+}
+
+/**
+ * 事项 M7 护送花名册的保镖身份查询（供模块 5 后撤档位裁决用）
+ *
+ * @return              client 是否在保镖名单
+ */
+bool Module7_IsBodyguard(int client)
+{
+    return Escort_Find(client) != -1;
 }
 
 //========================================================================================
@@ -471,16 +312,6 @@ void Module7_OnClientDisconnect(int client)
     }
 
     Escort_OnClientDisconnect(client);
-}
-
-/**
- * 事项 M7 护送花名册的保镖身份查询（供模块 5 后撤档位裁决用）
- *
- * @return              client 是否在保镖名单
- */
-bool Module7_IsBodyguard(int client)
-{
-    return Escort_Find(client) != -1;
 }
 
 //========================================================================================
@@ -748,4 +579,169 @@ static void Escort_Rebalance(int carrier, float anchor[3], int desired)
 {
     Escort_TrimToTarget(anchor, desired);
     Escort_FillToTarget(carrier, anchor, desired);
+}
+
+/**
+ * 事项 M7 护送花名册的全量重算：开局 / 换包匪 / 中途捡包 / 热重载 / 重启用
+ *
+ * 只做 diff，不扫全队；换包匪先解散旧名单；死/飞/转队/变成包匪本人的一律除名。
+ * 永不写运包时钟（那是模块 2 的事项）。
+ */
+static void Escort_Refresh()
+{
+    Escort_ClampRoster();
+    int carrier = GetC4Carrier();
+    if (!IsValidClient(carrier, true))
+    {
+        Escort_ReleaseAll();
+        return;
+    }
+
+    // 换了包匪：先解散旧名单（只停名单内的人；空名单时 ReleaseAll 本就是 no-op）
+    if (g_iEscortCarrier != carrier)
+        Escort_ReleaseAll();
+    g_iEscortCarrier = carrier;
+
+    int morale = GetEffectiveCarrierMorale(carrier);
+    int desired = Escort_DesiredCount(morale);
+    g_iEscortTarget = desired;
+
+    float anchor[3];
+    GetClientAbsOrigin(carrier, anchor);
+
+    // 名单 pruning：死/飞/转队/变成包匪本人的一律除名（死人不再发 Stop）
+    for (int i = g_iBodyguardCount - 1; i >= 0; i--)
+    {
+        int bot = g_iBodyguardList[i];
+        if (bot == carrier || !IsTeamBot(bot, 2, true))
+        {
+            Escort_RemoveFromRoster(bot);
+        }
+    }
+
+    // 按 desired 一次配平
+    Escort_Rebalance(carrier, anchor, desired);
+
+    char moraleStr[16];
+    GetMoraleName(morale, moraleStr, sizeof(moraleStr));
+    DebugLog("[BotRouteFix] [Module 7] Carrier %N (Morale: %d %s) roster %d/%d",
+        carrier, morale, moraleStr, g_iBodyguardCount, desired);
+}
+
+/**
+ * 事项 M7 护送花名册的解散：释放全部保镖（bomb_dropped / 包匪丢失 / 停用）
+ *
+ * 快照隔离 + 只停存活名单内的人 + 清空花名册；空名单时调用即 no-op。
+ */
+static void Escort_ReleaseAll()
+{
+    int count = g_iBodyguardCount;
+    if (count <= 0)
+    {
+        g_iBodyguardCount = 0;
+        g_iEscortCarrier = 0;
+        g_iEscortTarget = 0;
+        return;
+    }
+
+    int tempList[MAXPLAYERS + 1];
+    for (int i = 0; i < count && i <= MAXPLAYERS; i++)
+    {
+        tempList[i] = g_iBodyguardList[i];
+    }
+
+    // 立即清零全局计数与包匪记录，阻断重入
+    g_iBodyguardCount = 0;
+    g_iEscortCarrier = 0;
+    g_iEscortTarget = 0;
+
+    for (int i = 0; i < count && i <= MAXPLAYERS; i++)
+    {
+        int bot = tempList[i];
+        BotStopFollowing(bot);
+    }
+}
+
+/**
+ * 事项 M7 护送花名册的静默清空：round_start / map_start 用
+ *
+ * 新回合与换图实体索引重置，不发 SDKCall（旧索引对应的跟随早已随实体失效）。
+ */
+static void Escort_ClearSilent()
+{
+    g_iBodyguardCount = 0;
+    g_iEscortCarrier = 0;
+    g_iEscortTarget = 0;
+}
+
+/**
+ * 事项 M7 护送花名册的回合重置入口：Escort_ClearSilent 的对外别名
+ */
+static void Escort_Reset()
+{
+    Escort_ClearSilent();
+}
+
+/**
+ * 事项 M7 护送花名册的包匪身份查询（供 player_death 用）
+ *
+ * @return              client 是否为当前包匪
+ */
+static bool Escort_IsCarrier(int client)
+{
+    return client > 0 && client == g_iEscortCarrier;
+}
+
+/**
+ * 事项 M7 护送花名册的减员处理：阵亡/掉线除名 + 按当前士气重算编制多退少补
+ *
+ * 名单外的人调用即 no-op；包匪无效（没包匪）只除名不重补。
+ */
+static void Escort_OnRosterLost(int bot, bool logIt = true)
+{
+    Escort_ClampRoster();
+    if (Escort_Find(bot) == -1)
+        return;
+
+    Escort_RemoveFromRoster(bot);
+
+    int carrier = g_iEscortCarrier;
+    if (!IsValidClient(carrier, true))
+        return;
+
+    // 人类包匪同样按调用时的 T 均值士气重算编制
+    int morale = GetEffectiveCarrierMorale(carrier);
+    g_iEscortTarget = Escort_DesiredCount(morale);
+
+    float anchor[3];
+    GetClientAbsOrigin(carrier, anchor);
+
+    int before = g_iBodyguardCount;
+    Escort_Rebalance(carrier, anchor, g_iEscortTarget);
+
+    if (logIt && g_iBodyguardCount > before)
+    {
+        DebugLog("[BotRouteFix] [Module 7] Replenished bodyguard %N for carrier %N (%d/%d)",
+            g_iBodyguardList[g_iBodyguardCount - 1], carrier, g_iBodyguardCount, g_iEscortTarget);
+    }
+}
+
+/**
+ * 事项 M7 护送花名册的掉线处理：包匪掉线解散名册；保镖掉线除名+多退少补
+ *
+ * 掉包事件随后接管残局；保镖掉线走减员回补。
+ */
+static void Escort_OnClientDisconnect(int client)
+{
+    if (client <= 0 || client > MaxClients)
+    {
+        return;
+    }
+
+    if (client == g_iEscortCarrier)
+    {
+        Escort_ReleaseAll();
+        return;
+    }
+    Escort_OnRosterLost(client, false);
 }

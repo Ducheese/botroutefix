@@ -27,7 +27,7 @@
 //    跳过时长缩放且不累加计数器），实现双模块高效共用单个 Detour 拦截点。
 //
 //    ★ 模块 5 紧急短蹲入口 (M5 Soft-Exemption Short Hide, 2026-10-31):
-//    M5 在焊门时调用 HideDuration_RequestShort(client)，本模块在 Post 中优先消费该请求，
+//    M5 在焊门时调用 Module15_RequestShortHide(client)，本模块在 Post 中优先消费该请求，
 //    将 m_duration 直接写为 1 秒并跳过士气缩放（一次性 + 2 秒 TTL）。
 //    语义：后撤动作完整保留（跑向掩体、IgnoreEnemies 都照做），到达藏身点后蹲 1 秒即起，
 //    用于"有使命在身、不能久蹲"的身份（包匪/捡包名册/保镖/CT 掩护组等）。
@@ -40,7 +40,17 @@
 //    - 64 位 OnEnter @ 0x180361170：
 //      comiss xmm6, [rcx+24h] + RandomFloat(30.0, 60.0) 回写 [rbp+24h] → m_duration @ +0x24。
 //      （与 cs_bot.h 头文件布局推导一致：vtable + ptr + float + Vector + 2bool + pad。）
+//
+// 事项契约:
+//   - 唯一事项 = Hide 时长修改（ITEM_M15_HIDE），缩放与短蹲同属这一件事（items.inc:22）。
+//   - 宿主 Detour 归本模块所有；M12 借用它做 camp 重骰，钩子开关由 Sync 中枢统一裁决。
+//   - 短蹲请求是 M5 的后撤语义，宿主在就消费；M15 自身事项未武装时只跳过缩放。
 //========================================================================================
+
+//========================================================================================
+// MODULE 15 DEFINES & GLOBALS
+//========================================================================================
+
 // Hide 蹲守时长士气缩放宏定义 (Scale = BASE - STEP * Morale)
 #define HIDE_DURATION_SCALE_BASE    1.0     // 基础缩放系数 (士气 0 时 1.0x 原始时长)
 #define HIDE_DURATION_SCALE_STEP    0.15    // 每级士气缩放步长 (15%，缩放范围 0.55x ~ 1.45x)
@@ -49,79 +59,132 @@
 #define HIDE_SHORT_REQUEST_TTL      2.0     // 请求有效期 (秒)
 #define HIDE_SHORT_DURATION         1.0     // 短蹲时长：到点即起，但保留完整后撤动作
 
-DynamicDetour g_hHideDurationDetour = null;
-int g_iOffset_HideDuration = -1;
-int g_iTotalHideRescaled = 0;
+static DynamicDetour g_hHideDurationDetour = null;
+static int g_iOffset_HideDuration = -1;
+static int g_iTotalHideRescaled = 0;
 
 // per-client 短蹲请求截止时间戳 (0.0 = 无请求)
 static float g_flShortHideUntil[MAXPLAYERS + 1];
 static int g_iTotalShortHides = 0;
 
-// 业务开启态与 per-hook 真实启用态（DHook 状态机唯一事实来源）
+// 模块启用缓存（= Item_IsArmed(ITEM_M15_HIDE)，Enable 幂等短路）
 static bool g_bModule15_Active = false;
+// 规则意图（区分"规则关闭"与"武装失败"，关闭路径必须执行）
+static bool g_bModule15_RuleOn = false;
 static bool g_bHideDurationDetourEnabled = false;
 
+//========================================================================================
+// MODULE 15 ITEM BACKENDS (called by Init)
+//========================================================================================
+
 /**
- * 初始化并挂载模块 15（DHook HideState::OnEnter post 宿主）
+ * 事项后端：Hide 时长修改（ITEM_M15_HIDE）
  *
- * @return              是否成功激活
+ * 只读偏移、挂载 HideState::OnEnter Post Detour，不启用钩子（启用由 Apply 执行）。
+ * 任一后端失败返回 false，Init 会把事项标记为 FAILED。
+ *
+ * @return              true = Hide 时长事项后端就绪
  */
-bool InitModule15_HideDuration()
+static bool PrepModule15_HideBackend()
 {
     if (g_hGameConf == null)
     {
-        LogError("[BotRouteFix] [Module 15] Error: Gamedata is not loaded, cannot initialize Hide duration hook!");
+        LogError("[BotRouteFix] [Module 15] Gamedata missing; hide duration item FAILED.");
         return false;
     }
 
     g_iOffset_HideDuration = GameConfGetOffset(g_hGameConf, "HideState_Duration_Offset");
     if (g_iOffset_HideDuration <= 0)
     {
-        LogError("[BotRouteFix] [Module 15] Failed to read HideState_Duration_Offset!");
+        LogError("[BotRouteFix] [Module 15] HideState_Duration offset missing; hide duration item FAILED.");
         return false;
     }
 
-    if (!MountHideDurationDetour())
-    {
-        LogError("[BotRouteFix] [Module 15] Failed to inject HideState::OnEnter post hook!");
-        return false;
-    }
-
-    // 套用业务态（借钩方模块 12 可能已先行武装：底层真实启用态统一由 Enable 内部的 Sync 裁决）
-    EnableModule15_HideDuration(true);
-
-    LogMessage("[BotRouteFix] [Module 15] Hide duration morale scaling activated [%s]",
-        g_bIsWin64 ? "64-bit" : "32-bit");
-    return true;
+    return MountHideDurationDetour();
 }
 
 /**
- * 同步 HideState::OnEnter 宿主 Detour 的真实启用态（M12/M15 共用单钩的协同中枢）
+ * 挂载 HideState::OnEnter Post Detour（事项 M15 与 M12 借钩的唯一宿主）
  *
- * 模块 12（狙击 camp 门禁）不单独注册 Detour，而是借本模块的 Post Detour 作为执行宿主。
- * 底层钩子只要任一借钩方仍在工作就必须保持启用；只有双方全部关闭才真正 Disable。
- * 既杜绝重复 Enable/Disable 触发 "Function not detoured" 致命状态机异常，
- * 也避免"关掉模块 15 顺带把模块 12 门禁打死"的隐性耦合一刀切。
+ * 失败语义：签名缺失或句柄创建失败时 M15 事项 FAILED，M12 也随之无法武装。
+ *
+ * @return              true = Detour 句柄已创建并绑定签名
  */
-void SyncHideDurationDetourState()
+static bool MountHideDurationDetour()
 {
-    bool want = (IsModule12_Active() || g_bModule15_Active);
-    SyncDetourEnabled(g_hHideDurationDetour, g_bHideDurationDetourEnabled,
-        true, Hook_HideState_OnEnter_Post, want, "Module 15");
+    g_hHideDurationDetour = DHookCreateDetour(Address_Null, CallConv_THISCALL, ReturnType_Void, ThisPointer_Address);
+    if (g_hHideDurationDetour == null)
+    {
+        LogError("[BotRouteFix] [Module 15] Failed to create DHook detour instance for HideState_OnEnter!");
+        return false;
+    }
+
+    if (!DHookSetFromConf(g_hHideDurationDetour, g_hGameConf, SDKConf_Signature, "HideState_OnEnter"))
+    {
+        LogError("[BotRouteFix] [Module 15] Failed to set HideState_OnEnter signature from gamedata!");
+        delete g_hHideDurationDetour;
+        g_hHideDurationDetour = null;
+        return false;
+    }
+
+    DHookAddParam(g_hHideDurationDetour, HookParamType_CBaseEntity);
+
+    return true;
+}
+
+//========================================================================================
+// MODULE 15 LIFECYCLE
+//========================================================================================
+
+/**
+ * 初始化模块 15 的唯一事项：Hide 蹲守时长缩放
+ *
+ * @return              true = 事项已武装
+ */
+bool InitModule15_HideDuration()
+{
+    if (g_hGameConf == null)
+    {
+        Item_SetReady(ITEM_M15_HIDE, false);
+        LogError("[BotRouteFix] [Module 15] Gamedata missing; hide duration item FAILED.");
+        return false;
+    }
+
+    Item_SetReady(ITEM_M15_HIDE, PrepModule15_HideBackend());
+    EnableModule15_HideDuration(true);
+
+    LogMessage("[BotRouteFix] [Module 15] Hide duration scaling armed=%d [%s]",
+        Item_IsArmed(ITEM_M15_HIDE), g_bIsWin64 ? "64-bit" : "32-bit");
+    return Item_IsArmed(ITEM_M15_HIDE);
 }
 
 /**
  * 动态启用或停用模块 15（幂等；底层钩子随借钩双方的整体需求同步收敛）
+ *
+ * @param enable        true = 武装并同步宿主钩子；false = 解除武装并同步
  */
 void EnableModule15_HideDuration(bool enable)
 {
-    if (enable == g_bModule15_Active)
+    if (enable)
+    {
+        if (g_bModule15_Active)
+        {
+            return;
+        }
+
+        g_bModule15_RuleOn = true;
+        g_bModule15_Active = ApplyModule15_HideBackend();
+        return;
+    }
+
+    if (!g_bModule15_RuleOn)
     {
         return;
     }
 
-    g_bModule15_Active = enable;
-    SyncHideDurationDetourState();
+    g_bModule15_RuleOn = false;
+    RestoreModule15_HideBackend();
+    g_bModule15_Active = false;
 }
 
 /**
@@ -144,25 +207,30 @@ void RestoreModule15_HideDuration()
 }
 
 /**
- * 查询模块 15 业务开启态
+ * 同步 HideState::OnEnter 宿主 Detour 的真实启用态（M12/M15 共用单钩的协同中枢）
+ *
+ * 模块 12（狙击 camp 门禁）不单独注册 Detour，而是借本模块的 Post Detour 作为执行宿主。
+ * 底层钩子只要任一借钩方仍在工作就必须保持启用；只有双方全部关闭才真正 Disable。
+ * 既杜绝重复 Enable/Disable 触发 "Function not detoured" 致命状态机异常，
+ * 也避免"关掉模块 15 顺带把模块 12 门禁打死"的隐性耦合一刀切。
+ *
+ * @return              true = 同步后宿主钩子处于启用态
  */
-bool IsModule15_Active()
+bool SyncHideDurationDetourState()
 {
-    return g_bModule15_Active;
+    bool want = (Item_IsArmed(ITEM_M15_HIDE) || Item_IsArmed(ITEM_M12_CAMP));
+    return SyncDetourEnabled(g_hHideDurationDetour, g_bHideDurationDetourEnabled,
+        true, Hook_HideState_OnEnter_Post, want, "Module 15");
 }
 
-/**
- * 查询 HideState::OnEnter 宿主钩子的底层挂载态（含借钩方需求）
- */
-bool IsHideDurationHooked()
-{
-    return (g_hHideDurationDetour != null && g_bHideDurationDetourEnabled);
-}
+//========================================================================================
+// MODULE 15 PUBLIC GETTERS & TELEMETRY
+//========================================================================================
 
 /**
  * 累积缩放次数（自加载起单调递增，换图不清零）
  */
-int GetTotalHideRescaled()
+int Module15_GetTotalHideRescaled()
 {
     return g_iTotalHideRescaled;
 }
@@ -170,29 +238,14 @@ int GetTotalHideRescaled()
 /**
  * 累积紧急短蹲次数（自加载起单调递增，换图不清零）
  */
-int GetTotalShortHides()
+int Module15_GetTotalShortHides()
 {
     return g_iTotalShortHides;
 }
 
-/**
- * 紧急短蹲请求：M5 焊门时下发，HideState::OnEnter Post 消费一次
- *
- * 与士气缩放互斥：命中请求直接写 1 秒并跳过缩放，不进缩放计数。
- * TTL 约束：请求只绑定 client + 2 秒窗口，窗口内任意 Hide 都会消费它；超时未消费则作废。
- * 已知弱身份：TryToRetreat 找不到掩体后，窗口内的换弹/守包 Hide 可能被误压成 1 秒。
- *
- * @param client        客户端索引
- */
-void HideDuration_RequestShort(int client)
-{
-    if (client <= 0 || client > MaxClients)
-    {
-        return;
-    }
-
-    g_flShortHideUntil[client] = GetGameTime() + HIDE_SHORT_REQUEST_TTL;
-}
+//========================================================================================
+// MODULE 15 EVENT HANDLERS
+//========================================================================================
 
 /**
  * 回合开始：清空上回合残留的短蹲请求（槽位复用/时间戳跨回合失效）
@@ -226,31 +279,16 @@ void Module15_OnClientDisconnect(int client)
 }
 
 //========================================================================================
-// DETOUR: HIDESTATE::ONENTER (POST HOOK FOR MORALE DURATION SCALING)
+// MODULE 15 DETOUR & HOOKS (HIDESTATE::ONENTER, POST)
 //========================================================================================
 
-static bool MountHideDurationDetour()
-{
-    g_hHideDurationDetour = DHookCreateDetour(Address_Null, CallConv_THISCALL, ReturnType_Void, ThisPointer_Address);
-    if (g_hHideDurationDetour == null)
-    {
-        LogError("[BotRouteFix] [Module 15] Failed to create DHook detour instance for HideState_OnEnter!");
-        return false;
-    }
-
-    if (!DHookSetFromConf(g_hHideDurationDetour, g_hGameConf, SDKConf_Signature, "HideState_OnEnter"))
-    {
-        LogError("[BotRouteFix] [Module 15] Failed to set HideState_OnEnter signature from gamedata!");
-        delete g_hHideDurationDetour;
-        g_hHideDurationDetour = null;
-        return false;
-    }
-
-    DHookAddParam(g_hHideDurationDetour, HookParamType_CBaseEntity);
-
-    return true;
-}
-
+/**
+ * HideState::OnEnter Post：M12 camp 重骰 → M5 短蹲 → M15 士气缩放
+ *
+ * @param pThis         HideState 指针
+ * @param hParams       DHook 参数
+ * @return              MRES_Ignored
+ */
 public MRESReturn Hook_HideState_OnEnter_Post(Address pThis, DHookParam hParams)
 {
     if (pThis == Address_Null)
@@ -265,7 +303,7 @@ public MRESReturn Hook_HideState_OnEnter_Post(Address pThis, DHookParam hParams)
     }
 
     // M12 camp 门禁：task 19 的 Hide 在此重骰；被重定向去 Hunt 的直接返回，不再缩放
-    if (IsModule12_Active() && Module12_CampGate(client))
+    if (Module12_CampGate(client))
     {
         return MRES_Ignored;
     }
@@ -293,8 +331,8 @@ public MRESReturn Hook_HideState_OnEnter_Post(Address pThis, DHookParam hParams)
         }
     }
 
-    // 借钩方可能独占了本宿主（M15 关闭、M12 开启）：业务门各自独立把关
-    if (!g_bModule15_Active)
+    // 借钩方可能独占了本宿主（M15 关闭、M12 开启）：缩放只在 M15 事项武装时执行
+    if (!Item_IsArmed(ITEM_M15_HIDE))
     {
         return MRES_Ignored;
     }
@@ -310,4 +348,64 @@ public MRESReturn Hook_HideState_OnEnter_Post(Address pThis, DHookParam hParams)
     g_iTotalHideRescaled++;
     // DebugLog("[BotRouteFix] [Module 15] Bot %N hide duration %.1fs -> %.1fs (morale %d)", client, duration, scaled, morale);
     return MRES_Ignored;
+}
+
+//========================================================================================
+// MODULE 15 ITEM APPLY / RESTORE BACKENDS
+//========================================================================================
+
+/**
+ * 事项 M15 隐藏时长的跨模块请求入口：M5 焊门时下发紧急短蹲
+ *
+ * 只登记请求，不改变本模块事项状态；HideState::OnEnter Post 在 TTL 窗口内消费一次。
+ * 与士气缩放互斥：命中请求直接写 1 秒并跳过缩放，不进缩放计数。
+ * 已知弱身份：TryToRetreat 找不到掩体后，窗口内的换弹/守包 Hide 可能被误压成 1 秒。
+ *
+ * @param client        客户端索引
+ */
+void Module15_RequestShortHide(int client)
+{
+    if (client <= 0 || client > MaxClients)
+    {
+        return;
+    }
+
+    g_flShortHideUntil[client] = GetGameTime() + HIDE_SHORT_REQUEST_TTL;
+}
+
+/**
+ * 应用 Hide 时长事项：同步宿主钩子并按真实启用态武装
+ *
+ * 挂钩失败属动态环境抖动，不证伪探测结论：只清 Armed 保留 Ready，下次 Enable 重试。
+ *
+ * @return              true = 事项已武装且宿主钩子在线
+ */
+static bool ApplyModule15_HideBackend()
+{
+    if (!Item_IsReady(ITEM_M15_HIDE) || g_hHideDurationDetour == null)
+    {
+        Item_SetArmed(ITEM_M15_HIDE, false);
+        // 即使本事项不可用，也让宿主态与借钩方需求收敛（M12 可能仍在等钩子）
+        SyncHideDurationDetourState();
+        return false;
+    }
+
+    // 先临时置位再同步：宿主开关按双方事项态判定，不置位会形成循环依赖
+    Item_SetArmed(ITEM_M15_HIDE, true);
+    if (!SyncHideDurationDetourState())
+    {
+        Item_SetArmed(ITEM_M15_HIDE, false);
+        return false;
+    }
+
+    return true;
+}
+
+/**
+ * 还原 Hide 时长事项：解除武装并按借钩双方需求收敛宿主钩子
+ */
+static void RestoreModule15_HideBackend()
+{
+    Item_SetArmed(ITEM_M15_HIDE, false);
+    SyncHideDurationDetourState();
 }

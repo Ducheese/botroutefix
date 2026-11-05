@@ -46,8 +46,8 @@
 #define GUARD_CHANCE_MAX        100.0   // 守点概率上限
 
 // 模块内存补丁实例
-MemoryPatch g_PatchGuardBombsite;
-MemoryPatch g_PatchDefenseRush;
+static MemoryPatch g_PatchGuardBombsite;
+static MemoryPatch g_PatchDefenseRush;
 
 // 守点公式机器码暂存（64 位用前 26 字节，32 位用全部 55 字节；写入长度以补丁 Init 时为准）
 // Prep 构造并校验，Apply 原样写入；不做跨函数动态组装。
@@ -425,7 +425,7 @@ void RestoreModule1_Defense()
 }
 
 //========================================================================================
-// MODULE 1 PUBLIC API / FORMULA
+// MODULE 1 PUBLIC GETTERS & FORMULA
 //========================================================================================
 
 /**

@@ -45,6 +45,15 @@
 // 4. Fail-safe：Hunt SDKCall 缺失或任一 NOP 失败 → 全部回滚 = 原生行为。
 //    六处 jcc 逐一预检 + 幂等 + 还原；E9 转换的两处额外校验跳目标确为 camp tail
 //    （32 位 fld30 = D9 05，64 位 task19 = C7 87…13），防跳反。
+//
+// 事项契约:
+//   - 唯一事项 = camp 门禁（ITEM_M12_CAMP）；六处骰子旁路是该事项的后端链，全成或全败。
+//   - 事实上的 Hook 宿主归 M15；本模块借用其 OnEnter Post，不单独注册 Detour。
+//   - 本模块不写代码段以外的对局状态；重定向计数只在事项武装时累加。
+//========================================================================================
+
+//========================================================================================
+// MODULE 12 DEFINES & GLOBALS
 //========================================================================================
 
 // 狙击手留守蹲点概率公式宏定义 (Chance = BASE - STEP * Morale)
@@ -54,11 +63,11 @@
 #define CAMP_CHANCE_MAX         100.0   // 留守概率上限
 #define BOT_TASK_MOVE_TO_SNIPER_SPOT 19 // 引擎原生任务枚举：MOVE_TO_SNIPER_SPOT (狙击手前往架枪点)
 
-MemoryPatch g_PatchCamp12_Sites[6];
+static MemoryPatch g_PatchCamp12_Sites[6];
+static int g_Camp12PatchBytes[6][6];    // 预先构造的旁路字节（Prep 构造 / Apply 原样写入）
 static int g_iOffset_Task12 = -1;
 static int g_iOffset_Disp12 = -1;
-static bool g_bModule12_Active = false;   // 业务开启态（仅本模块写；跨模块一律经 IsModule12_Active() 读）
-static bool g_bModule12_Armed = false;    // 低层态：六处骰子旁路是否实际驻留
+static bool g_bModule12_Active = false; // 模块规则开启态（Enable 幂等缓存）
 static int g_iTotalCampRedirected = 0;
 
 // 站点表：0=O1 1=O2 2=O3 3=D1 4=D2 5=D3；O2/O3 为 ja/jb-to-camp，需 E9 转换，其余 NOP
@@ -73,22 +82,23 @@ static const char g_sCamp12_OffNames[6][32] =
     "Camp12_D1_Jcc", "Camp12_D2_Jcc", "Camp12_D3_Jcc"
 };
 
+//========================================================================================
+// MODULE 12 ITEM BACKENDS (called by Init)
+//========================================================================================
+
 /**
- * 初始化并激活模块 12（Hunt SDKCall 先行，6/6 NOP 全成或全败）
+ * 事项后端：camp 门禁（ITEM_M12_CAMP）
  *
- * @return              是否成功激活
+ * 校验 Hunt SDKCall、task/disposition 偏移，并逐站点定位/校验/备份/构造旁路字节；
+ * 不写入任何代码段（写入由 Apply 执行）。任一后端失败返回 false，Init 标记事项 FAILED。
+ *
+ * @return              true = 六站点与门禁偏移全部就绪
  */
-bool InitModule12_CampGate()
+static bool PrepModule12_CampBackend()
 {
     if (g_hGameConf == null)
     {
-        LogError("[BotRouteFix] [Module 12] Error: Gamedata is not loaded, cannot initialize camp gate!");
-        return false;
-    }
-
-    if (g_hSDKCall_Hunt == null)
-    {
-        LogError("[BotRouteFix] [Module 12] Error: CCSBot_Hunt SDKCall not ready, aborting (native dice untouched)!");
+        LogError("[BotRouteFix] [Module 12] Gamedata missing; camp item FAILED.");
         return false;
     }
 
@@ -96,144 +106,38 @@ bool InitModule12_CampGate()
     g_iOffset_Disp12 = GameConfGetOffset(g_hGameConf, "CCSBot_Disposition_Offset");
     if (g_iOffset_Task12 <= 0 || g_iOffset_Disp12 <= 0)
     {
-        LogError("[BotRouteFix] [Module 12] Error: Task/Disposition offsets missing!");
+        LogError("[BotRouteFix] [Module 12] Task/Disposition offsets missing; camp item FAILED.");
         return false;
     }
 
-    EnableModule12_CampGate(true);
-    if (!g_bModule12_Active)
+    if (g_hSDKCall_Hunt == null)
     {
-        LogError("[BotRouteFix] [Module 12] Failed to arm camp gate!");
+        LogError("[BotRouteFix] [Module 12] Hunt SDKCall missing; camp item FAILED (native dice untouched).");
         return false;
-    }
-
-    LogMessage("[BotRouteFix] [Module 12] Sniper camp gate (60-10*M) armed: 6/6 dice bypassed [%s]",
-        g_bIsWin64 ? "64-bit" : "32-bit");
-    return true;
-}
-
-/**
- * 动态启用或停用模块 12（幂等；停用即写回六处 jcc 并解除武装）
- */
-void EnableModule12_CampGate(bool enable)
-{
-    if (enable == g_bModule12_Active)
-    {
-        return;
-    }
-
-    if (enable)
-    {
-        bool ok = true;
-        for (int i = 0; i < 6; i++)
-        {
-            if (!PrepCamp12_Site(i))
-            {
-                ok = false;
-                break;
-            }
-        }
-
-        // 全成或全败：任一站点失败立即写回全部，绝不半态驻留
-        if (!ok)
-        {
-            for (int i = 0; i < 6; i++)
-            {
-                g_PatchCamp12_Sites[i].Restore();
-            }
-            g_bModule12_Armed = false;
-            g_bModule12_Active = false;
-            LogError("[BotRouteFix] [Module 12] Enable aborted, all dice bypasses rolled back to native!");
-            SyncHideDurationDetourState();
-            return;
-        }
-
-        g_bModule12_Armed = true;
-        g_bModule12_Active = true;
-        // 借钩宿主：本模块自身无 Detour，须确保模块 15 的 OnEnter 钩子处于启用态
-        SyncHideDurationDetourState();
-        return;
     }
 
     for (int i = 0; i < 6; i++)
     {
-        g_PatchCamp12_Sites[i].Restore();
-    }
-    g_bModule12_Armed = false;
-    g_bModule12_Active = false;
-    // 借钩宿主：模块 15 若仍在工作，钩子必须保持启用
-    SyncHideDurationDetourState();
-}
-
-/**
- * 还原模块 12（插件卸载：写回六处 jcc 并解除武装；钩子本身归模块 15 管）
- */
-void RestoreModule12_CampGate()
-{
-    EnableModule12_CampGate(false);
-    LogMessage("[BotRouteFix] [Module 12] Dice bypasses restored, gate disarmed.");
-}
-
-/**
- * 查询模块 12 业务开启态
- */
-bool IsModule12_Active()
-{
-    return g_bModule12_Active;
-}
-
-/**
- * 查询模块 12 门禁是否完全就绪（业务态已开、Hunt SDKCall 就绪且 6 处补丁均为本插件所打）
- */
-bool IsCamp12Ready()
-{
-    if (!g_bModule12_Armed || g_hSDKCall_Hunt == null)
-    {
-        return false;
-    }
-    for (int i = 0; i < 6; i++)
-    {
-        if (!g_PatchCamp12_Sites[i].isPatched)
+        if (!PrepModule12_Site(i))
         {
             return false;
         }
     }
+
     return true;
 }
 
 /**
- * 累积重定向次数（骰子未过转 Hunt，自加载起单调递增）
- */
-int GetTotalCampRedirected()
-{
-    return g_iTotalCampRedirected;
-}
-
-/**
- * 计算给定士气值对应的理论留守概率 (百分比 0.0 ~ 100.0)
+ * 事项 M12 camp 门禁的单站点后端准备
  *
- * @param morale        Bot 士气数值 (-3 ~ +3)
- * @return              留守概率 (0.0 ~ 100.0)
+ * O1/D1/D2/D3 = NOP（指向 skip）；O2/O3 = E9 转换（指向 camp）。
+ * 只定位/校验/备份并把构造好的字节写入 g_Camp12PatchBytes，不写代码段。
+ * 失败语义：任一步失败返回 false，整个 camp 事项 FAILED（六站点全成或全败）。
+ *
+ * @param siteIndex     0..5
+ * @return              true = 该站点后端就绪
  */
-float CalculateCampChance(int morale)
-{
-    float chance = CAMP_CHANCE_BASE - CAMP_CHANCE_STEP * float(morale);
-    if (chance > CAMP_CHANCE_MAX)
-    {
-        chance = CAMP_CHANCE_MAX;
-    }
-    if (chance < CAMP_CHANCE_MIN)
-    {
-        chance = CAMP_CHANCE_MIN;
-    }
-    return chance;
-}
-
-//========================================================================================
-// 单站点旁路：O1/D1/D2/D3 = NOP（指向 skip）；O2/O3 = E9 转换（指向 camp）
-//========================================================================================
-
-static bool PrepCamp12_Site(int siteIndex)
+static bool PrepModule12_Site(int siteIndex)
 {
     Address sigAddr = GameConfGetAddress(g_hGameConf, g_sCamp12_SigNames[siteIndex]);
     if (sigAddr == Address_Null)
@@ -255,36 +159,98 @@ static bool PrepCamp12_Site(int siteIndex)
     char patchName[32];
     Format(patchName, sizeof(patchName), "Camp12_S%d", siteIndex);
 
+    // 站点固定宽度：O1/D2/D3 = 6 字节远跳；D1 = 2 字节短跳（两种架构一致）
+    int patchSize = (siteIndex == 3) ? 2 : 6;
+
     int b0 = LoadFromAddress(jccAddr, NumberType_Int8);
     int b1 = LoadFromAddress(jccAddr + view_as<Address>(1), NumberType_Int8);
 
+    // Init 必须在幂等检测之前：同目标重入时它保留原始基线备份
+    g_PatchCamp12_Sites[siteIndex].Init(patchName, jccAddr, patchSize);
+
     // 幂等性检测必须先于 opcode 断言（已旁路的字节不再是原助记符）；
-    // 有备份=自家补丁，保持旗标（状态行如实 ACTIVE）；无备份=外来已旁路，记 false
-    if ((!isConvert && b0 == 0x90) || (isConvert && b0 == 0xE9))
+    // 有备份=自家补丁，保持基线；无备份=外来已旁路，记 false（无基线可还原）
+    bool alreadyBypassed = (!isConvert && b0 == 0x90) || (isConvert && b0 == 0xE9);
+    if (alreadyBypassed)
     {
         if (!g_PatchCamp12_Sites[siteIndex].hasBackup)
         {
             g_PatchCamp12_Sites[siteIndex].isPatched = false;
+            LogError("[BotRouteFix] [Module 12] Site %d already bypassed without baseline @ %X; camp item FAILED.",
+                siteIndex, jccAddr);
+            return false;
         }
         LogMessage("[BotRouteFix] [Module 12] Site %d already bypassed @ %X, skipping", siteIndex, jccAddr);
-        return true;
+    }
+    else
+    {
+        if (!PrepModule12_ValidateSite(siteIndex, isConvert, jccAddr, b0, b1))
+        {
+            return false;
+        }
+
+        if (!g_PatchCamp12_Sites[siteIndex].BackupOriginal())
+        {
+            LogError("[BotRouteFix] [Module 12] Site %d baseline backup failed; camp item FAILED.", siteIndex);
+            return false;
+        }
     }
 
+    // 从备份构造旁路字节：NOP 或 E9 转换（E9 的 rel 由原始 jcc 的 rel + 1 推导）
+    if (!isConvert)
+    {
+        for (int i = 0; i < patchSize; i++)
+        {
+            g_Camp12PatchBytes[siteIndex][i] = 0x90;
+        }
+    }
+    else
+    {
+        int origRel = g_PatchCamp12_Sites[siteIndex].originalBytes[2]
+            | (g_PatchCamp12_Sites[siteIndex].originalBytes[3] << 8)
+            | (g_PatchCamp12_Sites[siteIndex].originalBytes[4] << 16)
+            | (g_PatchCamp12_Sites[siteIndex].originalBytes[5] << 24);
+        int newRel = origRel + 1;
+
+        g_Camp12PatchBytes[siteIndex][0] = 0xE9;
+        for (int b = 0; b < 4; b++)
+        {
+            g_Camp12PatchBytes[siteIndex][1 + b] = (newRel >> (b * 8)) & 0xFF;
+        }
+        g_Camp12PatchBytes[siteIndex][5] = 0x90;
+    }
+    return true;
+}
+
+/**
+ * 事项 M12 camp 门禁的单站点原始指令校验（只在首次打补丁时执行）
+ *
+ * 失败语义：模板或语义锚点不匹配返回 false，整个 camp 事项 FAILED，不写入任何字节。
+ *
+ * @param siteIndex     0..5
+ * @param isConvert     true = O2/O3 的 E9 转换路径
+ * @param jccAddr       跳转指令地址
+ * @param b0            jcc 首字节
+ * @param b1            jcc 次字节
+ * @return              true = 模板与语义锚点全部匹配
+ */
+static bool PrepModule12_ValidateSite(int siteIndex, bool isConvert, Address jccAddr, int b0, int b1)
+{
     if (!isConvert)
     {
         // NOP 路径：断言 jcc 助记符与长度（32: O1=0F86/D1=72/D2,D3=0F82；64: O1=0F83/D1=77/D2,D3=0F87）
-        int expect0, expect1 = -1, patchSize;
+        int expect0, expect1 = -1;
         if (g_bIsWin64)
         {
-            if (siteIndex == 0)      { expect0 = 0x0F; expect1 = 0x83; patchSize = 6; }
-            else if (siteIndex == 3) { expect0 = 0x77; patchSize = 2; }
-            else                     { expect0 = 0x0F; expect1 = 0x87; patchSize = 6; }
+            if (siteIndex == 0)      { expect0 = 0x0F; expect1 = 0x83; }
+            else if (siteIndex == 3) { expect0 = 0x77; }
+            else                     { expect0 = 0x0F; expect1 = 0x87; }
         }
         else
         {
-            if (siteIndex == 0)      { expect0 = 0x0F; expect1 = 0x86; patchSize = 6; }
-            else if (siteIndex == 3) { expect0 = 0x72; patchSize = 2; }
-            else                     { expect0 = 0x0F; expect1 = 0x82; patchSize = 6; }
+            if (siteIndex == 0)      { expect0 = 0x0F; expect1 = 0x86; }
+            else if (siteIndex == 3) { expect0 = 0x72; }
+            else                     { expect0 = 0x0F; expect1 = 0x82; }
         }
 
         if (b0 != expect0 || (expect1 != -1 && b1 != expect1))
@@ -335,64 +301,164 @@ static bool PrepCamp12_Site(int siteIndex)
             }
         }
 
-        // fallthrough 即 camp-inline 的站点（O1/D1/D2/D3 全是），签名本身已含 camp 字节，自锚定
-        g_PatchCamp12_Sites[siteIndex].Init(patchName, jccAddr, patchSize);
-        return g_PatchCamp12_Sites[siteIndex].NopOut();
+        return true;
+    }
+
+    // E9 转换路径：断言 ja/jb-far（32: 0F87；64: 0F82），读原 rel，跳目标必须确为 camp tail
+    int expect1 = g_bIsWin64 ? 0x82 : 0x87;
+    if (b0 != 0x0F || b1 != expect1)
+    {
+        LogError("[BotRouteFix] [Module 12] Site %d opcode mismatch (expected 0F %02X, got %02X %02X), aborted!",
+            siteIndex, expect1, b0, b1);
+        return false;
+    }
+
+    int origRel = LoadFromAddress(jccAddr + view_as<Address>(2), NumberType_Int32);
+    Address campTail = jccAddr + view_as<Address>(6 + origRel);
+
+    // 语义锚点：camp tail 首指令（32: fld30=D9 05；64: task19=C7 87…13）
+    if (g_bIsWin64)
+    {
+        if (LoadFromAddress(campTail, NumberType_Int8) != 0xC7
+            || LoadFromAddress(campTail + view_as<Address>(1), NumberType_Int8) != 0x87)
+        {
+            LogError("[BotRouteFix] [Module 12] Site %d camp-tail anchor mismatch, aborted (not inverting blind)!", siteIndex);
+            return false;
+        }
     }
     else
     {
-        // E9 转换路径：断言 ja/jb-far（32: 0F87；64: 0F82），读原 rel，跳目标必须确为 camp tail
-        int expect1 = g_bIsWin64 ? 0x82 : 0x87;
-        if (b0 != 0x0F || b1 != expect1)
+        if (LoadFromAddress(campTail, NumberType_Int8) != 0xD9
+            || LoadFromAddress(campTail + view_as<Address>(1), NumberType_Int8) != 0x05)
         {
-            LogError("[BotRouteFix] [Module 12] Site %d opcode mismatch (expected 0F %02X, got %02X %02X), aborted!",
-                siteIndex, expect1, b0, b1);
+            LogError("[BotRouteFix] [Module 12] Site %d camp-tail anchor mismatch, aborted (not inverting blind)!", siteIndex);
             return false;
         }
-
-        int origRel = LoadFromAddress(jccAddr + view_as<Address>(2), NumberType_Int32);
-        Address campTail = jccAddr + view_as<Address>(6 + origRel);
-
-        // 语义锚点：camp tail 首指令（32: fld30=D9 05；64: task19=C7 87…13）
-        if (g_bIsWin64)
-        {
-            if (LoadFromAddress(campTail, NumberType_Int8) != 0xC7
-                || LoadFromAddress(campTail + view_as<Address>(1), NumberType_Int8) != 0x87)
-            {
-                LogError("[BotRouteFix] [Module 12] Site %d camp-tail anchor mismatch, aborted (not inverting blind)!", siteIndex);
-                return false;
-            }
-        }
-        else
-        {
-            if (LoadFromAddress(campTail, NumberType_Int8) != 0xD9
-                || LoadFromAddress(campTail + view_as<Address>(1), NumberType_Int8) != 0x05)
-            {
-                LogError("[BotRouteFix] [Module 12] Site %d camp-tail anchor mismatch, aborted (not inverting blind)!", siteIndex);
-                return false;
-            }
-        }
-
-        // E9 与原 jcc 同起点：E9(5B) rel' = origRel + 1；末字节 NOP 对齐 6B
-        g_PatchCamp12_Sites[siteIndex].Init(patchName, jccAddr, 6);
-        int newRel = origRel + 1;
-        int jmpBytes[6] = {0xE9, 0, 0, 0, 0, 0x90};
-        for (int b = 0; b < 4; b++)
-        {
-            jmpBytes[1 + b] = (newRel >> (b * 8)) & 0xFF;
-        }
-        return g_PatchCamp12_Sites[siteIndex].Apply(jmpBytes);
     }
+
+    return true;
 }
 
 //========================================================================================
-// CAMP GATE：挂在 HideState::OnEnter post（模块 15 同钩），task 19 即重骰
-// 返回 true = 已重定向去 Hunt（调用方跳过 M15 缩放）；false = 放行
+// MODULE 12 LIFECYCLE
 //========================================================================================
 
+/**
+ * 初始化模块 12（六站点全成或全败）
+ *
+ * @return              true = 事项已武装
+ */
+bool InitModule12_CampGate()
+{
+    if (g_hGameConf == null)
+    {
+        Item_SetReady(ITEM_M12_CAMP, false);
+        LogError("[BotRouteFix] [Module 12] Gamedata missing; camp item FAILED.");
+        return false;
+    }
+
+    Item_SetReady(ITEM_M12_CAMP, PrepModule12_CampBackend());
+    EnableModule12_CampGate(true);
+
+    // 旁路数量按补丁真实驻留态统计，不允许用固定文案冒充物理事实
+    int bypassed = 0;
+    for (int i = 0; i < 6; i++)
+    {
+        if (g_PatchCamp12_Sites[i].isPatched)
+        {
+            bypassed++;
+        }
+    }
+
+    LogMessage("[BotRouteFix] [Module 12] Camp gate armed=%d (%d/6 dice bypassed) [%s]",
+        Item_IsArmed(ITEM_M12_CAMP), bypassed, g_bIsWin64 ? "64-bit" : "32-bit");
+    return Item_IsArmed(ITEM_M12_CAMP);
+}
+
+/**
+ * 动态启用或停用模块 12（幂等；停用即写回六处 jcc 并解除武装）
+ *
+ * @param enable        true = 按事项后端就绪情况武装；false = 还原并解除武装
+ */
+void EnableModule12_CampGate(bool enable)
+{
+    if (enable == g_bModule12_Active)
+    {
+        return;
+    }
+
+    if (!enable)
+    {
+        RestoreModule12_CampBackend();
+        g_bModule12_Active = false;
+        // 借钩宿主：模块 15 若仍在工作，钩子必须保持启用
+        SyncHideDurationDetourState();
+        return;
+    }
+
+    bool armed = ApplyModule12_CampBackend();
+    g_bModule12_Active = armed;
+    // 借钩宿主：本模块自身无 Detour，须确保模块 15 的 OnEnter 钩子处于启用态
+    SyncHideDurationDetourState();
+}
+
+/**
+ * 还原模块 12（插件卸载：写回六处 jcc 并解除武装；钩子本身归模块 15 管）
+ */
+void RestoreModule12_CampGate()
+{
+    EnableModule12_CampGate(false);
+    LogMessage("[BotRouteFix] [Module 12] Dice bypasses restored, gate disarmed.");
+}
+
+//========================================================================================
+// MODULE 12 PUBLIC GETTERS, TELEMETRY & FORMULA
+//========================================================================================
+
+/**
+ * 累积重定向次数（骰子未过转 Hunt；只在事项武装时累加，自加载起单调递增）
+ */
+int Module12_GetTotalCampRedirected()
+{
+    return g_iTotalCampRedirected;
+}
+
+/**
+ * 事项 M12 camp 门禁的留守概率公式：Chance = 60 - 10 * Morale
+ *
+ * 纯计算，无失败分支；结果钳制在 [0, 100]。
+ *
+ * @param morale        Bot 士气数值 (-3 ~ +3)
+ * @return              留守概率 (0.0 ~ 100.0)
+ */
+static float CalculateCampChance(int morale)
+{
+    float chance = CAMP_CHANCE_BASE - CAMP_CHANCE_STEP * float(morale);
+    if (chance > CAMP_CHANCE_MAX)
+    {
+        chance = CAMP_CHANCE_MAX;
+    }
+    if (chance < CAMP_CHANCE_MIN)
+    {
+        chance = CAMP_CHANCE_MIN;
+    }
+    return chance;
+}
+
+//========================================================================================
+// MODULE 12 DETOUR HOOK ENTRY (BORROWED FROM MODULE 15)
+//========================================================================================
+
+/**
+ * camp 门禁：挂在 HideState::OnEnter post（模块 15 同钩），task 19 即重骰
+ *
+ * 调用方（模块 15 宿主）只在需要时调用；本函数自行把关事项武装态。
+ *
+ * @return              true = 已重定向去 Hunt（调用方跳过 M15 缩放）；false = 放行
+ */
 bool Module12_CampGate(int client)
 {
-    if (!g_bModule12_Active || !g_bModule12_Armed || g_hSDKCall_Hunt == null)
+    if (!Item_IsArmed(ITEM_M12_CAMP))
     {
         return false;
     }
@@ -432,8 +498,8 @@ bool Module12_CampGate(int client)
  */
 public void Module12_FrameHunt(any data)
 {
-    // 递延帧可能在停用之后才到，必须二次校验业务态
-    if (!g_bModule12_Active)
+    // 递延帧可能在停用之后才到，必须二次校验事项武装态
+    if (!Item_IsArmed(ITEM_M12_CAMP))
     {
         return;
     }
@@ -451,3 +517,70 @@ public void Module12_FrameHunt(any data)
     }
     g_iTotalCampRedirected++;
 }
+
+//========================================================================================
+// MODULE 12 ITEM APPLY / RESTORE BACKENDS
+//========================================================================================
+
+/**
+ * 应用 camp 门禁事项：六站点全成或全败
+ *
+ * 物理写入失败证伪了 Prep 的模板校验，必须同步清 Ready 并回滚已写站点。
+ *
+ * @return              true = 六处旁路全部驻留
+ */
+static bool ApplyModule12_CampBackend()
+{
+    if (!Item_IsReady(ITEM_M12_CAMP))
+    {
+        Item_SetArmed(ITEM_M12_CAMP, false);
+        return false;
+    }
+
+    for (int i = 0; i < 6; i++)
+    {
+        if (!g_PatchCamp12_Sites[i].Apply(g_Camp12PatchBytes[i]))
+        {
+            for (int j = 0; j < 6; j++)
+            {
+                g_PatchCamp12_Sites[j].Restore();
+            }
+            Item_SetReady(ITEM_M12_CAMP, false);
+            Item_SetArmed(ITEM_M12_CAMP, false);
+            LogError("[BotRouteFix] [Module 12] Site %d write failed; all bypasses rolled back, camp item FAILED.", i);
+            return false;
+        }
+    }
+
+    // 借钩宿主必须在线：没有 OnEnter 钩子，六处骰子已旁路却无人重骰，
+    // 会退化成"狙击手必 camp"的错误行为，必须回滚。
+    // 先临时置位再同步：宿主开关按 M12 Armed 判定借钩需求，不置位会形成循环依赖。
+    Item_SetArmed(ITEM_M12_CAMP, true);
+    if (!SyncHideDurationDetourState())
+    {
+        for (int j = 0; j < 6; j++)
+        {
+            g_PatchCamp12_Sites[j].Restore();
+        }
+        // 宿主缺失属挂钩类失败：只清 Armed，保留 Ready 供下次 Enable 重试
+        Item_SetArmed(ITEM_M12_CAMP, false);
+        LogError("[BotRouteFix] [Module 12] Hook host unavailable; dice bypasses rolled back, camp item unarmed.");
+        return false;
+    }
+
+    return true;
+}
+
+/**
+ * 还原 camp 门禁事项：写回六处原始 jcc 并解除武装
+ */
+static void RestoreModule12_CampBackend()
+{
+    for (int i = 0; i < 6; i++)
+    {
+        g_PatchCamp12_Sites[i].Restore();
+    }
+    Item_SetArmed(ITEM_M12_CAMP, false);
+}
+
+

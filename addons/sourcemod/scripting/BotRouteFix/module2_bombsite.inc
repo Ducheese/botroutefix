@@ -43,12 +43,12 @@
 #define PLANT_DELAY_MAX         60.0    // 运包延时上限 (大优卡点控图)
 
 // 模块状态与补丁
-MemoryPatch g_PatchBombsiteLock;
+static MemoryPatch g_PatchBombsiteLock;
 static bool g_bModule2_Active = false;   // 业务开启态
-bool g_bBombsiteLocked = false;
-int g_iLockedZoneIndex = -1;
-int g_iOpeningCarrier = 0;
-float g_fCurrentPlantDelay = 0.0;
+static bool g_bBombsiteLocked = false;
+static int g_iLockedZoneIndex = -1;
+static int g_iOpeningCarrier = 0;
+static float g_fCurrentPlantDelay = 0.0;
 
 // 模块内部专用偏移缓存
 static int g_iOffset_EarliestBombPlant = -1;
@@ -247,7 +247,7 @@ void EnableModule2_Bombsite(bool enable)
 
     if (g_bBombsiteLocked)
     {
-        RestoreBombsiteLockPatch();
+        RestoreModule2_LockBackend();
     }
     Item_SetArmed(ITEM_M2_LOCK, false);
     Item_SetArmed(ITEM_M2_CLOCK, false);
@@ -321,336 +321,10 @@ static float CalculatePlantDelay(int morale)
     return delay;
 }
 
-//========================================================================================
-// MODULE 2 EVENT HANDLERS
-//========================================================================================
-
-/**
- * 回合重置 (round_start)
- */
-void Module2_OnRoundStart()
-{
-    RestoreBombsiteLockPatch();
-    g_iOpeningCarrier = 0;
-    g_fCurrentPlantDelay = 0.0;
-}
-
-/**
- * 地图加载 (OnMapStart)： stale 锁定不能漏进新图（补丁字节跨换图常驻内存）
- */
-void Module2_OnMapStart()
-{
-    RestoreBombsiteLockPatch();
-    g_iOpeningCarrier = 0;
-    g_fCurrentPlantDelay = 0.0;
-}
-
-/**
- * 冻结时间结束 (round_freeze_end)
- * 核心决策点：确定开局包匪、计算士气运包时钟、随机锁定目标包点
- */
-void Module2_OnRoundFreezeEnd()
-{
-    if (!Item_IsArmed(ITEM_M2_CLOCK) && !Item_IsArmed(ITEM_M2_LOCK))
-    {
-        return;
-    }
-
-    int carrier = GetC4Carrier();
-    if (!IsValidClient(carrier, true))
-    {
-        return;
-    }
-
-    g_iOpeningCarrier = carrier;
-
-    // 1. 运包时钟事项：士气映射并写 m_earliestBombPlantTimestamp
-    if (Item_IsArmed(ITEM_M2_CLOCK))
-    {
-        int carrierMorale = GetEffectiveCarrierMorale(carrier);
-        g_fCurrentPlantDelay = CalculatePlantDelay(carrierMorale);
-
-        Address pTheCSBots = LoadAddressFromAddress(g_pTheCSBotsPtr);
-        if (pTheCSBots != Address_Null)
-        {
-            float targetTimestamp = GetGameTime() + g_fCurrentPlantDelay;
-            StoreToAddress(pTheCSBots + view_as<Address>(g_iOffset_EarliestBombPlant),
-                view_as<int>(targetTimestamp), NumberType_Int32);
-
-            char moraleStr[16];
-            GetMoraleName(carrierMorale, moraleStr, sizeof(moraleStr));
-
-            DebugLog("[BotRouteFix] [Module 2] C4 Carrier %N (Morale: %d %s) -> Plant Delay: %.1fs (Earliest: %.1fs)",
-                carrier, carrierMorale, moraleStr, g_fCurrentPlantDelay, targetTimestamp);
-        }
-    }
-
-    // 2. 包点锁事项：随机选点并打补丁
-    if (Item_IsArmed(ITEM_M2_LOCK))
-    {
-        SelectRandomBombsite();
-    }
-}
-
-/**
- * C4 掉落事件 (bomb_dropped)
- * 包匪掉包 -> 立即解除开局锁定，恢复原生动态 GetClosestZone
- */
-void Module2_OnBombDropped()
-{
-    if (!Item_IsArmed(ITEM_M2_LOCK))
-    {
-        return;
-    }
-
-    if (g_bBombsiteLocked)
-    {
-        RestoreBombsiteLockPatch();
-        DebugLog("[BotRouteFix] [Module 2] C4 dropped! Restored native GetClosestZone for tactical adaptation.");
-    }
-    g_iOpeningCarrier = 0;
-}
-
-/**
- * 道具拾取事件 (item_pickup)：新包主出现时解除开局锁定
- *
- * @param client        拾取者客户端索引
- * @param item          被拾取的道具名
- */
-void Module2_OnItemPickup(int client, const char[] item)
-{
-    if (!Item_IsArmed(ITEM_M2_LOCK))
-    {
-        return;
-    }
-
-    // 忽略冻结买枪阶段的系统发包
-    if (GameRules_GetProp("m_bFreezePeriod") != 0)
-    {
-        return;
-    }
-
-    if (StrEqual(item, "c4") || StrEqual(item, "weapon_c4"))
-    {
-        // 若包主换人，则解除开局锁定
-        if (client != g_iOpeningCarrier)
-        {
-            if (g_bBombsiteLocked)
-            {
-                RestoreBombsiteLockPatch();
-                DebugLog("[BotRouteFix] [Module 2] C4 picked up by new carrier %N (previous: %d)! Restored native GetClosestZone.",
-                    client, g_iOpeningCarrier);
-            }
-            g_iOpeningCarrier = client;
-        }
-    }
-}
-
-/**
- * 玩家死亡事件 (player_death)：开局包匪阵亡时解除锁定
- *
- * @param victim        阵亡客户端索引
- */
-void Module2_OnPlayerDeath(int victim)
-{
-    if (!Item_IsArmed(ITEM_M2_LOCK))
-    {
-        return;
-    }
-
-    if (victim > 0 && victim == g_iOpeningCarrier)
-    {
-        if (g_bBombsiteLocked)
-        {
-            RestoreBombsiteLockPatch();
-            DebugLog("[BotRouteFix] [Module 2] Opening C4 carrier %N died! Restored native GetClosestZone.", victim);
-        }
-        g_iOpeningCarrier = 0;
-    }
-}
-
-/**
- * 客户端掉线事件 (OnClientDisconnect)：开局持包者掉线时解除锁定
- *
- * @param client        掉线客户端索引
- */
-void Module2_OnClientDisconnect(int client)
-{
-    if (!Item_IsArmed(ITEM_M2_LOCK))
-    {
-        return;
-    }
-
-    if (client > 0 && client == g_iOpeningCarrier)
-    {
-        if (g_bBombsiteLocked)
-        {
-            RestoreBombsiteLockPatch();
-            DebugLog("[BotRouteFix] [Module 2] Opening C4 carrier %d disconnected! Restored native GetClosestZone.", client);
-        }
-        g_iOpeningCarrier = 0;
-    }
-}
-
-/**
- * C4 已安放 (bomb_planted)
- * 下包完成，清理包点锁定状态
- */
-void Module2_OnBombPlanted()
-{
-    if (g_bBombsiteLocked)
-    {
-        RestoreBombsiteLockPatch();
-    }
-    g_iOpeningCarrier = 0;
-}
-
-//========================================================================================
-// MODULE 2 BACKEND RESOLUTION & LOCK PRIMITIVES
-//========================================================================================
-
-/**
- * 解析 TheCSBots 单例指针（两个事项共用后端）
- *
- * @return              是否成功解析到非空单例
- */
-static bool ResolveTheCSBots()
-{
-    if (g_pTheCSBotsPtr != Address_Null)
-    {
-        return true;
-    }
-
-    Address sigRush = GameConfGetAddress(g_hGameConf, "IdleState_DefenseRush");
-    if (sigRush == Address_Null)
-    {
-        LogError("[BotRouteFix] [Module 2] Failed to locate IdleState_DefenseRush to resolve TheCSBots!");
-        return false;
-    }
-
-    if (g_bIsWin64)
-    {
-        int relOffset = LoadFromAddress(sigRush + view_as<Address>(3), NumberType_Int32);
-        g_pTheCSBotsPtr = sigRush + view_as<Address>(7 + relOffset);
-    }
-    else
-    {
-        g_pTheCSBotsPtr = view_as<Address>(LoadFromAddress(sigRush + view_as<Address>(1), NumberType_Int32));
-    }
-
-    LogMessage("[BotRouteFix] [Module 2] Resolved TheCSBots singleton pointer @ %X", g_pTheCSBotsPtr);
-    return true;
-}
-
-/**
- * 随机选择一个可用包点并执行锁定
- */
-static void SelectRandomBombsite()
-{
-    if (g_pTheCSBotsPtr == Address_Null || g_iOffset_ZoneCount <= 0)
-    {
-        return;
-    }
-
-    Address pTheCSBots = LoadAddressFromAddress(g_pTheCSBotsPtr);
-    if (pTheCSBots == Address_Null)
-    {
-        return;
-    }
-
-    int zoneCount = LoadFromAddress(pTheCSBots + view_as<Address>(g_iOffset_ZoneCount), NumberType_Int32);
-    if (zoneCount <= 0)
-    {
-        return;
-    }
-
-    int randomIdx = GetRandomInt(0, zoneCount - 1);
-    ApplyLockedBombsitePatch(randomIdx);
-}
-
-/**
- * 注入包点锁定补丁，将目标包点指针硬编码写入调用现场
- *
- * @param zoneIndex     目标包点索引 (0 ~ zoneCount-1)
- */
-static void ApplyLockedBombsitePatch(int zoneIndex)
-{
-    if (g_bBombsiteLocked)
-    {
-        return;
-    }
-
-    if (g_PatchBombsiteLock.address == Address_Null || g_pTheCSBotsPtr == Address_Null)
-    {
-        return;
-    }
-
-    Address pTheCSBots = LoadAddressFromAddress(g_pTheCSBotsPtr);
-    if (pTheCSBots == Address_Null)
-    {
-        return;
-    }
-
-    int offset = g_iOffset_ZoneBase + zoneIndex * g_iZoneStride;
-    Address targetZone = pTheCSBots + view_as<Address>(offset);
-    Address patchAddr = g_PatchBombsiteLock.address;
-
-    if (g_bIsWin64)
-    {
-        // 64-bit: mov rax, [imm64] (48 B8 [8-byte imm64]) + 9x NOP (total 19 bytes)
-        // 采用零循环平铺写入（Zero-Loop Direct Write），物理根除循环超时风险
-        // 首字节通过 updateMemAccess=true 获得整页读写权限，后续同一页内写入无需重复系统调用
-        StoreToAddress(patchAddr, 0x48, NumberType_Int8, true);
-        StoreToAddress(patchAddr + view_as<Address>(1), 0xB8, NumberType_Int8, false);
-        StoreAddressToAddress(patchAddr + view_as<Address>(2), targetZone, false);
-
-        // 填充 9 字节 NOP (0x90): 4 字节 + 4 字节 + 1 字节
-        StoreToAddress(patchAddr + view_as<Address>(10), 0x90909090, NumberType_Int32, false);
-        StoreToAddress(patchAddr + view_as<Address>(14), 0x90909090, NumberType_Int32, false);
-        StoreToAddress(patchAddr + view_as<Address>(18), 0x90, NumberType_Int8, false);
-    }
-    else
-    {
-        // 32-bit: mov eax, [imm32] (B8 [4-byte imm32]) + 14x NOP (total 19 bytes)
-        StoreToAddress(patchAddr, 0xB8, NumberType_Int8, true);
-        StoreAddressToAddress(patchAddr + view_as<Address>(1), targetZone, false);
-
-        // 填充 14 字节 NOP (0x90): 4 字节 + 4 字节 + 4 字节 + 2 字节 = 14 字节
-        StoreToAddress(patchAddr + view_as<Address>(5), 0x90909090, NumberType_Int32, false);
-        StoreToAddress(patchAddr + view_as<Address>(9), 0x90909090, NumberType_Int32, false);
-        StoreToAddress(patchAddr + view_as<Address>(13), 0x90909090, NumberType_Int32, false);
-        StoreToAddress(patchAddr + view_as<Address>(17), 0x9090, NumberType_Int16, false);
-    }
-
-    g_PatchBombsiteLock.isPatched = true;
-    g_bBombsiteLocked = true;
-    g_iLockedZoneIndex = zoneIndex;
-
-    DebugLog("[BotRouteFix] [Module 2] Locked target bombsite to Zone #%d (Offset +%d) @ %X",
-        zoneIndex, offset, patchAddr);
-}
-
-/**
- * 还原 GetClosestZone 原始指令现场
- */
-static void RestoreBombsiteLockPatch()
-{
-    if (g_bBombsiteLocked && g_PatchBombsiteLock.address != Address_Null)
-    {
-        g_PatchBombsiteLock.Restore();
-        g_bBombsiteLocked = false;
-        g_iLockedZoneIndex = -1;
-        DebugLog("[BotRouteFix] [Module 2] Restored original GetClosestZone call @ %X",
-            g_PatchBombsiteLock.address);
-    }
-}
-
-//========================================================================================
-// MODULE 2 VISUALIZATION GETTERS
-//========================================================================================
-
 /**
  * 获取目标包点世界中心坐标（供可视化子系统渲染航标）
+ *
+ * 跨模块只读 getter，不参与本模块事项状态。
  *
  * @param pos           输出包点中心三维坐标
  * @return              是否成功解析出包点坐标
@@ -769,3 +443,338 @@ float Module2_GetEarliestPlantTime()
     }
     return 0.0;
 }
+
+//========================================================================================
+// MODULE 2 EVENT HANDLERS
+//========================================================================================
+
+/**
+ * 回合重置 (round_start)
+ */
+void Module2_OnRoundStart()
+{
+    RestoreModule2_LockBackend();
+    g_iOpeningCarrier = 0;
+    g_fCurrentPlantDelay = 0.0;
+}
+
+/**
+ * 地图加载 (OnMapStart)： stale 锁定不能漏进新图（补丁字节跨换图常驻内存）
+ */
+void Module2_OnMapStart()
+{
+    RestoreModule2_LockBackend();
+    g_iOpeningCarrier = 0;
+    g_fCurrentPlantDelay = 0.0;
+}
+
+/**
+ * 冻结时间结束 (round_freeze_end)
+ * 核心决策点：确定开局包匪、计算士气运包时钟、随机锁定目标包点
+ */
+void Module2_OnRoundFreezeEnd()
+{
+    if (!Item_IsArmed(ITEM_M2_CLOCK) && !Item_IsArmed(ITEM_M2_LOCK))
+    {
+        return;
+    }
+
+    int carrier = GetC4Carrier();
+    if (!IsValidClient(carrier, true))
+    {
+        return;
+    }
+
+    g_iOpeningCarrier = carrier;
+
+    // 1. 运包时钟事项：士气映射并写 m_earliestBombPlantTimestamp
+    if (Item_IsArmed(ITEM_M2_CLOCK))
+    {
+        int carrierMorale = GetEffectiveCarrierMorale(carrier);
+        g_fCurrentPlantDelay = CalculatePlantDelay(carrierMorale);
+
+        Address pTheCSBots = LoadAddressFromAddress(g_pTheCSBotsPtr);
+        if (pTheCSBots != Address_Null)
+        {
+            float targetTimestamp = GetGameTime() + g_fCurrentPlantDelay;
+            StoreToAddress(pTheCSBots + view_as<Address>(g_iOffset_EarliestBombPlant),
+                view_as<int>(targetTimestamp), NumberType_Int32);
+
+            char moraleStr[16];
+            GetMoraleName(carrierMorale, moraleStr, sizeof(moraleStr));
+
+            DebugLog("[BotRouteFix] [Module 2] C4 Carrier %N (Morale: %d %s) -> Plant Delay: %.1fs (Earliest: %.1fs)",
+                carrier, carrierMorale, moraleStr, g_fCurrentPlantDelay, targetTimestamp);
+        }
+    }
+
+    // 2. 包点锁事项：随机选点并打补丁
+    if (Item_IsArmed(ITEM_M2_LOCK))
+    {
+        SelectRandomBombsite();
+    }
+}
+
+/**
+ * C4 掉落事件 (bomb_dropped)
+ * 包匪掉包 -> 立即解除开局锁定，恢复原生动态 GetClosestZone
+ */
+void Module2_OnBombDropped()
+{
+    if (!Item_IsArmed(ITEM_M2_LOCK))
+    {
+        return;
+    }
+
+    if (g_bBombsiteLocked)
+    {
+        RestoreModule2_LockBackend();
+        DebugLog("[BotRouteFix] [Module 2] C4 dropped! Restored native GetClosestZone for tactical adaptation.");
+    }
+    g_iOpeningCarrier = 0;
+}
+
+/**
+ * 道具拾取事件 (item_pickup)：新包主出现时解除开局锁定
+ *
+ * @param client        拾取者客户端索引
+ * @param item          被拾取的道具名
+ */
+void Module2_OnItemPickup(int client, const char[] item)
+{
+    if (!Item_IsArmed(ITEM_M2_LOCK))
+    {
+        return;
+    }
+
+    // 忽略冻结买枪阶段的系统发包
+    if (GameRules_GetProp("m_bFreezePeriod") != 0)
+    {
+        return;
+    }
+
+    if (StrEqual(item, "c4") || StrEqual(item, "weapon_c4"))
+    {
+        // 若包主换人，则解除开局锁定
+        if (client != g_iOpeningCarrier)
+        {
+            if (g_bBombsiteLocked)
+            {
+                RestoreModule2_LockBackend();
+                DebugLog("[BotRouteFix] [Module 2] C4 picked up by new carrier %N (previous: %d)! Restored native GetClosestZone.",
+                    client, g_iOpeningCarrier);
+            }
+            g_iOpeningCarrier = client;
+        }
+    }
+}
+
+/**
+ * 玩家死亡事件 (player_death)：开局包匪阵亡时解除锁定
+ *
+ * @param victim        阵亡客户端索引
+ */
+void Module2_OnPlayerDeath(int victim)
+{
+    if (!Item_IsArmed(ITEM_M2_LOCK))
+    {
+        return;
+    }
+
+    if (victim > 0 && victim == g_iOpeningCarrier)
+    {
+        if (g_bBombsiteLocked)
+        {
+            RestoreModule2_LockBackend();
+            DebugLog("[BotRouteFix] [Module 2] Opening C4 carrier %N died! Restored native GetClosestZone.", victim);
+        }
+        g_iOpeningCarrier = 0;
+    }
+}
+
+/**
+ * 客户端掉线事件 (OnClientDisconnect)：开局持包者掉线时解除锁定
+ *
+ * @param client        掉线客户端索引
+ */
+void Module2_OnClientDisconnect(int client)
+{
+    if (!Item_IsArmed(ITEM_M2_LOCK))
+    {
+        return;
+    }
+
+    if (client > 0 && client == g_iOpeningCarrier)
+    {
+        if (g_bBombsiteLocked)
+        {
+            RestoreModule2_LockBackend();
+            DebugLog("[BotRouteFix] [Module 2] Opening C4 carrier %d disconnected! Restored native GetClosestZone.", client);
+        }
+        g_iOpeningCarrier = 0;
+    }
+}
+
+/**
+ * C4 已安放 (bomb_planted)
+ * 下包完成，清理包点锁定状态
+ */
+void Module2_OnBombPlanted()
+{
+    if (g_bBombsiteLocked)
+    {
+        RestoreModule2_LockBackend();
+    }
+    g_iOpeningCarrier = 0;
+}
+
+//========================================================================================
+// MODULE 2 BACKEND RESOLUTION PRIMITIVES
+//========================================================================================
+
+/**
+ * 解析 TheCSBots 单例指针（两个事项共用后端）
+ *
+ * @return              是否成功解析到非空单例
+ */
+static bool ResolveTheCSBots()
+{
+    if (g_pTheCSBotsPtr != Address_Null)
+    {
+        return true;
+    }
+
+    Address sigRush = GameConfGetAddress(g_hGameConf, "IdleState_DefenseRush");
+    if (sigRush == Address_Null)
+    {
+        LogError("[BotRouteFix] [Module 2] Failed to locate IdleState_DefenseRush to resolve TheCSBots!");
+        return false;
+    }
+
+    if (g_bIsWin64)
+    {
+        int relOffset = LoadFromAddress(sigRush + view_as<Address>(3), NumberType_Int32);
+        g_pTheCSBotsPtr = sigRush + view_as<Address>(7 + relOffset);
+    }
+    else
+    {
+        g_pTheCSBotsPtr = view_as<Address>(LoadFromAddress(sigRush + view_as<Address>(1), NumberType_Int32));
+    }
+
+    LogMessage("[BotRouteFix] [Module 2] Resolved TheCSBots singleton pointer @ %X", g_pTheCSBotsPtr);
+    return true;
+}
+
+/**
+ * 随机选择一个可用包点并执行锁定
+ */
+static void SelectRandomBombsite()
+{
+    if (g_pTheCSBotsPtr == Address_Null || g_iOffset_ZoneCount <= 0)
+    {
+        return;
+    }
+
+    Address pTheCSBots = LoadAddressFromAddress(g_pTheCSBotsPtr);
+    if (pTheCSBots == Address_Null)
+    {
+        return;
+    }
+
+    int zoneCount = LoadFromAddress(pTheCSBots + view_as<Address>(g_iOffset_ZoneCount), NumberType_Int32);
+    if (zoneCount <= 0)
+    {
+        return;
+    }
+
+    int randomIdx = GetRandomInt(0, zoneCount - 1);
+    ApplyModule2_LockBackend(randomIdx);
+}
+
+//========================================================================================
+// MODULE 2 ITEM APPLY / RESTORE BACKENDS
+//========================================================================================
+
+/**
+ * 事项 M2 包点锁的后端：注入补丁，将目标包点指针硬编码写入调用现场
+ *
+ * 事件驱动写入口（round_freeze_end 选点后调用），只写不探测；
+ * 地址/单例未就绪时直接放行原逻辑，不标记补丁驻留。
+ *
+ * @param zoneIndex     目标包点索引 (0 ~ zoneCount-1)
+ */
+static void ApplyModule2_LockBackend(int zoneIndex)
+{
+    if (g_bBombsiteLocked)
+    {
+        return;
+    }
+
+    if (g_PatchBombsiteLock.address == Address_Null || g_pTheCSBotsPtr == Address_Null)
+    {
+        return;
+    }
+
+    Address pTheCSBots = LoadAddressFromAddress(g_pTheCSBotsPtr);
+    if (pTheCSBots == Address_Null)
+    {
+        return;
+    }
+
+    int offset = g_iOffset_ZoneBase + zoneIndex * g_iZoneStride;
+    Address targetZone = pTheCSBots + view_as<Address>(offset);
+    Address patchAddr = g_PatchBombsiteLock.address;
+
+    if (g_bIsWin64)
+    {
+        // 64-bit: mov rax, [imm64] (48 B8 [8-byte imm64]) + 9x NOP (total 19 bytes)
+        // 采用零循环平铺写入（Zero-Loop Direct Write），物理根除循环超时风险
+        // 首字节通过 updateMemAccess=true 获得整页读写权限，后续同一页内写入无需重复系统调用
+        StoreToAddress(patchAddr, 0x48, NumberType_Int8, true);
+        StoreToAddress(patchAddr + view_as<Address>(1), 0xB8, NumberType_Int8, false);
+        StoreAddressToAddress(patchAddr + view_as<Address>(2), targetZone, false);
+
+        // 填充 9 字节 NOP (0x90): 4 字节 + 4 字节 + 1 字节
+        StoreToAddress(patchAddr + view_as<Address>(10), 0x90909090, NumberType_Int32, false);
+        StoreToAddress(patchAddr + view_as<Address>(14), 0x90909090, NumberType_Int32, false);
+        StoreToAddress(patchAddr + view_as<Address>(18), 0x90, NumberType_Int8, false);
+    }
+    else
+    {
+        // 32-bit: mov eax, [imm32] (B8 [4-byte imm32]) + 14x NOP (total 19 bytes)
+        StoreToAddress(patchAddr, 0xB8, NumberType_Int8, true);
+        StoreAddressToAddress(patchAddr + view_as<Address>(1), targetZone, false);
+
+        // 填充 14 字节 NOP (0x90): 4 字节 + 4 字节 + 4 字节 + 2 字节 = 14 字节
+        StoreToAddress(patchAddr + view_as<Address>(5), 0x90909090, NumberType_Int32, false);
+        StoreToAddress(patchAddr + view_as<Address>(9), 0x90909090, NumberType_Int32, false);
+        StoreToAddress(patchAddr + view_as<Address>(13), 0x90909090, NumberType_Int32, false);
+        StoreToAddress(patchAddr + view_as<Address>(17), 0x9090, NumberType_Int16, false);
+    }
+
+    g_PatchBombsiteLock.isPatched = true;
+    g_bBombsiteLocked = true;
+    g_iLockedZoneIndex = zoneIndex;
+
+    DebugLog("[BotRouteFix] [Module 2] Locked target bombsite to Zone #%d (Offset +%d) @ %X",
+        zoneIndex, offset, patchAddr);
+}
+
+/**
+ * 事项 M2 包点锁的后端还原：写回 GetClosestZone 原始指令现场
+ *
+ * 未驻留或地址无效时 no-op；还原后清锁定态与目标索引。
+ */
+static void RestoreModule2_LockBackend()
+{
+    if (g_bBombsiteLocked && g_PatchBombsiteLock.address != Address_Null)
+    {
+        g_PatchBombsiteLock.Restore();
+        g_bBombsiteLocked = false;
+        g_iLockedZoneIndex = -1;
+        DebugLog("[BotRouteFix] [Module 2] Restored original GetClosestZone call @ %X",
+            g_PatchBombsiteLock.address);
+    }
+}
+
+

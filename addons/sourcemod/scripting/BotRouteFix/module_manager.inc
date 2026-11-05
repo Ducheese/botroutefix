@@ -20,7 +20,7 @@
 ConVar g_cvModules = null;
 // 注意：此数组仅为规则意图缓存（仅记录 ConVar 规则期望该模块开启或关闭，供遥测标注区分 "disabled by rule" 与 "activation failed"），
 // 严禁作为各模块实际运行时业务判据！真实运行态恒以各模块私有的 g_bModuleX_Active / 运行时函数为唯一真理源。
-bool g_bModuleConfigActive[TOTAL_TACTICAL_MODULES + 1];
+static bool g_bModuleConfigActive[TOTAL_TACTICAL_MODULES + 1];
 
 /**
  * 查询指定模块是否被模块规则启用

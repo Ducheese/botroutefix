@@ -101,6 +101,142 @@ static bool PrepModule3_DecayBackend()
     return true;
 }
 
+/**
+ * 事项 M3 危险度衰减的 NavArea 容器解析
+ *
+ * 64 位：从 CCSBotManager::GetRandomArea 的 mov ecx, cs:TheNavAreas.m_Size 定位。
+ * 32 位：从 HuntState::OnUpdate 的 NavArray 对特征扫描定位。
+ * 失败语义：签名缺失或容器不 sane 返回 false，Init 将衰减事项标记 FAILED。
+ *
+ * @return              true = 容器 base/count 均有效
+ */
+static bool ResolveTheNavAreas()
+{
+    if (g_pTheNavAreasCount != Address_Null && g_pTheNavAreasBase != Address_Null)
+    {
+        return true;
+    }
+
+    if (g_bIsWin64)
+    {
+        // -------------------------------------------------------------------------------
+        // 64-bit 实现 (Steam x64)
+        // 通过 CCSBotManager::GetRandomArea 的 64 位特征指令定位 TheNavAreas
+        // 指令序列: mov ecx, cs:TheNavAreas.m_Size (8B 0D <rel32> @ sigAddr + 14)
+        // -------------------------------------------------------------------------------
+        Address sigAddr = GameConfGetAddress(g_hGameConf, "CCSBotManager_GetRandomArea");
+        if (sigAddr == Address_Null)
+        {
+            LogError("[BotRouteFix] [Module 3] Failed to locate signature for CCSBotManager_GetRandomArea!");
+            return false;
+        }
+
+        int relOffset = LoadFromAddress(sigAddr + view_as<Address>(16), NumberType_Int32);
+        g_pTheNavAreasCount = sigAddr + view_as<Address>(20 + relOffset);
+        // CUtlVector 内存布局: m_pMemory 位于 m_Size 前面 16 字节
+        g_pTheNavAreasBase = g_pTheNavAreasCount - view_as<Address>(16);
+
+        int areaCount = LoadFromAddress(g_pTheNavAreasCount, NumberType_Int32);
+        if (areaCount < 0 || areaCount > NAV_AREA_MAX_SANITY)
+        {
+            LogError("[BotRouteFix] [Module 3] 64-bit areaCount (%d) out of reasonable range [0, %d]!",
+                areaCount, NAV_AREA_MAX_SANITY);
+            return false;
+        }
+
+        LogMessage("[BotRouteFix] [Module 3] Resolved 64-bit TheNavAreas (Base: @%X, Count: @%X, Areas: %d)",
+            g_pTheNavAreasBase, g_pTheNavAreasCount, areaCount);
+        return true;
+    }
+
+    // -------------------------------------------------------------------------------
+    // 32-bit 实现 (v91/v92)
+    // 通过 HuntState::OnUpdate 内部稳定的 NavArray 对特征扫描定位:
+    //   mov ecx, [TheNavAreasBase] / mov ecx, [ecx + edx*4] (8B 0D <Base> 8B 0C 91)
+    // 该特征在 CS:S 32 位二进制中全局唯一，Count = Base + 12
+    // -------------------------------------------------------------------------------
+    Address huntAddr = GameConfGetAddress(g_hGameConf, "HuntState_NavArrayAnchor");
+    if (huntAddr == Address_Null)
+    {
+        LogError("[BotRouteFix] [Module 3] Failed to locate signature for HuntState_NavArrayAnchor!");
+        return false;
+    }
+
+    LogMessage("[BotRouteFix] [Module 3] Hunt anchor @ %X, scanning nav-array pairs...", huntAddr);
+
+    Address pairAddr = Address_Null;
+    int seenPairs = 0;
+
+    // 逐个验候选 pair：base 先过邻近性检查（相对 anchor ±8MB，防野地址读崩服；
+    // 不写死 0x10000000 基址——某些加载器会把 server.dll 重定基到 0x65 等他址），
+    // 再验 count 是否 sane；首个全过即用；全灭则报错供诊断。
+    for (int off = 0; off < NAV_AREA_PAIR_SCAN_BYTES; off++)
+    {
+        if (LoadFromAddress(huntAddr + view_as<Address>(off), NumberType_Int8) == 0x8B
+            && LoadFromAddress(huntAddr + view_as<Address>(off + 1), NumberType_Int8) == 0x0D
+            && LoadFromAddress(huntAddr + view_as<Address>(off + 6), NumberType_Int8) == 0x8B
+            && LoadFromAddress(huntAddr + view_as<Address>(off + 7), NumberType_Int8) == 0x0C
+            && LoadFromAddress(huntAddr + view_as<Address>(off + 8), NumberType_Int8) == 0x91)
+        {
+            seenPairs++;
+            Address candAddr = huntAddr + view_as<Address>(off);
+            int candBase = LoadFromAddress(candAddr + view_as<Address>(2), NumberType_Int32);
+
+            int baseDelta = candBase - view_as<int>(huntAddr);
+            if (baseDelta < 0)
+            {
+                baseDelta = -baseDelta;
+            }
+            if (baseDelta > NAV_AREA_PAIR_MAX_DELTA)
+            {
+                LogMessage("[BotRouteFix] [Module 3] Candidate pair @ %X skipped (base %X too far from anchor)",
+                    candAddr, candBase);
+                continue;
+            }
+
+            int candCount = LoadFromAddress(view_as<Address>(candBase + 12), NumberType_Int32);
+            if (candCount < 0 || candCount > NAV_AREA_MAX_SANITY)
+            {
+                LogMessage("[BotRouteFix] [Module 3] Candidate pair @ %X skipped (count %d insane)",
+                    candAddr, candCount);
+                continue;
+            }
+
+            pairAddr = candAddr;
+            break;
+        }
+    }
+
+    if (pairAddr == Address_Null)
+    {
+        if (seenPairs == 0)
+        {
+            LogError("[BotRouteFix] [Module 3] Nav-array pair pattern not found in HuntState::OnUpdate!");
+        }
+        else
+        {
+            LogError("[BotRouteFix] [Module 3] %d nav-array pair(s) seen from anchor @ %X but none validated!",
+                seenPairs, huntAddr);
+        }
+        return false;
+    }
+
+    int baseAddr = LoadFromAddress(pairAddr + view_as<Address>(2), NumberType_Int32);
+    g_pTheNavAreasBase  = view_as<Address>(baseAddr);
+    g_pTheNavAreasCount = view_as<Address>(baseAddr + 12);
+
+    int areaCount = LoadFromAddress(g_pTheNavAreasCount, NumberType_Int32);
+    if (areaCount < 0 || areaCount > NAV_AREA_MAX_SANITY)
+    {
+        LogError("[BotRouteFix] [Module 3] Nav-area count is unreasonable (%d)!", areaCount);
+        return false;
+    }
+
+    LogMessage("[BotRouteFix] [Module 3] Resolved 32-bit TheNavAreas (Base: @%X, Count: @%X, Areas: %d)",
+        g_pTheNavAreasBase, g_pTheNavAreasCount, areaCount);
+    return true;
+}
+
 //========================================================================================
 // MODULE 3 LIFECYCLE
 //========================================================================================
@@ -342,137 +478,4 @@ static void DecayAllNavAreaDanger()
         count, decayCount);
 }
 
-/**
- * 解析全局 TheNavAreas 容器指针
- *
- * 64 位：从 CCSBotManager::GetRandomArea 的 mov ecx, cs:TheNavAreas.m_Size 定位。
- * 32 位：从 HuntState::OnUpdate 的 NavArray 对特征扫描定位。
- *
- * @return              true = 容器 base/count 均有效
- */
-static bool ResolveTheNavAreas()
-{
-    if (g_pTheNavAreasCount != Address_Null && g_pTheNavAreasBase != Address_Null)
-    {
-        return true;
-    }
 
-    if (g_bIsWin64)
-    {
-        // -------------------------------------------------------------------------------
-        // 64-bit 实现 (Steam x64)
-        // 通过 CCSBotManager::GetRandomArea 的 64 位特征指令定位 TheNavAreas
-        // 指令序列: mov ecx, cs:TheNavAreas.m_Size (8B 0D <rel32> @ sigAddr + 14)
-        // -------------------------------------------------------------------------------
-        Address sigAddr = GameConfGetAddress(g_hGameConf, "CCSBotManager_GetRandomArea");
-        if (sigAddr == Address_Null)
-        {
-            LogError("[BotRouteFix] [Module 3] Failed to locate signature for CCSBotManager_GetRandomArea!");
-            return false;
-        }
-
-        int relOffset = LoadFromAddress(sigAddr + view_as<Address>(16), NumberType_Int32);
-        g_pTheNavAreasCount = sigAddr + view_as<Address>(20 + relOffset);
-        // CUtlVector 内存布局: m_pMemory 位于 m_Size 前面 16 字节
-        g_pTheNavAreasBase = g_pTheNavAreasCount - view_as<Address>(16);
-
-        int areaCount = LoadFromAddress(g_pTheNavAreasCount, NumberType_Int32);
-        if (areaCount < 0 || areaCount > NAV_AREA_MAX_SANITY)
-        {
-            LogError("[BotRouteFix] [Module 3] 64-bit areaCount (%d) out of reasonable range [0, %d]!",
-                areaCount, NAV_AREA_MAX_SANITY);
-            return false;
-        }
-
-        LogMessage("[BotRouteFix] [Module 3] Resolved 64-bit TheNavAreas (Base: @%X, Count: @%X, Areas: %d)",
-            g_pTheNavAreasBase, g_pTheNavAreasCount, areaCount);
-        return true;
-    }
-
-    // -------------------------------------------------------------------------------
-    // 32-bit 实现 (v91/v92)
-    // 通过 HuntState::OnUpdate 内部稳定的 NavArray 对特征扫描定位:
-    //   mov ecx, [TheNavAreasBase] / mov ecx, [ecx + edx*4] (8B 0D <Base> 8B 0C 91)
-    // 该特征在 CS:S 32 位二进制中全局唯一，Count = Base + 12
-    // -------------------------------------------------------------------------------
-    Address huntAddr = GameConfGetAddress(g_hGameConf, "HuntState_NavArrayAnchor");
-    if (huntAddr == Address_Null)
-    {
-        LogError("[BotRouteFix] [Module 3] Failed to locate signature for HuntState_NavArrayAnchor!");
-        return false;
-    }
-
-    LogMessage("[BotRouteFix] [Module 3] Hunt anchor @ %X, scanning nav-array pairs...", huntAddr);
-
-    Address pairAddr = Address_Null;
-    int seenPairs = 0;
-
-    // 逐个验候选 pair：base 先过邻近性检查（相对 anchor ±8MB，防野地址读崩服；
-    // 不写死 0x10000000 基址——某些加载器会把 server.dll 重定基到 0x65 等他址），
-    // 再验 count 是否 sane；首个全过即用；全灭则报错供诊断。
-    for (int off = 0; off < NAV_AREA_PAIR_SCAN_BYTES; off++)
-    {
-        if (LoadFromAddress(huntAddr + view_as<Address>(off), NumberType_Int8) == 0x8B
-            && LoadFromAddress(huntAddr + view_as<Address>(off + 1), NumberType_Int8) == 0x0D
-            && LoadFromAddress(huntAddr + view_as<Address>(off + 6), NumberType_Int8) == 0x8B
-            && LoadFromAddress(huntAddr + view_as<Address>(off + 7), NumberType_Int8) == 0x0C
-            && LoadFromAddress(huntAddr + view_as<Address>(off + 8), NumberType_Int8) == 0x91)
-        {
-            seenPairs++;
-            Address candAddr = huntAddr + view_as<Address>(off);
-            int candBase = LoadFromAddress(candAddr + view_as<Address>(2), NumberType_Int32);
-
-            int baseDelta = candBase - view_as<int>(huntAddr);
-            if (baseDelta < 0)
-            {
-                baseDelta = -baseDelta;
-            }
-            if (baseDelta > NAV_AREA_PAIR_MAX_DELTA)
-            {
-                LogMessage("[BotRouteFix] [Module 3] Candidate pair @ %X skipped (base %X too far from anchor)",
-                    candAddr, candBase);
-                continue;
-            }
-
-            int candCount = LoadFromAddress(view_as<Address>(candBase + 12), NumberType_Int32);
-            if (candCount < 0 || candCount > NAV_AREA_MAX_SANITY)
-            {
-                LogMessage("[BotRouteFix] [Module 3] Candidate pair @ %X skipped (count %d insane)",
-                    candAddr, candCount);
-                continue;
-            }
-
-            pairAddr = candAddr;
-            break;
-        }
-    }
-
-    if (pairAddr == Address_Null)
-    {
-        if (seenPairs == 0)
-        {
-            LogError("[BotRouteFix] [Module 3] Nav-array pair pattern not found in HuntState::OnUpdate!");
-        }
-        else
-        {
-            LogError("[BotRouteFix] [Module 3] %d nav-array pair(s) seen from anchor @ %X but none validated!",
-                seenPairs, huntAddr);
-        }
-        return false;
-    }
-
-    int baseAddr = LoadFromAddress(pairAddr + view_as<Address>(2), NumberType_Int32);
-    g_pTheNavAreasBase  = view_as<Address>(baseAddr);
-    g_pTheNavAreasCount = view_as<Address>(baseAddr + 12);
-
-    int areaCount = LoadFromAddress(g_pTheNavAreasCount, NumberType_Int32);
-    if (areaCount < 0 || areaCount > NAV_AREA_MAX_SANITY)
-    {
-        LogError("[BotRouteFix] [Module 3] Nav-area count is unreasonable (%d)!", areaCount);
-        return false;
-    }
-
-    LogMessage("[BotRouteFix] [Module 3] Resolved 32-bit TheNavAreas (Base: @%X, Count: @%X, Areas: %d)",
-        g_pTheNavAreasBase, g_pTheNavAreasCount, areaCount);
-    return true;
-}

@@ -64,7 +64,7 @@
 //
 //    ★ 后撤档位三档制 (2026-10-31 重构，豁免语义唯一裁决点在本模块；M11 只发请求):
 //        硬豁免 → 不施加强制后撤，直接放行交火（使命动作的临界态；引擎原生撤退判定仍保留）；
-//        软豁免 → 照常后撤，但经 M15 `HideDuration_RequestShort` 把蹲守压到 1 秒（到点即起）；
+//        软豁免 → 照常后撤，但经 M15 `Module15_RequestShortHide` 把蹲守压到 1 秒（到点即起）；
 //        放行   → 照常后撤，Hide 时长交由 M15 按士气缩放。
 //      档位矩阵（触发源 × 身份）:
 //        下包前 (T 有使命):
@@ -89,7 +89,7 @@
 //      档位与残血共用上面的矩阵。
 //
 // 5. 狙击手威慑脱战 (Sniper Deterrence Disengage via Module 11):
-//    - 跨模块联动接口: 开放 `Combat_RequestSniperRetreat(client)`，由模块 11 见狙威慑触发；
+//    - 跨模块联动接口: 开放 `Module5_RequestSniperRetreat(client)`，由模块 11 见狙威慑触发；
 //    - 请求带 2 秒 TTL：bot 未在窗口内进入 AttackState 则自动作废，杜绝跨状态残影误触发；
 //    - 穿透机制: 命中请求时完全穿透 35 HP 残血门控与节流阀，赋予单拍立即后撤特权；
 //    - 档位由本模块统一裁决（见上矩阵），M11 不再自己判任务/包点豁免。
@@ -112,11 +112,11 @@
 #define RETREAT_REASON_SNIPER       3       // 狙击手威慑
 
 // 模块状态、内存补丁与 Detour 句柄
-MemoryPatch g_PatchReloadHide;
-Handle g_hAttackDodgeDetour = null;
-Handle g_hAttackRetreatDetour = null;
-int g_iTotalDodgeForced = 0;
-int g_iTotalRetreatTriggered = 0;
+static MemoryPatch g_PatchReloadHide;
+static Handle g_hAttackDodgeDetour = null;
+static Handle g_hAttackRetreatDetour = null;
+static int g_iTotalDodgeForced = 0;
+static int g_iTotalRetreatTriggered = 0;
 
 // 模块内部启用缓存（仅用于 Enable 幂等短路；逐事项判据统一用 Item_IsArmed）
 static bool g_bModule5_Active = false;
@@ -251,6 +251,35 @@ static bool PrepModule5_DodgeBackend()
 }
 
 /**
+ * 挂载 AttackState::OnEnter Detour（事项 M5 闪避的钩子载体）
+ *
+ * 失败语义：句柄创建或签名绑定失败返回 false，闪避事项 FAILED。
+ *
+ * @return              true = Detour 句柄已创建并绑定签名
+ */
+static bool MountAttackDodgeDetour()
+{
+    g_hAttackDodgeDetour = DHookCreateDetour(Address_Null, CallConv_THISCALL, ReturnType_Void, ThisPointer_Address);
+    if (g_hAttackDodgeDetour == null)
+    {
+        LogError("[BotRouteFix] [Module 5] Failed to create DHook detour instance for AttackState_OnEnter!");
+        return false;
+    }
+
+    if (!DHookSetFromConf(g_hAttackDodgeDetour, g_hGameConf, SDKConf_Signature, "AttackState_OnEnter"))
+    {
+        LogError("[BotRouteFix] [Module 5] Failed to set AttackState_OnEnter signature from gamedata!");
+        delete g_hAttackDodgeDetour;
+        g_hAttackDodgeDetour = null;
+        return false;
+    }
+
+    DHookAddParam(g_hAttackDodgeDetour, HookParamType_CBaseEntity);
+
+    return true;
+}
+
+/**
  * 事项后端：后撤 dhook 写
  *
  * 条件 = 全部后撤偏移 + AttackState::OnUpdate Detour 挂载 + IsOutnumbered SDKCall。
@@ -287,6 +316,35 @@ static bool PrepModule5_RetreatBackend()
         LogError("[BotRouteFix] [Module 5] IsOutnumbered SDKCall missing; retreat item FAILED.");
         return false;
     }
+
+    return true;
+}
+
+/**
+ * 挂载 AttackState::OnUpdate Detour（事项 M5 后撤的钩子载体）
+ *
+ * 失败语义：句柄创建或签名绑定失败返回 false，后撤事项 FAILED。
+ *
+ * @return              true = Detour 句柄已创建并绑定签名
+ */
+static bool MountAttackRetreatDetour()
+{
+    g_hAttackRetreatDetour = DHookCreateDetour(Address_Null, CallConv_THISCALL, ReturnType_Void, ThisPointer_Address);
+    if (g_hAttackRetreatDetour == null)
+    {
+        LogError("[BotRouteFix] [Module 5] Failed to create DHook detour instance for AttackState_OnUpdate!");
+        return false;
+    }
+
+    if (!DHookSetFromConf(g_hAttackRetreatDetour, g_hGameConf, SDKConf_Signature, "AttackState_OnUpdate"))
+    {
+        LogError("[BotRouteFix] [Module 5] Failed to set AttackState_OnUpdate signature from gamedata!");
+        delete g_hAttackRetreatDetour;
+        g_hAttackRetreatDetour = null;
+        return false;
+    }
+
+    DHookAddParam(g_hAttackRetreatDetour, HookParamType_CBaseEntity);
 
     return true;
 }
@@ -403,24 +461,6 @@ void RestoreModule5_Combat()
 // MODULE 5 PUBLIC GETTERS & TELEMETRY
 //========================================================================================
 
-
-/**
- * 模块 11 联动接口：请求对指定 Bot 发起狙击手强制撤退（带 TTL）
- *
- * 跨模块请求接口；只登记请求，不改变本模块事项状态。
- * 请求是否生效由事项 M5 后撤的 Pre 钩子在 TTL 窗口内消费时判定。
- *
- * @param client        目标 Bot 客户端索引
- */
-void Combat_RequestSniperRetreat(int client)
-{
-    if (client > 0 && client <= MaxClients)
-    {
-        g_bSniperRetreatWanted[client] = true;
-        g_flSniperRetreatUntil[client] = GetGameTime() + SNIPER_RETREAT_REQUEST_TTL;
-        g_flNextForcedRetreat[client] = 0.0;
-    }
-}
 
 /**
  * 查询累计强制闪避生效次数
@@ -550,33 +590,6 @@ void Module5_OnClientDisconnect(int client)
 //========================================================================================
 
 /**
- * 挂载 AttackState::OnEnter Detour（闪避事项的钩子载体）
- *
- * @return              true = Detour 句柄已创建并绑定签名
- */
-static bool MountAttackDodgeDetour()
-{
-    g_hAttackDodgeDetour = DHookCreateDetour(Address_Null, CallConv_THISCALL, ReturnType_Void, ThisPointer_Address);
-    if (g_hAttackDodgeDetour == null)
-    {
-        LogError("[BotRouteFix] [Module 5] Failed to create DHook detour instance for AttackState_OnEnter!");
-        return false;
-    }
-
-    if (!DHookSetFromConf(g_hAttackDodgeDetour, g_hGameConf, SDKConf_Signature, "AttackState_OnEnter"))
-    {
-        LogError("[BotRouteFix] [Module 5] Failed to set AttackState_OnEnter signature from gamedata!");
-        delete g_hAttackDodgeDetour;
-        g_hAttackDodgeDetour = null;
-        return false;
-    }
-
-    DHookAddParam(g_hAttackDodgeDetour, HookParamType_CBaseEntity);
-
-    return true;
-}
-
-/**
  * AttackState::OnEnter Post：强制 100% 闪避决策
  *
  * 事项 M5 闪避 dhook 写的执行点；只在闪避事项武装时写入。
@@ -619,33 +632,6 @@ public MRESReturn Hook_AttackState_OnEnter_Post(Address pThis, DHookParam hParam
 //========================================================================================
 // MODULE 5 DETOUR & HOOKS (ATTACKSTATE::ONUPDATE, PRE FOR FORCED RETREAT)
 //========================================================================================
-
-/**
- * 挂载 AttackState::OnUpdate Detour（后撤事项的钩子载体）
- *
- * @return              true = Detour 句柄已创建并绑定签名
- */
-static bool MountAttackRetreatDetour()
-{
-    g_hAttackRetreatDetour = DHookCreateDetour(Address_Null, CallConv_THISCALL, ReturnType_Void, ThisPointer_Address);
-    if (g_hAttackRetreatDetour == null)
-    {
-        LogError("[BotRouteFix] [Module 5] Failed to create DHook detour instance for AttackState_OnUpdate!");
-        return false;
-    }
-
-    if (!DHookSetFromConf(g_hAttackRetreatDetour, g_hGameConf, SDKConf_Signature, "AttackState_OnUpdate"))
-    {
-        LogError("[BotRouteFix] [Module 5] Failed to set AttackState_OnUpdate signature from gamedata!");
-        delete g_hAttackRetreatDetour;
-        g_hAttackRetreatDetour = null;
-        return false;
-    }
-
-    DHookAddParam(g_hAttackRetreatDetour, HookParamType_CBaseEntity);
-
-    return true;
-}
 
 /**
  * AttackState::OnUpdate Pre：残血 / 一打多 / 狙击威胁强制后撤
@@ -782,7 +768,7 @@ public MRESReturn Hook_AttackState_OnUpdate_Pre(Address pThis, DHookParam hParam
 
     if (bShortHide)
     {
-        HideDuration_RequestShort(client);
+        Module15_RequestShortHide(client);
     }
 
     // 1. 置 isPinnedDown 恒真 (curtime > 0.0) 触发撤退分支门控
@@ -829,6 +815,24 @@ public MRESReturn Hook_AttackState_OnUpdate_Pre(Address pThis, DHookParam hParam
 //========================================================================================
 // MODULE 5 ITEM APPLY / RESTORE BACKENDS
 //========================================================================================
+
+/**
+ * 事项 M5 后撤的跨模块请求入口：登记狙击手强制撤退请求（带 TTL）
+ *
+ * 只登记请求，不改变本模块事项状态；请求是否生效由后撤 Pre 钩子在 TTL 窗口内消费时判定。
+ * 未武装时后撤钩子不启用，请求自然不会被消费，无需在此另行门控。
+ *
+ * @param client        目标 Bot 客户端索引
+ */
+void Module5_RequestSniperRetreat(int client)
+{
+    if (client > 0 && client <= MaxClients)
+    {
+        g_bSniperRetreatWanted[client] = true;
+        g_flSniperRetreatUntil[client] = GetGameTime() + SNIPER_RETREAT_REQUEST_TTL;
+        g_flNextForcedRetreat[client] = 0.0;
+    }
+}
 
 /**
  * 应用换弹掩体 NOP 事项：只有 Prep 已就绪才写入 NOP

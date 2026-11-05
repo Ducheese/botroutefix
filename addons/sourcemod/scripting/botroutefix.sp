@@ -131,10 +131,12 @@ public void OnPluginStart()
     InitModule9_Loot();
     InitModule10_Defuse();
     InitModule11_Sniper();
+    // 借钩宿主先于借用方：M12 的 camp 门禁复用 M15 的 OnEnter Detour，
+    // 宿主先挂载可避免启动期一次"宿主不可用"的回滚误报。
+    InitModule15_HideDuration();
     InitModule12_CampGate();
     InitModule13_SniperBuy();
     InitModule14_DefendRush();
-    InitModule15_HideDuration();
 
     // 6. Initialize Module Rules and connect ConVar change hook
     InitModuleManager();

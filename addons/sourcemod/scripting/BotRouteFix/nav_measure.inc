@@ -238,6 +238,10 @@ static int NavMeasure_ProbePath(int client, const float target[3], int maxAreas,
     StoreToAddress(pBot + view_as<Address>(repathOffset + g_iNav_TimerDur), oldRepathDuration, NumberType_Int32);
     StoreToAddress(pBot + view_as<Address>(repathOffset + g_iNav_TimerTs), oldRepathTimestamp, NumberType_Int32);
 
+    // 探针 scratch 的游标必须与本次实际采集数同步：BotNavProbeAreaAt 用它判越界，
+    // 不赋值会让所有读者永远拿到 Address_Null（走廊钉刺会静默空转）。
+    g_iNavProbeCount = writtenAreas;
+
     distance = totalDist;
     return writtenAreas;
 }

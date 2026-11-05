@@ -51,9 +51,9 @@
 // 模块 Detour 句柄与统计
 // 注：对局炸弹状态 g_bBombPlanted 已上收至 global.inc，由 events.inc 事件总线唯一维护，
 //     本模块只读消费，模块启停不再影响对局状态流转。
-Handle g_hInvestigateNoiseDetour = null;
-int g_iTotalNoiseIntercepted = 0;
-int g_iTotalNoiseAllowed = 0;
+static Handle g_hInvestigateNoiseDetour = null;
+static int g_iTotalNoiseIntercepted = 0;
+static int g_iTotalNoiseAllowed = 0;
 
 // 模块内部启用缓存（仅用于 Enable 幂等短路；业务判据统一用 Item_IsArmed(ITEM_M6_NOISE)）
 static bool g_bModule6_Active = false;
@@ -97,6 +97,33 @@ static bool PrepModule6_NoiseBackend()
     if (!MountInvestigateNoiseDetour())
     {
         LogError("[BotRouteFix] [Module 6] InvestigateNoise hook unavailable; noise item FAILED.");
+        return false;
+    }
+
+    return true;
+}
+
+/**
+ * 挂载 CCSBot::InvestigateNoise Detour（事项 M6 噪声控制的钩子载体）
+ *
+ * 失败语义：句柄创建或签名绑定失败返回 false，噪声事项 FAILED。
+ *
+ * @return              true = Detour 句柄已创建并绑定签名
+ */
+static bool MountInvestigateNoiseDetour()
+{
+    g_hInvestigateNoiseDetour = DHookCreateDetour(Address_Null, CallConv_THISCALL, ReturnType_Void, ThisPointer_CBaseEntity);
+    if (g_hInvestigateNoiseDetour == null)
+    {
+        LogError("[BotRouteFix] [Module 6] Failed to create DHook detour instance for CCSBot_InvestigateNoise!");
+        return false;
+    }
+
+    if (!DHookSetFromConf(g_hInvestigateNoiseDetour, g_hGameConf, SDKConf_Signature, "CCSBot_InvestigateNoise"))
+    {
+        LogError("[BotRouteFix] [Module 6] Failed to set CCSBot_InvestigateNoise signature from gamedata!");
+        delete g_hInvestigateNoiseDetour;
+        g_hInvestigateNoiseDetour = null;
         return false;
     }
 
@@ -289,31 +316,6 @@ void Module6_OnBombPlanted()
 //========================================================================================
 // MODULE 6 DETOUR & HOOKS (CCSBOT::INVESTIGATENOISE)
 //========================================================================================
-
-/**
- * 挂载 CCSBot::InvestigateNoise Detour（噪声事项的钩子载体）
- *
- * @return              true = Detour 句柄已创建并绑定签名
- */
-static bool MountInvestigateNoiseDetour()
-{
-    g_hInvestigateNoiseDetour = DHookCreateDetour(Address_Null, CallConv_THISCALL, ReturnType_Void, ThisPointer_CBaseEntity);
-    if (g_hInvestigateNoiseDetour == null)
-    {
-        LogError("[BotRouteFix] [Module 6] Failed to create DHook detour instance for CCSBot_InvestigateNoise!");
-        return false;
-    }
-
-    if (!DHookSetFromConf(g_hInvestigateNoiseDetour, g_hGameConf, SDKConf_Signature, "CCSBot_InvestigateNoise"))
-    {
-        LogError("[BotRouteFix] [Module 6] Failed to set CCSBot_InvestigateNoise signature from gamedata!");
-        delete g_hInvestigateNoiseDetour;
-        g_hInvestigateNoiseDetour = null;
-        return false;
-    }
-
-    return true;
-}
 
 /**
  * CCSBot::InvestigateNoise Pre：守包掩体 T 的出击拦截
