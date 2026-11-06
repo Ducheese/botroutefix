@@ -286,7 +286,7 @@ public MRESReturn Hook_SpottedSniper_Post(Address pThis, DHookParam hParams)
     }
 
     // 1. 若自己也是狙击手，放行对狙博弈
-    if (Sniper_IsSniper(spotter))
+    if (IsSniper(spotter))
     {
         return MRES_Ignored;
     }
@@ -405,53 +405,9 @@ static void RestoreModule11_CorridorBackend()
 //========================================================================================
 
 /**
- * 事项 M11 corridor danger 的武器判定：指定武器实体是否属于狙击枪类
- *
- * 纯只读，无失败分支；无效实体返回 false。
+ * 狙击手判定统一走 sdkcalls.inc 的 `IsSniper` 总入口（引擎真值优先 + 名册回退，
+ * 人机通用）。本文件不再自带判定实现，三个调用点直接调总入口。
  */
-static bool Sniper_IsSniperWeapon(int weapon)
-{
-    if (weapon <= 0 || !IsValidEntity(weapon))
-    {
-        return false;
-    }
-
-    char classname[32];
-    GetEntityClassname(weapon, classname, sizeof(classname));
-    return (StrEqual(classname, "weapon_awp")
-        || StrEqual(classname, "weapon_scout")
-        || StrEqual(classname, "weapon_g3sg1")
-        || StrEqual(classname, "weapon_sg550"));
-}
-
-/**
- * 事项 M11 corridor danger 的狙击手判定（当前手持 + Slot 0 主武器）
- *
- * 纯只读，无失败分支；无效客户端返回 false。
- */
-static bool Sniper_IsSniper(int client)
-{
-    if (!IsValidClient(client, true))
-    {
-        return false;
-    }
-
-    // 1. 检查当前手持激活武器
-    int activeWpn = GetEntPropEnt(client, Prop_Send, "m_hActiveWeapon");
-    if (Sniper_IsSniperWeapon(activeWpn))
-    {
-        return true;
-    }
-
-    // 2. 检查 Slot 0 (主武器槽位，覆盖切副手/切刀时的狙击手身份)
-    int primaryWpn = GetPlayerWeaponSlot(client, 0);
-    if (Sniper_IsSniperWeapon(primaryWpn))
-    {
-        return true;
-    }
-
-    return false;
-}
 
 /**
  * 事项 M11 corridor danger 的实体指针反解：从 m_me 解析出客户端索引
@@ -510,7 +466,7 @@ static int Sniper_ResolveQueueThreat(Address pBot, int spotterTeam)
         int client = handle & 0xFFF;
         if (IsValidClient(client, true))
         {
-            if (GetClientTeam(client) != spotterTeam && Sniper_IsSniper(client))
+            if (GetClientTeam(client) != spotterTeam && IsSniper(client))
             {
                 return client;
             }
@@ -544,7 +500,7 @@ static int Sniper_FindTargetSniper(int spotter, float sniperPos[3])
             int enemy = handle & 0xFFF;
             if (IsValidClient(enemy, true))
             {
-                if (GetClientTeam(enemy) != spotterTeam && Sniper_IsSniper(enemy))
+                if (GetClientTeam(enemy) != spotterTeam && IsSniper(enemy))
                 {
                     sniper = enemy;
                     DebugLog("[BotRouteFix] [Module 11] Spotter %N: resolved sniper %N via m_enemy handle (0x%X)",

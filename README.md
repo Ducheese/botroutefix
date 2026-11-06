@@ -159,7 +159,7 @@
 - **双轨目标定位与逆序回溯 (Dual-Path Threat Resolution)**：
   - **路径 1（优先交火目标）**：直接读取 `m_enemy` 句柄（$O(1)$ 查找），若已锁定且为主武器持狙的敌方，即刻确立目标。
   - **路径 2（瞬时感知队列回溯）**：若目击 Bot 尚未进入交火态（`m_enemy == 0xFFFFFFFF`），直接深入引擎内部感知队列 `m_enemyQueue`（由 `CCSBot::FindMostDangerousThreat` 每帧感知刷新），从 `m_enemyQueueIndex` 逆序回溯最近 20 帧的历史威胁实体，提取瞬间闪现的狙击手。
-  - **Slot 0 主武器双重校验**：不仅检查狙击手当前手持武器（`m_hActiveWeapon`），还穿透检查 Slot 0（主武器槽），杜绝敌方狙击手因切手枪、切刀或掏雷导致的威慑漏判。
+  - **狙击手身份判定（引擎真值优先）**：以 `CCSBot::IsSniper` SDKCall 为准（主武器槽 + `WEAPONTYPE_SNIPER_RIFLE` 类型判定，自定义狙击枪只要类型正确即被识别）；签名缺失时回退名册硬编码（AWP/Scout/G3SG1/SG550，手持 + Slot 0 双重校验，防切枪漏判）。找"哪个狙击手"仍走双轨（`m_enemy` 优先 + 威胁队列逆序回溯），判定"是不是狙击手"才走本条。
 - **走廊加压 (Corridor Danger)**：
   - 定位到狙击手后，通过 `BotNavProbePathAreas()` 临时探测目击者直面狙击手的视线走廊：内部仍是 `CCSBot::ComputePath`，但先快照路径数组、路径下标、梯子指针、阻挡旗、当前/最后已知区域、目标坐标、repath 时间戳与区域进入时间，读取走廊 NavArea 后还原；**爬梯中直接跳过探测**（梯子子状态不在快照范围）。spot 遭遇点、初始遭遇区等次级状态未纳入快照，属低频可自愈的残留。
   - 该设计是必需而非优化：`CCSBot::ComputePath` 本体先 `DestroyPath()` 再写入新路径（`cs_bot_pathfind.cpp:1877-1891`），直接调用会当场篡改 spotter 当前行进路径；硬豁免目标（包匪下包临界、CT 拆包任务）不会经 M5 后撤重建路径，会被带向狙击手。

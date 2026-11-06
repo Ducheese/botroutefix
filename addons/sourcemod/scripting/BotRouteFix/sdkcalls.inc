@@ -16,6 +16,7 @@ Handle g_hSDKCall_StopFollowing    = null;
 Handle g_hSDKCall_ComputePath      = null;
 Handle g_hSDKCall_IsOutnumbered    = null;
 Handle g_hSDKCall_Hunt             = null;
+Handle g_hSDKCall_IsSniper         = null;
 
 //========================================================================================
 // PER-CALL PREPARATION
@@ -109,6 +110,24 @@ static bool PrepSDKCall_Hunt()
 }
 
 /**
+ * 狙击手引擎真值后端准备（CCSBot::IsSniper，主武器槽类型判定；非事项后端）。
+ * 缺失不影响任何事项：M12 名单回退为不过滤（与旧行为一致），M11 回退名册硬编码。
+ */
+static bool PrepSDKCall_IsSniper()
+{
+    StartPrepSDKCall(SDKCall_Entity);
+    PrepSDKCall_SetFromConf(g_hGameConf, SDKConf_Signature, "CCSBot_IsSniper");
+    PrepSDKCall_SetReturnInfo(SDKType_Bool, SDKPass_Plain);
+    g_hSDKCall_IsSniper = EndPrepSDKCall();
+    if (g_hSDKCall_IsSniper == null)
+    {
+        LogError("[BotRouteFix] [SDKCalls] CCSBot_IsSniper unavailable (M12 roster unfiltered, M11 legacy list).");
+        return false;
+    }
+    return true;
+}
+
+/**
  * 初始化底层 SDKCall 调用表（逐项准备，汇总返回，不 fail-fast）
  */
 bool InitSDKCalls()
@@ -124,10 +143,11 @@ bool InitSDKCalls()
     if (!PrepSDKCall_ComputePath())    allReady = false;
     if (!PrepSDKCall_IsOutnumbered())  allReady = false;
     if (!PrepSDKCall_Hunt())           allReady = false;
+    if (!PrepSDKCall_IsSniper())       allReady = false;
 
     if (allReady)
     {
-        LogMessage("[BotRouteFix] [SDKCalls] All SDKCall backends ready (Follow, StopFollowing, ComputePath, IsOutnumbered, Hunt)");
+        LogMessage("[BotRouteFix] [SDKCalls] All SDKCall backends ready (Follow, StopFollowing, ComputePath, IsOutnumbered, Hunt, IsSniper)");
     }
 
     return allReady;
@@ -166,6 +186,12 @@ void CleanupSDKCalls()
     {
         delete g_hSDKCall_Hunt;
         g_hSDKCall_Hunt = null;
+    }
+
+    if (g_hSDKCall_IsSniper != null)
+    {
+        delete g_hSDKCall_IsSniper;
+        g_hSDKCall_IsSniper = null;
     }
 }
 
@@ -248,4 +274,55 @@ stock bool BotHunt(int bot)
 
     SDKCall(g_hSDKCall_Hunt, bot);
     return true;
+}
+
+/**
+ * 狙击手判定总入口，人机通用（M11 敌方识别 + M12 名单过滤共用）。
+ *
+ * 引擎真值优先：`CCSBot::IsSniper`（主武器槽 + WEAPONTYPE_SNIPER_RIFLE 类型判定，
+ * 自定义狙击枪只要类型正确即被识别，与 camp 分支的上游门禁同源）。
+ * 签名缺失时回退名册硬编码（AWP/Scout/G3SG1/SG550，手持 + Slot 0 双重校验，旧行为）。
+ * 纯只读；无效/阵亡返回 false。
+ */
+stock bool IsSniper(int client)
+{
+    if (!IsValidClient(client, true))
+    {
+        return false;
+    }
+
+    if (g_hSDKCall_IsSniper != null)
+    {
+        return SDKCall(g_hSDKCall_IsSniper, client);
+    }
+
+    // 回退：手持 + Slot 0 双重校验（覆盖切副手/切刀时的狙击手身份）
+    char classname[32];
+    int activeWpn = GetEntPropEnt(client, Prop_Send, "m_hActiveWeapon");
+    if (activeWpn > 0 && IsValidEntity(activeWpn))
+    {
+        GetEntityClassname(activeWpn, classname, sizeof(classname));
+        if (StrEqual(classname, "weapon_awp")
+            || StrEqual(classname, "weapon_scout")
+            || StrEqual(classname, "weapon_g3sg1")
+            || StrEqual(classname, "weapon_sg550"))
+        {
+            return true;
+        }
+    }
+
+    int primaryWpn = GetPlayerWeaponSlot(client, 0);
+    if (primaryWpn > 0 && IsValidEntity(primaryWpn))
+    {
+        GetEntityClassname(primaryWpn, classname, sizeof(classname));
+        if (StrEqual(classname, "weapon_awp")
+            || StrEqual(classname, "weapon_scout")
+            || StrEqual(classname, "weapon_g3sg1")
+            || StrEqual(classname, "weapon_sg550"))
+        {
+            return true;
+        }
+    }
+
+    return false;
 }

@@ -109,26 +109,42 @@ static void PrintChanceRoster(int client, int module, const char[] tag, bool ctO
     ctList[0] = '\0';
     for (int i = 1; i <= MaxClients; i++)
     {
-        float chance;
-        if (module == 1)
+        // 名单只列 bot：真人/观察者直接跳过（IsTeamBot 本来也含 IsFakeClient，
+        // 这里显式前置，避免给非 bot 算概率再丢掉的空转）。
+        if (!IsBot(i, false))
         {
-            chance = Module1_CalculateGuardBombsiteChance(GetBotMorale(i));
+            continue;
         }
-        else if (module == 12)
+
+        // M12 名单只收狙击手：步枪手拿不到 task 19，概率无意义，以 "--" 占位保槽位对齐。
+        // 引擎真值走 IsSniper 总入口（人机通用）；到这里 i 已必为 bot。
+        char tmp[16];
+        if (module == 12 && !IsSniper(i))
         {
-            chance = Module12_CalculateCampChance(GetBotMorale(i));
-        }
-        else if (module == 13)
-        {
-            chance = Module13_CalculateSniperBuyChance(GetBotMorale(i));
+            strcopy(tmp, sizeof(tmp), "--");
         }
         else
         {
-            chance = Module14_CalculateDefendRushChance(GetBotMorale(i));
-        }
+            float chance;
+            if (module == 1)
+            {
+                chance = Module1_CalculateGuardBombsiteChance(GetBotMorale(i));
+            }
+            else if (module == 12)
+            {
+                chance = Module12_CalculateCampChance(GetBotMorale(i));
+            }
+            else if (module == 13)
+            {
+                chance = Module13_CalculateSniperBuyChance(GetBotMorale(i));
+            }
+            else
+            {
+                chance = Module14_CalculateDefendRushChance(GetBotMorale(i));
+            }
 
-        char tmp[16];
-        Format(tmp, sizeof(tmp), "%.0f%%", chance);
+            Format(tmp, sizeof(tmp), "%.0f%%", chance);
+        }
         if (!ctOnly && IsTeamBot(i, 2, false))
         {
             if (tList[0] != '\0')
