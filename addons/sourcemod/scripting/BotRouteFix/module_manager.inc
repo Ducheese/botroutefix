@@ -506,3 +506,29 @@ void InitModuleManager()
         g_bModuleConfigActive[i] = true;
     }
 }
+
+//========================================================================================
+// LIFECYCLE LOGGING（Init 期官宣口径统一处，格式只在这里定）
+//========================================================================================
+
+/**
+ * 统一武装确认行：[Module N] <label> items armed (<detail>) [<arch>]。
+ * detail 由调用方拼好（多事项列名，单事项只放数字）。
+ */
+stock void LogModuleArmed(int module, const char[] label, const char[] detail)
+{
+    LogMessage("[BotRouteFix] [Module %d] %s items armed (%s) [%s]",
+        module, label, detail, g_bIsWin64 ? "64-bit" : "32-bit");
+}
+
+/** 多事项部分武装（DEGRADED 的 Init/Enable 期官宣）。 */
+stock void LogModulePartial(int module, const char[] detail)
+{
+    LogError("[BotRouteFix] [Module %d] Partial activation (%s).", module, detail);
+}
+
+/** 事项全灭（FAILED 的 Init 期官宣）。 */
+stock void LogModuleAllFailed(int module)
+{
+    LogError("[BotRouteFix] [Module %d] All items failed; module will report FAILED.", module);
+}

@@ -184,6 +184,7 @@ static bool PrepModule14_Site(int siteIndex)
     }
 
     g_D14SiteByte[siteIndex] = newImm;
+    LogMessage("[BotRouteFix] [Module 14] Site %d defend-rush block verified @ %X", siteIndex + 1, targetAddr);
     return true;
 }
 
@@ -307,6 +308,7 @@ static bool PrepModule14_FloatBackend()
     g_D14FloatBytes[2] = 0x20;  // -10.0f 小端
     g_D14FloatBytes[3] = 0xC1;
 
+    LogMessage("[BotRouteFix] [Module 14] Shared float verified @ %X", floatAddr);
     return true;
 }
 
@@ -331,8 +333,8 @@ bool InitModule14_DefendRush()
     Item_SetReady(ITEM_M14_DEFEND, PrepModule14_DefendBackend());
     EnableModule14_DefendRush(true);
 
-    LogMessage("[BotRouteFix] [Module 14] defendRushChance (40-10*M) armed=%d [%s]",
-        Item_IsArmed(ITEM_M14_DEFEND), g_bIsWin64 ? "64-bit" : "32-bit");
+    LogModuleArmed(14, "defendRushChance (40-10*M)",
+        Item_IsArmed(ITEM_M14_DEFEND) ? "1" : "0");
     return Item_IsArmed(ITEM_M14_DEFEND);
 }
 

@@ -105,6 +105,10 @@ static bool PrepModule11_CorridorBackend()
         return false;
     }
 
+    LogMessage("[BotRouteFix] [Module 11] Corridor offsets verified (me=%d, enemy=%d, queue=%d, queueidx=%d, danger=%d, dangerts=%d).",
+        g_iOffset_ChatterMe, g_iOffset_Enemy, g_iOffset_EnemyQueue, g_iOffset_EnemyQueueIndex,
+        g_iOffset_Danger, g_iOffset_DangerTimestamp);
+
     // 没有通知载体就没有唯一入口，走廊钉刺无从执行
     if (g_hSpottedSniperDetour == null)
     {
@@ -180,9 +184,10 @@ bool InitModule11_Sniper()
 
     EnableModule11_Sniper(true);
 
-    LogMessage("[BotRouteFix] [Module 11] Corridor item armed=%d, transport=%d [%s]",
-        Item_IsArmed(ITEM_M11_CORRIDOR), g_bSpottedSniperHooked,
-        g_bIsWin64 ? "64-bit" : "32-bit");
+    char armedDetail[64];
+    Format(armedDetail, sizeof(armedDetail), "corridor=%d, transport=%d",
+        Item_IsArmed(ITEM_M11_CORRIDOR), g_bSpottedSniperHooked);
+    LogModuleArmed(11, "Corridor", armedDetail);
     return g_bModule11_Active;
 }
 

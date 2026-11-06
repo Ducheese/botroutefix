@@ -116,6 +116,9 @@ static bool PrepModule12_CampBackend()
         return false;
     }
 
+    LogMessage("[BotRouteFix] [Module 12] Camp offsets verified (task=%d, disp=%d, hunt SDKCall).",
+        g_iOffset_Task12, g_iOffset_Disp12);
+
     for (int i = 0; i < 6; i++)
     {
         if (!PrepModule12_Site(i))
@@ -219,6 +222,7 @@ static bool PrepModule12_Site(int siteIndex)
         }
         g_Camp12PatchBytes[siteIndex][5] = 0x90;
     }
+    LogMessage("[BotRouteFix] [Module 12] Site %d dice bypass verified @ %X", siteIndex, jccAddr);
     return true;
 }
 
@@ -357,6 +361,16 @@ bool InitModule12_CampGate()
         return false;
     }
 
+    // 宿主先行断言：HideState::OnEnter 钩子归 M15 所有（sp 初始化顺序 15 → 12 不可调），
+    // M12 只借用；宿主柄缺失说明宿主 Prep 没过，本事项直接 FAILED，不进 Prep 做无用功。
+    // 宿主柄是 M15 私有 static，经 Module15_IsHideHostReady 探针查询，不直读。
+    if (!Module15_IsHideHostReady())
+    {
+        Item_SetReady(ITEM_M12_CAMP, false);
+        LogError("[BotRouteFix] [Module 12] Hide host detour missing; camp item FAILED.");
+        return false;
+    }
+
     Item_SetReady(ITEM_M12_CAMP, PrepModule12_CampBackend());
     EnableModule12_CampGate(true);
 
@@ -370,8 +384,10 @@ bool InitModule12_CampGate()
         }
     }
 
-    LogMessage("[BotRouteFix] [Module 12] Camp gate armed=%d (%d/6 dice bypassed) [%s]",
-        Item_IsArmed(ITEM_M12_CAMP), bypassed, g_bIsWin64 ? "64-bit" : "32-bit");
+    char armedDetail[64];
+    Format(armedDetail, sizeof(armedDetail), "camp=%d, %d/6 bypassed",
+        Item_IsArmed(ITEM_M12_CAMP), bypassed);
+    LogModuleArmed(12, "Camp gate", armedDetail);
     return Item_IsArmed(ITEM_M12_CAMP);
 }
 
@@ -489,7 +505,7 @@ bool Module12_CampGate(int client)
 
     // 前压：只递延，绝不同步切状态（见头部铁律）；计数挪到帧回调里做
     RequestFrame(Module12_FrameHunt, GetClientUserId(client));
-    // DebugLog("[BotRouteFix] [Module 12] Bot %N camp dice failed (morale %d, %.0f%%), Hunt deferred", client, morale, chance);
+    DebugLog("[BotRouteFix] [Module 12] Bot %N camp dice failed (morale %s%d, %.0f%%), Hunt deferred", client, (morale >= 0) ? "+" : "", morale, chance);
     return true;
 }
 
@@ -515,6 +531,7 @@ public void Module12_FrameHunt(any data)
     {
         SetEntData(client, g_iOffset_Disp12, 0, 4, true); // ENGAGE_AND_INVESTIGATE
     }
+    DebugLog("[BotRouteFix] [Module 12] Bot %N camp redirect executed (deferred Hunt now)", client);
     g_iTotalCampRedirected++;
 }
 

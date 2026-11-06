@@ -457,6 +457,19 @@ addons\sourcemod\
 | :--- | :--- | :--- |
 | `sm_botroutefix_status` | 管理员 (`ADMFLAG_GENERIC`) | 分两段：前半 15 模块启停行（`ACTIVE` 光杆 counts，`DEGRADED` / `FAILED` 点名 failed 事项居中、counts 永远挂尾，`INACTIVE` 显示 `disabled by rule`；静态士气公式在模块名里，label 定稿见 `F:\Git\scratch\botroutefix-status-labels.md`）；后半 `Live`（与上分隔行等长）：全局炸弹三态 `PLANTED` / `DROPPED` / `CARRIED by <人> (士气/身份)`（不显示包点）+ 士气两行（`T n bots alive (AVG Morale: +x 名)`，avg 只统计存活；`T Morale: [...]` 全员名单不筛存活；偏移丢失时显示 `unavailable`）+ 各模块快照行（`M01 CT Guard` / `M02 锁+延迟五变种` / `M03~M15 计数器与名册` + `M12/M13/M14` per-bot 概率名单；仅 `ACTIVE` / `DEGRADED`；per-bot 现算值不进 live）。累积计数器单调递增、换图不清零 |
 
+### 初始化日志口径（Initialization 契约）
+
+- **横幅定宽 74**：`Initialization Start / Complete`、status 头、分隔线、尾线，`[BotRouteFix] ` 前缀之后一律补齐到 74 列。
+- **每模块 = N 个检查点行 + 1 行武装确认**（N 由后端数量决定，不强求一样多）：
+  - 补丁写入点：`... verified @ %X`；幂等命中：`... already present @ %X, skipping`；
+  - 只读解析点：`Resolved ... @ ...`；偏移/SDKCall 点：`... verified (...)`（无地址可打，如 detour 句柄）；
+  - 纯 hook/名册：无检查点行（挂钩失败走事项 FAILED 错误行）；
+  - 武装确认统一走 `LogModuleArmed`：`[Module N] <label> items armed (<detail>) [<arch>]`，多事项列名，单事项只放数字。
+- **变体**：部分武装 → `LogModulePartial`（`Partial activation (...)`）；事项全灭 → `LogModuleAllFailed`（`All items failed; module will report FAILED.`）；失败原因各事项就地 `LogError`。
+- **Hook 回调日志口径**：前缀统一 `[BotRouteFix] [Module N]`；`DebugLog` 只记离散事件/状态变化（选举/拾取/安放/重定向/放行/认领），不记每 tick 求值——M4 的 `HuntState::OnUpdate` pre/post 刻意零输出（高频 tick），它的可观测面是 status 的 `total claims` 计数器；`LogError` 只用于不变量破坏（如 M7 非法名册数），普通业务分支一律 `DebugLog`；新增 Hook 回调必须带一行说明决策的 `DebugLog`，不留注释掉的死代码。
+- **准备期与运行期的门禁分界**：准备期输出（Prep/Mount/Apply/Restore/Enable 内的句柄创建、签名绑定、基线备份、补丁落子、`verified`/`Resolved` 确认行）走 Init 口径，**无条件输出，不受 `sm_botroutefix_debug` 约束**；运行期离散事件（Hook 回调/事件响应内的逐条决策，如持包人变更、锁落子/还原、士气处置切换）**必须走 `DebugLog`，受 debug 约束**。M2 锁落子/还原与 M6 包匪处置的 `DebugLog` 属后者（每回合触发的运行期事件），不是准备期，门控正确。
+- **各模块检查点清单**：M1 守点/反冲各 1 个写入点；M2 单例指针 + 时钟偏移 + 锁写入点；M3 危险度偏移 + nav 解析 + 状态重置；M4 随机旁路写入点 + 搜寻偏移；M5 reload 写入点 + 闪避偏移 + 后撤后端；M6 噪音感知偏移；M7 follow SDKCall + 士气偏移；M8 排队偏移 + 死锁 SDKCall；M9/M10 无（纯 hook/名册）；M11 走廊对抗偏移；M12 蹲守偏移 + 6 个 bypass 点；M13 rewrite/cave 二选一（按架构）；M14 4 站点 + 1 常量池；M15 隐藏时长偏移。
+
 ---
 
 ## 架构备忘与已知技术债务 (Technical Debt & Notes)

@@ -81,7 +81,7 @@ public Plugin myinfo =
 
 public void OnPluginStart()
 {
-    LogMessage("[BotRouteFix] ============== Initialization Start ==============");
+    LogMessage("[BotRouteFix] =================== Initialization Start ===================");
 
     // 1. Register core ConVars
     //    总开关 sm_botroutefix_enable 已彻底移除：模块启停统一走各模块 EnableModuleX() 业务态，
@@ -146,8 +146,8 @@ public void OnPluginStart()
     // 7. Initialize Visuals Subsystem
     InitVisuals();
 
-    LogMessage("[BotRouteFix] ========== Initialization Complete [%s] ==========",
-        g_bIsWin64 ? "64-bit (Steam x64)" : "32-bit (v91/v92)");
+    LogMessage("[BotRouteFix] ============= Initialization Complete [%s] =============",
+        g_bIsWin64 ? "64-bit" : "32-bit");
 }
 
 public void OnConVarChange_Modules(ConVar convar, const char[] oldValue, const char[] newValue)

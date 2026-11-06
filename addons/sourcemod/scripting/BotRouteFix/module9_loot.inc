@@ -105,8 +105,8 @@ bool InitModule9_Loot()
     Item_SetReady(ITEM_M9_LOOT, PrepModule9_LootBackend());
     EnableModule9_Loot(true);
 
-    LogMessage("[BotRouteFix] [Module 9] Loose-bomb item armed=%d (NoticeLooseBomb Pre hook)",
-        Item_IsArmed(ITEM_M9_LOOT));
+    LogModuleArmed(9, "Loose-bomb (NoticeLooseBomb Pre hook)",
+        Item_IsArmed(ITEM_M9_LOOT) ? "1" : "0");
     return g_bModule9_Active;
 }
 

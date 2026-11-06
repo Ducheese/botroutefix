@@ -180,7 +180,7 @@ public Action Command_Status(int client, int args)
 {
     bool bDebug = (g_cvDebug != null && g_cvDebug.BoolValue);
 
-    ReplyToCommand(client, "[BotRouteFix] ================== System Status Telemetry ==================");
+    ReplyToCommand(client, "[BotRouteFix] ================= System Status Telemetry ==================");
     ReplyToCommand(client, "[BotRouteFix] Version       : %s | Author: %s", PLUGIN_VERSION, PLUGIN_AUTHOR);
     ReplyToCommand(client, "[BotRouteFix] Debug         : %s | Architecture: %s",
         bDebug ? "ON" : "OFF", g_bIsWin64 ? "64-bit (Steam x64)" : "32-bit (v91/v92)");

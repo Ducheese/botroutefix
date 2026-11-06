@@ -78,6 +78,11 @@ static bool PrepModule2_ClockBackend()
         LogError("[BotRouteFix] [Module 2] Clock backend missing (earliest=%d, morale=%d); clock item FAILED.",
             g_iOffset_EarliestBombPlant, g_iOffset_Morale);
     }
+    else
+    {
+        LogMessage("[BotRouteFix] [Module 2] Clock offsets verified (earliest=%d, morale=%d).",
+            g_iOffset_EarliestBombPlant, g_iOffset_Morale);
+    }
     return ready;
 }
 
@@ -208,13 +213,14 @@ bool InitModule2_Bombsite()
     EnableModule2_Bombsite(true);
     if (!g_bModule2_Active)
     {
-        LogError("[BotRouteFix] [Module 2] Both bombsite items failed; module will report FAILED.");
+        LogModuleAllFailed(2);
         return false;
     }
 
-    LogMessage("[BotRouteFix] [Module 2] Bombsite items armed (clock=%d, lock=%d) [%s]",
-        Item_IsArmed(ITEM_M2_CLOCK), Item_IsArmed(ITEM_M2_LOCK),
-        g_bIsWin64 ? "64-bit" : "32-bit");
+    char armedDetail[64];
+    Format(armedDetail, sizeof(armedDetail), "clock=%d, lock=%d",
+        Item_IsArmed(ITEM_M2_CLOCK), Item_IsArmed(ITEM_M2_LOCK));
+    LogModuleArmed(2, "Bombsite", armedDetail);
     return true;
 }
 
@@ -239,8 +245,10 @@ void EnableModule2_Bombsite(bool enable)
 
         if (g_bModule2_Active && (!Item_IsArmed(ITEM_M2_LOCK) || !Item_IsArmed(ITEM_M2_CLOCK)))
         {
-            LogError("[BotRouteFix] [Module 2] Partial activation (lock=%d, clock=%d).",
+            char partialDetail[64];
+            Format(partialDetail, sizeof(partialDetail), "lock=%d, clock=%d",
                 Item_IsArmed(ITEM_M2_LOCK), Item_IsArmed(ITEM_M2_CLOCK));
+            LogModulePartial(2, partialDetail);
         }
         return;
     }
@@ -503,8 +511,8 @@ void Module2_OnRoundFreezeEnd()
             char moraleStr[16];
             GetMoraleName(carrierMorale, moraleStr, sizeof(moraleStr));
 
-            DebugLog("[BotRouteFix] [Module 2] C4 Carrier %N (Morale: %d %s) -> Plant Delay: %.1fs (Earliest: %.1fs)",
-                carrier, carrierMorale, moraleStr, g_fCurrentPlantDelay, targetTimestamp);
+            DebugLog("[BotRouteFix] [Module 2] C4 Carrier %N (Morale: %s%d %s) -> Plant Delay: %.1fs (Earliest: %.1fs)",
+                carrier, (carrierMorale >= 0) ? "+" : "", carrierMorale, moraleStr, g_fCurrentPlantDelay, targetTimestamp);
         }
     }
 

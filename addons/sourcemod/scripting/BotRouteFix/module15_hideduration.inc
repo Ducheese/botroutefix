@@ -100,6 +100,7 @@ static bool PrepModule15_HideBackend()
         return false;
     }
 
+    LogMessage("[BotRouteFix] [Module 15] Hide duration offset verified (%d).", g_iOffset_HideDuration);
     return MountHideDurationDetour();
 }
 
@@ -153,8 +154,8 @@ bool InitModule15_HideDuration()
     Item_SetReady(ITEM_M15_HIDE, PrepModule15_HideBackend());
     EnableModule15_HideDuration(true);
 
-    LogMessage("[BotRouteFix] [Module 15] Hide duration scaling armed=%d [%s]",
-        Item_IsArmed(ITEM_M15_HIDE), g_bIsWin64 ? "64-bit" : "32-bit");
+    LogModuleArmed(15, "Hide duration scaling",
+        Item_IsArmed(ITEM_M15_HIDE) ? "1" : "0");
     return Item_IsArmed(ITEM_M15_HIDE);
 }
 
@@ -221,6 +222,16 @@ bool SyncHideDurationDetourState()
     bool want = (Item_IsArmed(ITEM_M15_HIDE) || Item_IsArmed(ITEM_M12_CAMP));
     return SyncDetourEnabled(g_hHideDurationDetour, g_bHideDurationDetourEnabled,
         true, Hook_HideState_OnEnter_Post, want, "Module 15");
+}
+
+/**
+ * 宿主柄就绪探针（供借钩方 M12 在 Init 期断言宿主 Prep 已过）。
+ *
+ * @return              true = 宿主 Detour 句柄已创建
+ */
+bool Module15_IsHideHostReady()
+{
+    return g_hHideDurationDetour != null;
 }
 
 //========================================================================================
@@ -346,7 +357,7 @@ public MRESReturn Hook_HideState_OnEnter_Post(Address pThis, DHookParam hParams)
     StoreToAddress(pThis + view_as<Address>(g_iOffset_HideDuration), view_as<int>(scaled), NumberType_Int32);
 
     g_iTotalHideRescaled++;
-    // DebugLog("[BotRouteFix] [Module 15] Bot %N hide duration %.1fs -> %.1fs (morale %d)", client, duration, scaled, morale);
+    DebugLog("[BotRouteFix] [Module 15] Bot %N hide duration %.1fs -> %.1fs (morale %s%d)", client, duration, scaled, (morale >= 0) ? "+" : "", morale);
     return MRES_Ignored;
 }
 

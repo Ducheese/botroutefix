@@ -241,6 +241,9 @@ static bool PrepModule5_DodgeBackend()
         return false;
     }
 
+    LogMessage("[BotRouteFix] [Module 5] Dodge offsets verified (shoulddodge=%d).",
+        g_iOffset_AttackShouldDodge);
+
     if (!MountAttackDodgeDetour())
     {
         LogError("[BotRouteFix] [Module 5] AttackState::OnEnter hook unavailable; dodge item FAILED.");
@@ -317,6 +320,9 @@ static bool PrepModule5_RetreatBackend()
         return false;
     }
 
+    LogMessage("[BotRouteFix] [Module 5] Retreat backend verified (pinned=%d, mretreat=%d, ts=%d, dur=%d, friends=%d, task=%d, outnumbered SDKCall).",
+        g_iOffset_PinnedDownTimestamp, g_iOffset_MRetreatTimer, g_iOffset_TimerTimestamp,
+        g_iOffset_TimerDuration, g_iOffset_NearbyFriendCount, g_iOffset_Task);
     return true;
 }
 
@@ -385,13 +391,14 @@ bool InitModule5_Combat()
     EnableModule5_Combat(true);
     if (!Item_IsArmed(ITEM_M5_RELOAD) && !Item_IsArmed(ITEM_M5_DODGE) && !Item_IsArmed(ITEM_M5_RETREAT))
     {
-        LogError("[BotRouteFix] [Module 5] All combat items failed; module will report FAILED.");
+        LogModuleAllFailed(5);
         return false;
     }
 
-    LogMessage("[BotRouteFix] [Module 5] Combat items armed (reload=%d, dodge=%d, retreat=%d) [%s]",
-        Item_IsArmed(ITEM_M5_RELOAD), Item_IsArmed(ITEM_M5_DODGE), Item_IsArmed(ITEM_M5_RETREAT),
-        g_bIsWin64 ? "64-bit" : "32-bit");
+    char armedDetail[64];
+    Format(armedDetail, sizeof(armedDetail), "reload=%d, dodge=%d, retreat=%d",
+        Item_IsArmed(ITEM_M5_RELOAD), Item_IsArmed(ITEM_M5_DODGE), Item_IsArmed(ITEM_M5_RETREAT));
+    LogModuleArmed(5, "Combat", armedDetail);
     return true;
 }
 
@@ -428,7 +435,9 @@ void EnableModule5_Combat(bool enable)
 
     if (g_bModule5_Active && (!reload || !dodge || !retreat))
     {
-        LogError("[BotRouteFix] [Module 5] Partial activation (reload=%d, dodge=%d, retreat=%d).", reload, dodge, retreat);
+        char partialDetail[96];
+        Format(partialDetail, sizeof(partialDetail), "reload=%d, dodge=%d, retreat=%d", reload, dodge, retreat);
+        LogModulePartial(5, partialDetail);
     }
 }
 

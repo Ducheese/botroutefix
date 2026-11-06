@@ -109,8 +109,8 @@ bool InitModule10_Defuse()
     Item_SetReady(ITEM_M10_DEFUSE, PrepModule10_DefuseBackend());
     EnableModule10_Defuse(true);
 
-    LogMessage("[BotRouteFix] [Module 10] CT chief defuser item armed=%d (IsDoingScenario Pre hook + event election)",
-        Item_IsArmed(ITEM_M10_DEFUSE));
+    LogModuleArmed(10, "CT chief defuser (IsDoingScenario Pre hook + event election)",
+        Item_IsArmed(ITEM_M10_DEFUSE) ? "1" : "0");
     return g_bModule10_Active;
 }
 

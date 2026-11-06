@@ -100,8 +100,14 @@ static bool PrepModule8_QueueBackend()
         return false;
     }
 
+    LogMessage("[BotRouteFix] [Module 8] Queue offsets verified (waiting=%d, polite=%d, duration=%d, timestamp=%d, pathlen=%d, path=%d, stride=%d, stopping=%d, ladder=%d, danger=%d, dangerts=%d).",
+        g_iOffset_Waiting, g_iOffset_PoliteTimer, g_iOffset_TimerDuration, g_iOffset_TimerTimestamp,
+        g_iOffset_PathLength, g_iOffset_Path, g_iPathStride, g_iOffset_IsStopping, g_iOffset_PathLadder,
+        g_iOffset_Danger, g_iOffset_DangerTimestamp);
+
     // 挂载 CCSBot::UpdatePathMovement Post 钩子（只挂载不启用）
     g_hUpdatePathDetour = DHookCreateDetour(Address_Null, CallConv_THISCALL, ReturnType_Int, ThisPointer_CBaseEntity);
+    // 纯 hook 创建不占检查点行（成功静默；失败走上面的事项 FAILED 错误行）。
     if (g_hUpdatePathDetour == null)
     {
         LogError("[BotRouteFix] [Module 8] UpdatePathMovement detour creation failed; queue item FAILED.");
@@ -136,6 +142,7 @@ static bool PrepModule8_DeadlockBackend()
         LogError("[BotRouteFix] [Module 8] Hunt SDKCall missing; deadlock item FAILED.");
         return false;
     }
+    LogMessage("[BotRouteFix] [Module 8] Deadlock Hunt SDKCall verified.");
     return true;
 }
 
@@ -163,11 +170,17 @@ bool InitModule8_Queue()
     Item_SetReady(ITEM_M8_DEADLOCK, PrepModule8_DeadlockBackend());
 
     EnableModule8_Queue(true);
+    if (!g_bModule8_Active)
+    {
+        LogModuleAllFailed(8);
+        return false;
+    }
 
-    LogMessage("[BotRouteFix] [Module 8] Queue items armed (queue=%d, deadlock=%d) [%s]",
-        Item_IsArmed(ITEM_M8_QUEUE), Item_IsArmed(ITEM_M8_DEADLOCK),
-        g_bIsWin64 ? "64-bit" : "32-bit");
-    return g_bModule8_Active;
+    char armedDetail[64];
+    Format(armedDetail, sizeof(armedDetail), "queue=%d, deadlock=%d",
+        Item_IsArmed(ITEM_M8_QUEUE), Item_IsArmed(ITEM_M8_DEADLOCK));
+    LogModuleArmed(8, "Queue", armedDetail);
+    return true;
 }
 
 /**
@@ -196,7 +209,9 @@ void EnableModule8_Queue(bool enable)
 
     if (g_bModule8_Active && (!queueArmed || !deadlockArmed))
     {
-        LogError("[BotRouteFix] [Module 8] Partial activation (queue=%d, deadlock=%d).", queueArmed, deadlockArmed);
+        char partialDetail[64];
+        Format(partialDetail, sizeof(partialDetail), "queue=%d, deadlock=%d", queueArmed, deadlockArmed);
+        LogModulePartial(8, partialDetail);
     }
 }
 

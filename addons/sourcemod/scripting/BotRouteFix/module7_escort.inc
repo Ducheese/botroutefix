@@ -60,6 +60,11 @@ static bool PrepModule7_EscortBackend()
         LogError("[BotRouteFix] [Module 7] Morale offset missing; escort item FAILED.");
     }
 
+    if (sdkOk && moraleOk)
+    {
+        LogMessage("[BotRouteFix] [Module 7] Carrier escort backend verified (follow SDKCall, morale=%d).",
+            g_iOffset_Morale);
+    }
     return (sdkOk && moraleOk);
 }
 
@@ -82,8 +87,8 @@ bool InitModule7_Escort()
     Item_SetReady(ITEM_M7_ESCORT, PrepModule7_EscortBackend());
     EnableModule7_Escort(true);
 
-    LogMessage("[BotRouteFix] [Module 7] Carrier escort item armed=%d (Euclidean bodyguards)",
-        Item_IsArmed(ITEM_M7_ESCORT));
+    LogModuleArmed(7, "Carrier escort (Euclidean bodyguards)",
+        Item_IsArmed(ITEM_M7_ESCORT) ? "1" : "0");
     return g_bModule7_Active;
 }
 
@@ -624,8 +629,8 @@ static void Escort_Refresh()
 
     char moraleStr[16];
     GetMoraleName(morale, moraleStr, sizeof(moraleStr));
-    DebugLog("[BotRouteFix] [Module 7] Carrier %N (Morale: %d %s) roster %d/%d",
-        carrier, morale, moraleStr, g_iBodyguardCount, desired);
+    DebugLog("[BotRouteFix] [Module 7] Carrier %N (Morale: %s%d %s) roster %d/%d",
+        carrier, (morale >= 0) ? "+" : "", morale, moraleStr, g_iBodyguardCount, desired);
 }
 
 /**

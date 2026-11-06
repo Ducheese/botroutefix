@@ -374,13 +374,14 @@ bool InitModule1_Defense()
     EnableModule1_Defense(true);
     if (!g_bModule1_Active)
     {
-        LogError("[BotRouteFix] [Module 1] Both defense items failed; module will report FAILED.");
+        LogModuleAllFailed(1);
         return false;
     }
 
-    LogMessage("[BotRouteFix] [Module 1] Defense items armed (guard=%d, anti-rush=%d) [%s]",
-        Item_IsArmed(ITEM_M1_GUARD), Item_IsArmed(ITEM_M1_ANTI_RUSH),
-        g_bIsWin64 ? "64-bit" : "32-bit");
+    char armedDetail[64];
+    Format(armedDetail, sizeof(armedDetail), "guard=%d, anti-rush=%d",
+        Item_IsArmed(ITEM_M1_GUARD), Item_IsArmed(ITEM_M1_ANTI_RUSH));
+    LogModuleArmed(1, "Defense", armedDetail);
     return true;
 }
 
@@ -411,7 +412,9 @@ void EnableModule1_Defense(bool enable)
 
     if (g_bModule1_Active && (!guardArmed || !rushArmed))
     {
-        LogError("[BotRouteFix] [Module 1] Partial activation (guard=%d, anti-rush=%d).", guardArmed, rushArmed);
+        char partialDetail[64];
+        Format(partialDetail, sizeof(partialDetail), "guard=%d, anti-rush=%d", guardArmed, rushArmed);
+        LogModulePartial(1, partialDetail);
     }
 }
 

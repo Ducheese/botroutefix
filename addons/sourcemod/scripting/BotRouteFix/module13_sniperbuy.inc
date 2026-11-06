@@ -233,6 +233,7 @@ static bool PrepModule13_RewriteSite()
         g_Buy13MainBytes[i] = p[i];
     }
 
+    LogMessage("[BotRouteFix] [Module 13] Rewrite block verified @ %X", sigAddr);
     return true;
 }
 
@@ -368,6 +369,7 @@ static bool PrepModule13_CaveSite()
         g_Buy13MainBytes[i] = jmpBytes[i];
     }
 
+    LogMessage("[BotRouteFix] [Module 13] Cave block verified @ %X (jmp-in @ %X)", caveAddr, comissAddr);
     return true;
 }
 
@@ -392,8 +394,8 @@ bool InitModule13_SniperBuy()
     Item_SetReady(ITEM_M13_BUY, PrepModule13_BuyBackend());
     EnableModule13_SniperBuy(true);
 
-    LogMessage("[BotRouteFix] [Module 13] sniperRifleChance (50-10*M) armed=%d [%s]",
-        Item_IsArmed(ITEM_M13_BUY), g_bIsWin64 ? "64-bit" : "32-bit");
+    LogModuleArmed(13, "sniperRifleChance (50-10*M)",
+        Item_IsArmed(ITEM_M13_BUY) ? "1" : "0");
     return Item_IsArmed(ITEM_M13_BUY);
 }
 

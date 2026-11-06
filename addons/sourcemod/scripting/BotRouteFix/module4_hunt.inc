@@ -199,6 +199,8 @@ static bool PrepModule4_HuntBackend()
         return false;
     }
 
+    LogMessage("[BotRouteFix] [Module 4] HuntState offsets verified (area=%d, cleared=%d, visited=%d).",
+        g_iOffset_HuntArea, g_iOffset_ClearedTimestamp, g_iOffset_HasVisitedEnemySpawn);
     return MountHuntStateDetour();
 }
 
@@ -261,13 +263,14 @@ bool InitModule4_Hunt()
     EnableModule4_Hunt(true);
     if (!Item_IsArmed(ITEM_M4_NOP) && !Item_IsArmed(ITEM_M4_HUNT))
     {
-        LogError("[BotRouteFix] [Module 4] Both HuntState items failed; module will report FAILED.");
+        LogModuleAllFailed(4);
         return false;
     }
 
-    LogMessage("[BotRouteFix] [Module 4] HuntState items armed (NOP=%d, hook=%d) [%s]",
-        Item_IsArmed(ITEM_M4_NOP), Item_IsArmed(ITEM_M4_HUNT),
-        g_bIsWin64 ? "64-bit" : "32-bit");
+    char armedDetail[64];
+    Format(armedDetail, sizeof(armedDetail), "NOP=%d, hook=%d",
+        Item_IsArmed(ITEM_M4_NOP), Item_IsArmed(ITEM_M4_HUNT));
+    LogModuleArmed(4, "HuntState", armedDetail);
     return true;
 }
 
@@ -309,7 +312,9 @@ void EnableModule4_Hunt(bool enable)
 
     if (g_bModule4_Active && (!nopArmed || !huntArmed))
     {
-        LogError("[BotRouteFix] [Module 4] Partial activation (NOP=%d, hunt=%d).", nopArmed, huntArmed);
+        char partialDetail[64];
+        Format(partialDetail, sizeof(partialDetail), "NOP=%d, hunt=%d", nopArmed, huntArmed);
+        LogModulePartial(4, partialDetail);
     }
 }
 

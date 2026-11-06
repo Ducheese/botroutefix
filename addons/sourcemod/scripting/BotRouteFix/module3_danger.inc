@@ -93,6 +93,9 @@ static bool PrepModule3_DecayBackend()
         return false;
     }
 
+    LogMessage("[BotRouteFix] [Module 3] Danger offsets verified (danger=%d, timestamp=%d).",
+        g_iOffset_Danger, g_iOffset_DangerTimestamp);
+
     if (!ResolveTheNavAreas())
     {
         return false;
@@ -261,12 +264,11 @@ bool InitModule3_Danger()
     EnableModule3_Danger(true);
     if (!Item_IsArmed(ITEM_M3_DECAY))
     {
-        LogError("[BotRouteFix] [Module 3] Decay item failed; module will report FAILED.");
+        LogModuleAllFailed(3);
         return false;
     }
 
-    LogMessage("[BotRouteFix] [Module 3] Nav danger decay item armed [%s]",
-        g_bIsWin64 ? "64-bit" : "32-bit");
+    LogModuleArmed(3, "Nav danger decay", Item_IsArmed(ITEM_M3_DECAY) ? "1" : "0");
     return true;
 }
 
