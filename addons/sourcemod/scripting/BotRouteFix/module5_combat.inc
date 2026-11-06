@@ -497,7 +497,7 @@ int Module5_GetTotalRetreatTriggered()
  */
 int Module5_GetRetreatReason(int client)
 {
-    if (client < 1 || client > MaxClients || !IsClientInGame(client) || !IsPlayerAlive(client))
+    if (!IsValidClient(client, true))
     {
         return RETREAT_REASON_NONE;
     }

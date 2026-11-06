@@ -172,7 +172,7 @@ public Action Timer_RenderVisualsFast(Handle timer)
     //------------------------------------------------------------------------------------
     {
         int carrier = GetC4Carrier();
-        if (carrier > 0 && carrier <= MaxClients && IsClientInGame(carrier) && IsPlayerAlive(carrier))
+        if (IsValidClient(carrier, true))
         {
             float carrierChest[3];
             GetBotChestPosition(carrier, carrierChest);
@@ -222,7 +222,7 @@ public Action Timer_RenderVisualsFast(Handle timer)
 
         for (int i = 1; i <= MaxClients; i++)
         {
-            if (!IsClientInGame(i) || !IsPlayerAlive(i) || !IsFakeClient(i))
+            if (!IsBot(i, true))
             {
                 continue;
             }
@@ -253,7 +253,7 @@ public Action Timer_RenderVisualsFast(Handle timer)
 
         for (int i = 1; i <= MaxClients; i++)
         {
-            if (!IsClientInGame(i) || !IsPlayerAlive(i) || !IsFakeClient(i))
+            if (!IsBot(i, true))
             {
                 s_flNextBeamFollow[i] = 0.0;
                 continue;
@@ -305,7 +305,7 @@ public Action Timer_RenderVisualsFast(Handle timer)
 
         for (int i = 1; i <= MaxClients; i++)
         {
-            if (!IsClientInGame(i) || !IsPlayerAlive(i) || !IsFakeClient(i))
+            if (!IsBot(i, true))
             {
                 continue;
             }
@@ -334,7 +334,7 @@ public Action Timer_RenderVisualsFast(Handle timer)
     if (Item_IsArmed(ITEM_M7_ESCORT))
     {
         int carrier = Module7_GetCarrier();
-        if (carrier > 0 && carrier <= MaxClients && IsClientInGame(carrier) && IsPlayerAlive(carrier))
+        if (IsValidClient(carrier, true))
         {
             int bodyguards[MAXPLAYERS + 1];
             int count = Module7_GetBodyguards(bodyguards, sizeof(bodyguards));
@@ -365,7 +365,7 @@ public Action Timer_RenderVisualsFast(Handle timer)
 
         for (int i = 1; i <= MaxClients; i++)
         {
-            if (!IsClientInGame(i) || !IsPlayerAlive(i))
+            if (!IsValidClient(i, true))
             {
                 continue;
             }

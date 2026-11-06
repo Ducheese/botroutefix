@@ -265,7 +265,7 @@ int Module8_GetBlockedAreas(Address areas[MAX_BLOCKED_AREAS], float expires[MAX_
  */
 bool Module8_IsDeadlockBroken(int client)
 {
-    if (client < 1 || client > MaxClients || !IsClientInGame(client) || !IsPlayerAlive(client))
+    if (!IsValidClient(client, true))
     {
         return false;
     }

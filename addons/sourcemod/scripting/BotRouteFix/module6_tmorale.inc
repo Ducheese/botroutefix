@@ -240,7 +240,8 @@ int Module6_GetTotalNoiseAllowed()
  */
 int Module6_GetBotDisposition(int client)
 {
-    if (client < 1 || client > MaxClients || !IsClientInGame(client) || !IsPlayerAlive(client) || !IsFakeClient(client))
+    // 与其它模块可视化 getter 对齐：只要求在服存活，不限 Bot（调用方均为 Bot 上下文）
+    if (!IsValidClient(client, true))
     {
         return -1;
     }

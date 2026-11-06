@@ -361,7 +361,7 @@ int Module4_GetTotalHuntClaims()
  */
 Address Module4_GetHuntArea(int client)
 {
-    if (client < 1 || client > MaxClients || !IsClientInGame(client) || !IsPlayerAlive(client))
+    if (!IsValidClient(client, true))
     {
         return Address_Null;
     }

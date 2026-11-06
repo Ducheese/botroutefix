@@ -229,7 +229,7 @@ int Module9_GetFetchRoster(int roster[LOOT_ROSTER_SIZE], float c4Pos[3])
     for (int i = 0; i < LOOT_ROSTER_SIZE; i++)
     {
         int bot = g_iLootRoster[i];
-        if (bot > 0 && bot <= MaxClients && IsClientInGame(bot) && IsPlayerAlive(bot))
+        if (IsValidClient(bot, true))
         {
             roster[count++] = bot;
         }
@@ -348,7 +348,7 @@ public MRESReturn Hook_NoticeLooseBomb_Pre(int client, DHookParam hParams)
     }
 
     // 阵营门补漏：原生 NoticeLooseBomb 注释写 "for T's only"（虽底层调用点均有阵营包裹，此处作为纵深防御兜底）
-    if (GetClientTeam(client) != 2)
+    if (!IsTeamBot(client, 2, true))
     {
         DHookSetReturn(hParams, false);
         return MRES_Supercede;

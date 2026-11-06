@@ -177,7 +177,7 @@ int Module10_GetTotalGated()
  */
 int Module10_GetChiefDefuser(float c4Pos[3])
 {
-    if (g_iChief <= 0 || g_iChief > MaxClients || !IsClientInGame(g_iChief) || !IsPlayerAlive(g_iChief))
+    if (!IsValidClient(g_iChief, true))
     {
         return -1;
     }

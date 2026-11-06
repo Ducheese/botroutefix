@@ -161,7 +161,7 @@ int Module7_GetBodyguards(int[] bodyguards, int maxCount)
     for (int i = 0; i < g_iBodyguardCount && count < maxCount; i++)
     {
         int bot = g_iBodyguardList[i];
-        if (bot > 0 && bot <= MaxClients && IsClientInGame(bot) && IsPlayerAlive(bot))
+        if (IsValidClient(bot, true))
         {
             bodyguards[count++] = bot;
         }
