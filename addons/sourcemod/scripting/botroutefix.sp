@@ -100,8 +100,10 @@ public void OnPluginStart()
     // Determine 32-bit vs 64-bit via Gamedata (windows = 0, windows64 = 1)
     g_bIsWin64 = (GameConfGetOffset(g_hGameConf, "IsWin64") == 1);
 
-    // Cache common offsets
-    g_iOffset_Morale = GameConfGetOffset(g_hGameConf, "CCSBot_Morale_Offset");
+    // Cache common offsets (resolved once; module Preps only gate on > 0)
+    g_iOffset_Morale      = GameConfGetOffset(g_hGameConf, "CCSBot_Morale_Offset");
+    g_iOffset_Task        = GameConfGetOffset(g_hGameConf, "CCSBot_Task_Offset");
+    g_iOffset_Disposition = GameConfGetOffset(g_hGameConf, "CCSBot_Disposition_Offset");
 
     // 3. Register console commands and events hub
     InitCommands();
@@ -196,7 +198,8 @@ public void OnPluginEnd()
 public void OnMapStart()
 {
     // 换图 = 实体索引全废 + nav 重建 + curtime 归零：各模块清脏状态（不清即跨图污染）
-    // M1/M4 无状态，M3 重解容器，M5 清时间数组，M8 清打碎计数，其余清名单/旗帜（与 round_start 同语义但独立命名）
+    // M1 真无状态；M4 仅 per-client 可视化缓存，由 GetHuntArea 三重门控（在服+存活+0.3s 心跳）+ round_start 全清覆盖，无需清；
+    // M3 重解容器，M5 清时间数组，M8 清打碎计数，其余清名单/旗帜（与 round_start 同语义但独立命名）
     Events_OnMapStart();    // 对局炸弹状态唯一写入方
     Visuals_OnMapStart();   // 预缓存激光与光环精灵
     Module2_OnMapStart();

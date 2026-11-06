@@ -59,9 +59,7 @@ static int g_iTotalNoiseAllowed = 0;
 static bool g_bModule6_Active = false;
 static bool g_bNoiseDetourEnabled = false;
 
-// 模块内部专用偏移缓存
-static int g_iOffset_Disposition = -1;
-static int g_iOffset_Task = -1;
+// 模块内部专用偏移缓存（Task/Disposition 上收 global.inc，本文件只用不存）
 static int g_iOffset_NoisePosition = -1;
 static int g_iOffset_NoiseTimestamp = -1;
 
@@ -80,8 +78,7 @@ static int g_iOffset_NoiseTimestamp = -1;
  */
 static bool PrepModule6_NoiseBackend()
 {
-    g_iOffset_Disposition    = GameConfGetOffset(g_hGameConf, "CCSBot_Disposition_Offset");
-    g_iOffset_Task           = GameConfGetOffset(g_hGameConf, "CCSBot_Task_Offset");
+    // Task/Disposition 由 OnPluginStart 统一解析，此处只做门禁
     g_iOffset_NoisePosition  = GameConfGetOffset(g_hGameConf, "CCSBot_NoisePosition_Offset");
     g_iOffset_NoiseTimestamp = GameConfGetOffset(g_hGameConf, "CCSBot_NoiseTimestamp_Offset");
 

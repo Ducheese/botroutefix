@@ -65,8 +65,7 @@
 
 static MemoryPatch g_PatchCamp12_Sites[6];
 static int g_Camp12PatchBytes[6][6];    // 预先构造的旁路字节（Prep 构造 / Apply 原样写入）
-static int g_iOffset_Task12 = -1;
-static int g_iOffset_Disp12 = -1;
+// Task/Disposition 上收 global.inc 共享（OnPluginStart 一次解析），本文件只用不存
 static bool g_bModule12_Active = false; // 模块规则开启态（Enable 幂等缓存）
 static int g_iTotalCampRedirected = 0;
 
@@ -102,9 +101,8 @@ static bool PrepModule12_CampBackend()
         return false;
     }
 
-    g_iOffset_Task12 = GameConfGetOffset(g_hGameConf, "CCSBot_Task_Offset");
-    g_iOffset_Disp12 = GameConfGetOffset(g_hGameConf, "CCSBot_Disposition_Offset");
-    if (g_iOffset_Task12 <= 0 || g_iOffset_Disp12 <= 0)
+    // Task/Disposition 由 OnPluginStart 统一解析，此处只做门禁
+    if (g_iOffset_Task <= 0 || g_iOffset_Disposition <= 0)
     {
         LogError("[BotRouteFix] [Module 12] Task/Disposition offsets missing; camp item FAILED.");
         return false;
@@ -117,7 +115,7 @@ static bool PrepModule12_CampBackend()
     }
 
     LogMessage("[BotRouteFix] [Module 12] Camp offsets verified (task=%d, disp=%d, hunt SDKCall).",
-        g_iOffset_Task12, g_iOffset_Disp12);
+        g_iOffset_Task, g_iOffset_Disposition);
 
     for (int i = 0; i < 6; i++)
     {
@@ -484,13 +482,13 @@ bool Module12_CampGate(int client)
         return false;
     }
 
-    if (g_iOffset_Task12 <= 0 || g_iOffset_Disp12 <= 0)
+    if (g_iOffset_Task <= 0 || g_iOffset_Disposition <= 0)
     {
         return false;
     }
 
     // 只有 camp 分支会以 task 19 进 Hide，其余 Hide 原样放行
-    int task = GetEntData(client, g_iOffset_Task12, 4);
+    int task = GetEntData(client, g_iOffset_Task, 4);
     if (task != BOT_TASK_MOVE_TO_SNIPER_SPOT)
     {
         return false;
@@ -527,9 +525,9 @@ public void Module12_FrameHunt(any data)
     }
 
     BotHunt(client);
-    if (g_iOffset_Disp12 > 0)
+    if (g_iOffset_Disposition > 0)
     {
-        SetEntData(client, g_iOffset_Disp12, 0, 4, true); // ENGAGE_AND_INVESTIGATE
+        SetEntData(client, g_iOffset_Disposition, 0, 4, true); // ENGAGE_AND_INVESTIGATE
     }
     DebugLog("[BotRouteFix] [Module 12] Bot %N camp redirect executed (deferred Hunt now)", client);
     g_iTotalCampRedirected++;

@@ -50,10 +50,7 @@
 #define NAV_AREA_PAIR_SCAN_BYTES    0x700   // 32 位锚点后的候选指令扫描窗口
 #define NAV_AREA_PAIR_MAX_DELTA     0x800000 // 候选 base 与锚点的最大距离
 
-static int g_iOffset_Danger = -1;
-static int g_iOffset_DangerTimestamp = -1;
-static int g_iPtrSize = 4;
-
+// Danger/DangerTimestamp/PtrSize 上收 nav_measure.inc 共享（InitNavMeasure 一次解析），本文件只用不存
 // 模块内部启用缓存（仅用于 Enable 幂等短路；业务判据统一用 Item_IsArmed(ITEM_M3_DECAY)）
 static bool g_bModule3_Active = false;
 
@@ -77,15 +74,7 @@ static bool PrepModule3_DecayBackend()
         return false;
     }
 
-    g_iOffset_Danger          = GameConfGetOffset(g_hGameConf, "NavArea_Danger_Offset");
-    g_iOffset_DangerTimestamp = GameConfGetOffset(g_hGameConf, "NavArea_DangerTimestamp_Offset");
-    g_iPtrSize                = GameConfGetOffset(g_hGameConf, "Pointer_Size");
-
-    if (g_iPtrSize <= 0)
-    {
-        g_iPtrSize = g_bIsWin64 ? 8 : 4;
-    }
-
+    // 偏移由 InitNavMeasure 统一解析（含 PtrSize 回退），此处只做门禁
     if (g_iOffset_Danger <= 0 || g_iOffset_DangerTimestamp <= 0)
     {
         LogError("[BotRouteFix] [Module 3] Danger offsets missing (danger=%d, timestamp=%d); decay item FAILED.",

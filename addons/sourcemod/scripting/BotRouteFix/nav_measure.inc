@@ -24,17 +24,19 @@
 static Address g_NavProbeAreas[NAV_MEASURE_MAX_PATH_NODES];
 static int g_iNavProbeCount = 0;
 
-// 无损测距偏移组
+// 无损测距偏移组（导航/计时器级共享：M3/M5/M8/M11 的同名私有拷贝已删除，统一由 InitNavMeasure 一次解析，事项 Prep 只做 > 0 门禁）
+// g_iOffset_Task 由 global.inc 提供（OnPluginStart 解析），此处不再另存
+int g_iOffset_TimerDuration  = -1;
+int g_iOffset_TimerTimestamp = -1;
+int g_iOffset_Danger         = -1;
+int g_iOffset_DangerTimestamp = -1;
+int g_iPtrSize               = 4;
 static int g_iNav_Path         = -1;
 static int g_iNav_PathStride   = -1;
 static int g_iNav_PathLength   = -1;
 static int g_iNav_PathLadder   = -1;
 static int g_iNav_IsStopping   = -1;
-static int g_iNav_Task         = -1;
 static int g_iNav_ConnectPos   = -1;
-static int g_iNav_TimerDur     = -1;
-static int g_iNav_TimerTs      = -1;
-static int g_iNav_PtrSize      = -1;
 static bool g_bNavMeasureReady = false;
 
 /**
@@ -52,16 +54,23 @@ bool InitNavMeasure()
     g_iNav_PathLength = GameConfGetOffset(g_hGameConf, "CCSBot_PathLength_Offset");
     g_iNav_PathLadder = GameConfGetOffset(g_hGameConf, "CCSBot_PathLadder_Offset");
     g_iNav_IsStopping = GameConfGetOffset(g_hGameConf, "CCSBot_IsStopping_Offset");
-    g_iNav_Task       = GameConfGetOffset(g_hGameConf, "CCSBot_Task_Offset");
     g_iNav_ConnectPos = GameConfGetOffset(g_hGameConf, "ConnectInfo_Vector_Offset");
-    g_iNav_TimerDur   = GameConfGetOffset(g_hGameConf, "CountdownTimer_Duration_Offset");
-    g_iNav_TimerTs    = GameConfGetOffset(g_hGameConf, "CountdownTimer_Timestamp_Offset");
-    g_iNav_PtrSize    = GameConfGetOffset(g_hGameConf, "Pointer_Size");
+    // 以下五组为跨模块共享：Timer/Danger/PtrSize 由此一次解析（原 M3/M5/M8/M11 私有拷贝已删）；
+    // Danger 只解析不进待机门（测距本体用不到它，缺失由各事项 Prep 自查）。
+    g_iOffset_TimerDuration   = GameConfGetOffset(g_hGameConf, "CountdownTimer_Duration_Offset");
+    g_iOffset_TimerTimestamp  = GameConfGetOffset(g_hGameConf, "CountdownTimer_Timestamp_Offset");
+    g_iOffset_Danger          = GameConfGetOffset(g_hGameConf, "NavArea_Danger_Offset");
+    g_iOffset_DangerTimestamp = GameConfGetOffset(g_hGameConf, "NavArea_DangerTimestamp_Offset");
+    g_iPtrSize                = GameConfGetOffset(g_hGameConf, "Pointer_Size");
+    if (g_iPtrSize <= 0)
+    {
+        g_iPtrSize = g_bIsWin64 ? 8 : 4;
+    }
 
     if (g_hSDKCall_ComputePath == null || g_iNav_Path <= 0 || g_iNav_PathStride <= 0 ||
         g_iNav_PathLength <= 0 || g_iNav_PathLadder <= 0 || g_iNav_IsStopping <= 0 ||
-        g_iNav_Task <= 0 || g_iNav_ConnectPos <= 0 || g_iNav_TimerDur <= 0 ||
-        g_iNav_TimerTs <= 0 || g_iNav_PtrSize <= 0)
+        g_iOffset_Task <= 0 || g_iNav_ConnectPos <= 0 || g_iOffset_TimerDuration <= 0 ||
+        g_iOffset_TimerTimestamp <= 0 || g_iPtrSize <= 0)
     {
         LogMessage("[BotRouteFix] [NavMeasure] Offsets incomplete, walk-distance measurement on standby.");
         return false;
@@ -127,22 +136,22 @@ static int NavMeasure_ProbePath(int client, const float target[3], int maxAreas,
     int oldAreaEntered = LoadFromAddress(pBot + view_as<Address>(areaEnteredOffset), NumberType_Int32);
     int oldIsStopping = LoadFromAddress(pBot + view_as<Address>(g_iNav_IsStopping), NumberType_Int8);
 
-    int currentAreaOffset = g_iNav_Task + 24;
-    int lastKnownAreaOffset = currentAreaOffset + g_iNav_PtrSize;
+    int currentAreaOffset = g_iOffset_Task + 24;
+    int lastKnownAreaOffset = currentAreaOffset + g_iPtrSize;
     Address oldCurrentArea = LoadAddressFromAddress(pBot + view_as<Address>(currentAreaOffset));
     Address oldLastKnownArea = LoadAddressFromAddress(pBot + view_as<Address>(lastKnownAreaOffset));
 
-    int goalOffset = g_iNav_Task + 8;
+    int goalOffset = g_iOffset_Task + 8;
     int oldGoalX = LoadFromAddress(pBot + view_as<Address>(goalOffset), NumberType_Int32);
     int oldGoalY = LoadFromAddress(pBot + view_as<Address>(goalOffset + 4), NumberType_Int32);
     int oldGoalZ = LoadFromAddress(pBot + view_as<Address>(goalOffset + 8), NumberType_Int32);
 
     int repathOffset = g_iNav_PathLength + (g_bIsWin64 ? 16 : 12);
-    int oldRepathDuration = LoadFromAddress(pBot + view_as<Address>(repathOffset + g_iNav_TimerDur), NumberType_Int32);
-    int oldRepathTimestamp = LoadFromAddress(pBot + view_as<Address>(repathOffset + g_iNav_TimerTs), NumberType_Int32);
+    int oldRepathDuration = LoadFromAddress(pBot + view_as<Address>(repathOffset + g_iOffset_TimerDuration), NumberType_Int32);
+    int oldRepathTimestamp = LoadFromAddress(pBot + view_as<Address>(repathOffset + g_iOffset_TimerTimestamp), NumberType_Int32);
 
     // 解 repath 节流，保证本次实测不被 0.4 秒节流挡掉
-    StoreToAddress(pBot + view_as<Address>(repathOffset + g_iNav_TimerTs), view_as<int>(-1.0), NumberType_Int32);
+    StoreToAddress(pBot + view_as<Address>(repathOffset + g_iOffset_TimerTimestamp), view_as<int>(-1.0), NumberType_Int32);
 
     int dwordsPerNode = g_iNav_PathStride / 4;
     int clampedOldLength = oldPathLength;
@@ -235,8 +244,8 @@ static int NavMeasure_ProbePath(int client, const float target[3], int maxAreas,
     StoreAddressToAddress(pBot + view_as<Address>(g_iNav_PathLadder), oldPathLadder);
     StoreToAddress(pBot + view_as<Address>(g_iNav_IsStopping), oldIsStopping, NumberType_Int8);
 
-    StoreToAddress(pBot + view_as<Address>(repathOffset + g_iNav_TimerDur), oldRepathDuration, NumberType_Int32);
-    StoreToAddress(pBot + view_as<Address>(repathOffset + g_iNav_TimerTs), oldRepathTimestamp, NumberType_Int32);
+    StoreToAddress(pBot + view_as<Address>(repathOffset + g_iOffset_TimerDuration), oldRepathDuration, NumberType_Int32);
+    StoreToAddress(pBot + view_as<Address>(repathOffset + g_iOffset_TimerTimestamp), oldRepathTimestamp, NumberType_Int32);
 
     // 探针 scratch 的游标必须与本次实际采集数同步：BotNavProbeAreaAt 用它判越界，
     // 不赋值会让所有读者永远拿到 Address_Null（走廊钉刺会静默空转）。

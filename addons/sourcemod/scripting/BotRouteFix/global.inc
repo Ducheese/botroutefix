@@ -34,13 +34,16 @@ bool g_bIsWin64 = false;
 
 // 全局 ConVar
 ConVar g_cvDebug = null;
+ConVar g_cvModules = null;
 
 // 对局炸弹状态（唯一写入方：events.inc 事件总线；任何业务模块只读）
 // 上收至全局：下包状态是整局流程的一等事实，不得随任一模块模块启停而断流
 bool g_bBombPlanted = false;
 
-// 常用 Bot 内部偏移缓存（跨模块共享）
+// 常用 Bot 内部偏移缓存（跨模块共享；OnPluginStart 一次解析，事项 Prep 只做 > 0 门禁）
 int g_iOffset_Morale = -1;
+int g_iOffset_Task = -1;
+int g_iOffset_Disposition = -1;
 
 // 全局单例指针引用（跨模块共享）
 Address g_pTheCSBotsPtr;

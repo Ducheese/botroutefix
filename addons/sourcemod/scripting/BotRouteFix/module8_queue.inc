@@ -26,24 +26,20 @@
 #define QUEUE_NAIL_MAX          2.5
 // 沉降速率 DANGER_DECAY_RATE_SEC 统一定义于 global.inc
 
-// 本模块私有状态（static，偏移与句柄不出本文件）
+// 本模块私有状态（static，句柄与本模块专有偏移不出本文件；Timer/Danger/PtrSize 为 nav_measure 共享）
 static bool g_bModule8_Active = false;      // 业务开启态
 static bool g_bUpdatePathHooked = false;    // per-hook 真实启用态
 static Handle g_hUpdatePathDetour = null;
 static int g_iShatterCount[MAXPLAYERS + 1];
 static int g_iOffset_Waiting = -1;
 static int g_iOffset_PoliteTimer = -1;
-static int g_iOffset_TimerDuration = -1;
-static int g_iOffset_TimerTimestamp = -1;
+// Timer/Danger/PtrSize 上收 nav_measure.inc 共享，本文件只用不存
 static int g_iOffset_PathLength = -1;
 static int g_iOffset_PathIndex = -1;
 static int g_iOffset_IsStopping = -1;
 static int g_iOffset_PathLadder = -1;
 static int g_iOffset_Path = -1;
 static int g_iPathStride = -1;
-static int g_iOffset_Danger = -1;
-static int g_iOffset_DangerTimestamp = -1;
-static int g_iPtrSize = 4;
 
 // 遥测统计计数器
 static int g_iTotalQueueShattered = 0;
@@ -72,21 +68,12 @@ static bool PrepModule8_QueueBackend()
 {
     g_iOffset_Waiting        = GameConfGetOffset(g_hGameConf, "CCSBot_IsWaitingBehindFriend_Offset");
     g_iOffset_PoliteTimer    = GameConfGetOffset(g_hGameConf, "CCSBot_PoliteTimer_Offset");
-    g_iOffset_TimerDuration  = GameConfGetOffset(g_hGameConf, "CountdownTimer_Duration_Offset");
-    g_iOffset_TimerTimestamp = GameConfGetOffset(g_hGameConf, "CountdownTimer_Timestamp_Offset");
     g_iOffset_PathLength     = GameConfGetOffset(g_hGameConf, "CCSBot_PathLength_Offset");
     g_iOffset_Path           = GameConfGetOffset(g_hGameConf, "CCSBot_Path_Offset");
     g_iPathStride            = GameConfGetOffset(g_hGameConf, "CCSBot_PathStride");
     g_iOffset_IsStopping     = GameConfGetOffset(g_hGameConf, "CCSBot_IsStopping_Offset");
     g_iOffset_PathLadder     = GameConfGetOffset(g_hGameConf, "CCSBot_PathLadder_Offset");
-    g_iOffset_Danger         = GameConfGetOffset(g_hGameConf, "NavArea_Danger_Offset");
-    g_iOffset_DangerTimestamp = GameConfGetOffset(g_hGameConf, "NavArea_DangerTimestamp_Offset");
-    g_iPtrSize               = GameConfGetOffset(g_hGameConf, "Pointer_Size");
-
-    if (g_iPtrSize <= 0)
-    {
-        g_iPtrSize = g_bIsWin64 ? 8 : 4;
-    }
+    // Timer/Danger/PtrSize 由 InitNavMeasure 统一解析（含 PtrSize 回退），此处只做门禁
 
     g_iOffset_PathIndex = g_iOffset_PathLength + 4; // C++ 结构体紧随 m_pathLength 之后
 

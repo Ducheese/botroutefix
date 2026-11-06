@@ -134,10 +134,8 @@ static float g_flRetreatUntil[MAXPLAYERS + 1];
 static int g_iOffset_AttackShouldDodge = -1;
 static int g_iOffset_PinnedDownTimestamp = -1;
 static int g_iOffset_MRetreatTimer = -1;
-static int g_iOffset_TimerTimestamp = -1;
-static int g_iOffset_TimerDuration = -1;
+// Timer/Task 上收共享（Timer→nav_measure.inc，Task→global.inc），本文件只用不存
 static int g_iOffset_NearbyFriendCount = -1;
-static int g_iOffset_Task = -1;
 
 //========================================================================================
 // MODULE 5 ITEM BACKENDS (called by Init)
@@ -294,10 +292,8 @@ static bool PrepModule5_RetreatBackend()
 {
     g_iOffset_PinnedDownTimestamp = GameConfGetOffset(g_hGameConf, "AttackState_PinnedDownTimestamp_Offset");
     g_iOffset_MRetreatTimer       = GameConfGetOffset(g_hGameConf, "AttackState_MRetreatTimer_Offset");
-    g_iOffset_TimerTimestamp      = GameConfGetOffset(g_hGameConf, "CountdownTimer_Timestamp_Offset");
-    g_iOffset_TimerDuration       = GameConfGetOffset(g_hGameConf, "CountdownTimer_Duration_Offset");
     g_iOffset_NearbyFriendCount   = GameConfGetOffset(g_hGameConf, "CCSBot_NearbyFriendCount_Offset");
-    g_iOffset_Task                = GameConfGetOffset(g_hGameConf, "CCSBot_Task_Offset");
+    // Timer/Task 由 InitNavMeasure / OnPluginStart 统一解析，此处只做门禁
 
     bool retreatOffsetsOk = (g_iOffset_PinnedDownTimestamp > 0 && g_iOffset_MRetreatTimer > 0
         && g_iOffset_TimerTimestamp > 0 && g_iOffset_TimerDuration > 0

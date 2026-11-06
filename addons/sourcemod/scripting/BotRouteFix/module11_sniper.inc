@@ -60,13 +60,11 @@ static bool g_bSpottedSniperHooked = false;
 static Handle g_hSpottedSniperDetour = null;
 static int g_iTotalSniperRequests = 0;
 
-// 缓存偏移
+// 缓存偏移（Danger/DangerTimestamp 上收 nav_measure.inc 共享，本文件只用不存）
 static int g_iOffset_ChatterMe       = -1;
 static int g_iOffset_Enemy           = -1;
 static int g_iOffset_EnemyQueue      = -1;
 static int g_iOffset_EnemyQueueIndex = -1;
-static int g_iOffset_Danger          = -1;
-static int g_iOffset_DangerTimestamp = -1;
 
 //========================================================================================
 // MODULE 11 ITEM BACKENDS (called by Init)
@@ -93,8 +91,7 @@ static bool PrepModule11_CorridorBackend()
     g_iOffset_Enemy           = GameConfGetOffset(g_hGameConf, "CCSBot_Enemy_Offset");
     g_iOffset_EnemyQueue      = GameConfGetOffset(g_hGameConf, "CCSBot_EnemyQueue_Offset");
     g_iOffset_EnemyQueueIndex = GameConfGetOffset(g_hGameConf, "CCSBot_EnemyQueueIndex_Offset");
-    g_iOffset_Danger          = GameConfGetOffset(g_hGameConf, "NavArea_Danger_Offset");
-    g_iOffset_DangerTimestamp = GameConfGetOffset(g_hGameConf, "NavArea_DangerTimestamp_Offset");
+    // Danger 由 InitNavMeasure 统一解析，此处只做门禁
 
     bool offsetsOk = (g_iOffset_ChatterMe > 0 && g_iOffset_Enemy > 0
         && g_iOffset_EnemyQueue > 0 && g_iOffset_EnemyQueueIndex > 0
