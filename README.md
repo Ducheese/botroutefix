@@ -434,7 +434,7 @@ addons\sourcemod\
 | :--- | :--- | :--- |
 | `sm_botroutefix_version` | `"2.0.0"` | 插件版本（FCVAR_NOTIFY） |
 | `sm_botroutefix_modules` | `"all"`   | 模块规则：灵活配置启用哪些模块（支持 `"all"`、`"none"`、排除模式 `"-5, -13"` 或 `"all, -5"`、指定模式 `"1, 2, 5-8"`） |
-| `sm_botroutefix_debug`   | `"0"`     | 是否开启详细调试日志与遥测输出 |
+| `sm_botroutefix_debug`   | `"0"`     | 是否开启各模块内部逐行调试日志与调试可视化 |
 
 #### 模块规则说明
 通过 `sm_botroutefix_modules` 单一参数即可灵活管理 15 个战术模块，支持以下用法：
@@ -455,7 +455,7 @@ addons\sourcemod\
 ### 控制台指令
 | 指令 | 权限 | 说明 |
 | :--- | :--- | :--- |
-| `sm_botroutefix_status` | 管理员 (`ADMFLAG_GENERIC`) | 15 模块统一状态行（`ACTIVE` / `DEGRADED` / `FAILED` / `INACTIVE`，按 21 件事项能力表计算；失败行显示 `items x/y armed (x/y ready)`）+ 累积计数器（认领/闪避/后撤/拦截/打碎/选举/首席/狙击请求/狙击前压重定向/蹲守时长缩放/紧急短蹲，单调递增、换图不清零）+ debug 专属 `[Live]` 段（活包匪士气、炸弹状态、T/CT 平均士气与三条概率公式，需 `sm_botroutefix_debug 1`） |
+| `sm_botroutefix_status` | 管理员 (`ADMFLAG_GENERIC`) | 分两段：前半 15 模块启停行（`ACTIVE` 光杆 counts，`DEGRADED` / `FAILED` 点名 failed 事项居中、counts 永远挂尾，`INACTIVE` 显示 `disabled by rule`；静态士气公式在模块名里，label 定稿见 `F:\Git\scratch\botroutefix-status-labels.md`）；后半 `Live`（与上分隔行等长）：全局炸弹三态 `PLANTED` / `DROPPED` / `CARRIED by <人> (士气/身份)`（不显示包点）+ 士气两行（`T n bots alive (AVG Morale: +x 名)`，avg 只统计存活；`T Morale: [...]` 全员名单不筛存活；偏移丢失时显示 `unavailable`）+ 各模块快照行（`M01 CT Guard` / `M02 锁+延迟五变种` / `M03~M15 计数器与名册` + `M12/M13/M14` per-bot 概率名单；仅 `ACTIVE` / `DEGRADED`；per-bot 现算值不进 live）。累积计数器单调递增、换图不清零 |
 
 ---
 

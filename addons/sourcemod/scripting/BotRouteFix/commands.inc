@@ -27,14 +27,18 @@ void InitCommands()
 //========================================================================================
 
 /**
- * 统一模块状态行
+ * 前半：统一模块启停行（纯启停，不带 live）。
+ *   ACTIVE   = label + counts 挂尾；
+ *   DEGRADED / FAILED = label + failed 点名居中 + counts 挂尾（最后一个管道符后）；
+ *   INACTIVE = label + disabled by rule（无计数）。
+ * counts 挂尾依据：armed（已武装生效）≠ ready（后端就绪），两数不一致时可看出
+ * Prep 过了但 Apply/Enable 没落定的事项。
  *
  * @param client    接收方（0 = 服务端控制台）
  * @param index     模块编号 1-15
- * @param label     模块名
- * @param detail    模块专属遥测（可传空字符串）
+ * @param label     模块名（含静态士气公式，不含实时值）
  */
-static void PrintModuleLine(int client, int index, const char[] label, const char[] detail)
+static void PrintModuleState(int client, int index, const char[] label)
 {
     bool ruleEnabled = IsModuleEnabledByRule(index);
     ItemModuleState state = Items_GetModuleState(index, ruleEnabled);
@@ -42,47 +46,114 @@ static void PrintModuleLine(int client, int index, const char[] label, const cha
     char stateName[16];
     Items_GetStateName(state, stateName, sizeof(stateName));
 
+    if (!ruleEnabled)
+    {
+        ReplyToCommand(client, "[BotRouteFix] [Module %02d] %-8s | %s | disabled by rule", index, stateName, label);
+        return;
+    }
+
     int total = Items_CountForModule(index);
     int ready = Items_ReadyForModule(index);
     int armed = Items_ArmedForModule(index);
 
-    char finalDetail[192];
-    if (!ruleEnabled)
+    if (state == ItemModule_Active)
     {
-        strcopy(finalDetail, sizeof(finalDetail), "disabled by rule");
+        ReplyToCommand(client, "[BotRouteFix] [Module %02d] %-8s | %s | items %d/%d armed (%d/%d ready)",
+            index, stateName, label, armed, total, ready, total);
+        return;
     }
-    else if (state != ItemModule_Active)
+
+    char failedNames[128];
+    Items_FailedNamesForModule(index, failedNames, sizeof(failedNames));
+    if (failedNames[0] != '\0')
     {
-        Format(finalDetail, sizeof(finalDetail), "items %d/%d armed (%d/%d ready)", armed, total, ready, total);
-
-        char failedNames[128];
-        Items_FailedNamesForModule(index, failedNames, sizeof(failedNames));
-        if (failedNames[0] != '\0')
-        {
-            StrCat(finalDetail, sizeof(finalDetail), " | failed: ");
-            StrCat(finalDetail, sizeof(finalDetail), failedNames);
-        }
-
-        // DEGRADED 仍可能有活跃事项在产出实时数据（例如 M2 包点锁已锁定），
-        // 保留 detail；FAILED 是 0 事项武装，detail 一律不拼，避免宣传性假话。
-        if (state == ItemModule_Degraded && detail[0] != '\0')
-        {
-            StrCat(finalDetail, sizeof(finalDetail), " | ");
-            StrCat(finalDetail, sizeof(finalDetail), detail);
-        }
+        ReplyToCommand(client, "[BotRouteFix] [Module %02d] %-8s | %s | failed: %s | items %d/%d armed (%d/%d ready)",
+            index, stateName, label, failedNames, armed, total, ready, total);
     }
     else
     {
-        strcopy(finalDetail, sizeof(finalDetail), detail);
+        // 防御分支：状态非 ACTIVE 却点不出 failed 名（事项漏注册/漏名字），行文法退化为纯 counts，
+        // 另记一条 error 日志——status 里看不见，不污染定稿格式。
+        LogError("[BotRouteFix] [Module %d] state is %s but no failed item names (items %d/%d armed). Check items.inc registration.",
+            index, stateName, armed, total);
+    }
+}
+
+/**
+ * 后半 live 行门禁：只给规则开启且 ACTIVE/DEGRADED 的模块出 live 行。
+ * FAILED（0 事项武装）与 INACTIVE（规则关闭）的模块没有可信实时数据，不出 live 行，
+ * 避免“停运模块还在产出数据”的假象。
+ */
+static bool ModuleHasLive(int index)
+{
+    bool ruleEnabled = IsModuleEnabledByRule(index);
+    ItemModuleState state = Items_GetModuleState(index, ruleEnabled);
+    return ruleEnabled && (state == ItemModule_Active || state == ItemModule_Degraded);
+}
+
+/**
+ * per-bot 概率名单（M01/M12/M13/M14）：整队分布口径，不筛存活，空队显示 []。
+ * 模块门禁在调用点；偏移丢失时不出行。
+ *
+ * @param ctOnly      true = 只列 CT（如 M1 守点是 CT 逻辑）
+ */
+static void PrintChanceRoster(int client, int module, const char[] tag, bool ctOnly)
+{
+    if (g_iOffset_Morale <= 0)
+    {
+        return;
     }
 
-    if (finalDetail[0] != '\0')
+    char tList[384], ctList[384];
+    tList[0] = '\0';
+    ctList[0] = '\0';
+    for (int i = 1; i <= MaxClients; i++)
     {
-        ReplyToCommand(client, "[BotRouteFix] [Module %02d] %-8s | %s | %s", index, stateName, label, finalDetail);
+        float chance;
+        if (module == 1)
+        {
+            chance = Module1_CalculateGuardBombsiteChance(GetBotMorale(i));
+        }
+        else if (module == 12)
+        {
+            chance = Module12_CalculateCampChance(GetBotMorale(i));
+        }
+        else if (module == 13)
+        {
+            chance = Module13_CalculateSniperBuyChance(GetBotMorale(i));
+        }
+        else
+        {
+            chance = Module14_CalculateDefendRushChance(GetBotMorale(i));
+        }
+
+        char tmp[16];
+        Format(tmp, sizeof(tmp), "%.0f%%", chance);
+        if (!ctOnly && IsTeamBot(i, 2, false))
+        {
+            if (tList[0] != '\0')
+            {
+                StrCat(tList, sizeof(tList), ", ");
+            }
+            StrCat(tList, sizeof(tList), tmp);
+        }
+        else if (IsTeamBot(i, 3, false))
+        {
+            if (ctList[0] != '\0')
+            {
+                StrCat(ctList, sizeof(ctList), ", ");
+            }
+            StrCat(ctList, sizeof(ctList), tmp);
+        }
+    }
+
+    if (ctOnly)
+    {
+        ReplyToCommand(client, "[BotRouteFix] [Live] M%02d | CT %s: [%s]", module, tag, ctList);
     }
     else
     {
-        ReplyToCommand(client, "[BotRouteFix] [Module %02d] %-8s | %s", index, stateName, label);
+        ReplyToCommand(client, "[BotRouteFix] [Live] M%02d | T %s: [%s] | CT %s: [%s]", module, tag, tList, tag, ctList);
     }
 }
 
@@ -91,10 +162,19 @@ static void PrintModuleLine(int client, int index, const char[] label, const cha
 //========================================================================================
 
 /**
- * 服务端状态遥测（sm_botroutefix_status），常显 + debug 专属 [Live] 两段：
- *   常显段 = 15 模块统一状态行（业务态 + 底层态分流）+ 累积计数器；
- *   [Live] 段（bDebug 开）= 瞬时战术上下文（包匪/炸弹/士气/三条概率公式）。
+ * 服务端状态遥测（sm_botroutefix_status），分两段：
+ *   前半 = 15 模块启停状态（ACTIVE 光杆 counts，DEGRADED/FAILED 点名 failed 事项居中、
+ *          counts 挂尾，INACTIVE 显示 disabled by rule；不带 live，不报 active 名单）；
+ *   后半 = Live：全局快照（炸弹三态 + 双方士气两行，与任何模块开关无关）+
+ *          各模块快照 live（仅 ACTIVE/DEGRADED 模块；per-bot 现算值不进 live，
+ *          M01/M12/M13/M14 例外：per-bot 概率名单是整队分布快照，可以进）。
+ * 静态士气公式写在模块名里（源码侧掷骰与插件侧计算一律进名）。
  * 口径声明：所有累积计数器自插件加载起单调递增，换图不清零（只随重载/重启清零）。
+ * 签名依赖声明：炸弹携带/掉落/已安放走事件 + 武器槽扫描；包点 A/B 暂无内存来源，
+ * 不显示；士气与概率名单强依赖 CCSBot_Morale_Offset，丢失时士气行显示 unavailable，
+ * 概率名单行不出（不出假数据）。
+ * 注：本命令显示内容与 sm_botroutefix_debug 无关；debug 只控制各模块内部
+ * DebugLog 与调试可视化。头部的 Debug: ON/OFF 仅为开关状态展示。
  */
 public Action Command_Status(int client, int args)
 {
@@ -118,235 +198,318 @@ public Action Command_Status(int client, int args)
     ReplyToCommand(client, "[BotRouteFix] Modules Rule  : %s", modulesRule);
     ReplyToCommand(client, "[BotRouteFix] ------------------------------------------------------------");
 
-    char detail[128];
+    // 前半：15 模块启停状态（只报 failed 事项名居中、counts 挂尾；静态士气公式在名字里）。
+    PrintModuleState(client, 1, "CT Guard Chance (70-10*M) & Anti-Rush");
+    PrintModuleState(client, 2, "T Plant Clock (30+10*M) & Site Lock");
+    PrintModuleState(client, 3, "NavArea Danger Soft-Decay");
+    PrintModuleState(client, 4, "Hunt Target Claim & 45s Bypass");
+    PrintModuleState(client, 5, "Combat Dodge / Reload Hide / Retreat");
+    PrintModuleState(client, 6, "T Morale Disposition & Noise Gate (M<0/500/1000/2000/3000)");
+    PrintModuleState(client, 7, "Carrier Escort Roster (3-M)");
+    PrintModuleState(client, 8, "Polite Queue Breaker");
+    PrintModuleState(client, 9, "T Loose-Bomb Fetch Roster");
+    PrintModuleState(client, 10, "CT Chief Defuser");
+    PrintModuleState(client, 11, "Sniper Corridor Deterrence");
+    PrintModuleState(client, 12, "Sniper Camp Gate (60-10*M)");
+    PrintModuleState(client, 13, "Sniper Buy Chance (50-10*M)");
+    PrintModuleState(client, 14, "Defend Rush Chance (40-10*M)");
+    PrintModuleState(client, 15, "Hide Duration x(1-0.15*M)");
 
-    // M1 detail 按实际武装的事项生成，DEGRADED 时不再宣称失败的那一项。
-    char m1Detail[64];
-    m1Detail[0] = '\0';
-    if (Item_IsArmed(ITEM_M1_GUARD))
-    {
-        StrCat(m1Detail, sizeof(m1Detail), "formula 70-10*M");
-    }
-    if (Item_IsArmed(ITEM_M1_ANTI_RUSH))
-    {
-        if (m1Detail[0] != '\0')
-        {
-            StrCat(m1Detail, sizeof(m1Detail), ", ");
-        }
-        StrCat(m1Detail, sizeof(m1Detail), "anti-rush NOP");
-    }
-    PrintModuleLine(client, 1, "CT Guard Chance & Anti-Rush", m1Detail);
+    // Live 分隔行与上分隔行等长（总长 74）：前缀 + 27×- + " Live " + 27×-。
+    ReplyToCommand(client, "[BotRouteFix] --------------------------- Live ---------------------------");
 
-    char m2Detail[128];
-    if (Item_IsArmed(ITEM_M2_CLOCK))
+    // 后半全局快照：炸弹三态、士气两行，与任何模块开关无关（M2 关闭也不消失）。
+    if (g_bBombPlanted)
     {
-        if (Module2_IsBombsiteLocked())
-        {
-            Format(m2Detail, sizeof(m2Detail), "live: LOCKED Zone #%d (delay %.1fs)", Module2_GetLockedBombsiteIndex(), Module2_GetCurrentPlantDelay());
-        }
-        else
-        {
-            Format(m2Detail, sizeof(m2Detail), "live: NATIVE GetClosestZone (delay %.1fs)", Module2_GetCurrentPlantDelay());
-        }
-    }
-    else if (Module2_IsBombsiteLocked())
-    {
-        Format(m2Detail, sizeof(m2Detail), "live: LOCKED Zone #%d (clock disabled)", Module2_GetLockedBombsiteIndex());
+        ReplyToCommand(client, "[BotRouteFix] [Live] Bomb: PLANTED");
     }
     else
     {
-        strcopy(m2Detail, sizeof(m2Detail), "clock disabled");
-    }
-    PrintModuleLine(client, 2, "T Plant Clock & Site Lock", m2Detail);
-
-    Format(detail, sizeof(detail), "live: %d areas tracked", Module3_GetTotalNavAreaCount());
-    PrintModuleLine(client, 3, "NavArea Danger Soft-Decay", detail);
-
-    // M4 detail 按实际武装的事项生成：HuntState 失败时不再展示累计认领数，避免“失败事项还在产出数据”的假象。
-    char m4Detail[128];
-    m4Detail[0] = '\0';
-    if (Item_IsArmed(ITEM_M4_NOP))
-    {
-        StrCat(m4Detail, sizeof(m4Detail), "random-overwrite NOP");
-    }
-    if (Item_IsArmed(ITEM_M4_HUNT))
-    {
-        if (m4Detail[0] != '\0')
+        int bombCarrier = GetC4Carrier();
+        if (IsValidClient(bombCarrier, true))
         {
-            StrCat(m4Detail, sizeof(m4Detail), ", ");
-        }
-        StrCat(m4Detail, sizeof(m4Detail), "HuntState writes");
-
-        char m4Claims[48];
-        Format(m4Claims, sizeof(m4Claims), " | total: %d claims", Module4_GetTotalHuntClaims());
-        StrCat(m4Detail, sizeof(m4Detail), m4Claims);
-    }
-    PrintModuleLine(client, 4, "Hunt Target Claim & 45s Bypass", m4Detail);
-
-    // M5 detail 按实际武装的事项生成：只展示已武装事项的计数器，避免失败事项的数据残留。
-    char m5Detail[128];
-    m5Detail[0] = '\0';
-    if (Item_IsArmed(ITEM_M5_RELOAD))
-    {
-        StrCat(m5Detail, sizeof(m5Detail), "reload-hide NOP");
-    }
-    if (Item_IsArmed(ITEM_M5_DODGE))
-    {
-        if (m5Detail[0] != '\0')
-        {
-            StrCat(m5Detail, sizeof(m5Detail), ", ");
-        }
-        char m5Dodge[48];
-        Format(m5Dodge, sizeof(m5Dodge), "dodge writes (total %d forced)", Module5_GetTotalDodgeForced());
-        StrCat(m5Detail, sizeof(m5Detail), m5Dodge);
-    }
-    if (Item_IsArmed(ITEM_M5_RETREAT))
-    {
-        if (m5Detail[0] != '\0')
-        {
-            StrCat(m5Detail, sizeof(m5Detail), ", ");
-        }
-        char m5Retreat[48];
-        Format(m5Retreat, sizeof(m5Retreat), "retreat (total %d triggered)", Module5_GetTotalRetreatTriggered());
-        StrCat(m5Detail, sizeof(m5Detail), m5Retreat);
-    }
-    PrintModuleLine(client, 5, "Combat Dodge / Reload Hide / Retreat", m5Detail);
-
-    Format(detail, sizeof(detail), "total: %d blocked, %d allowed", Module6_GetTotalNoiseIntercepted(), Module6_GetTotalNoiseAllowed());
-    PrintModuleLine(client, 6, "T Morale Disposition & Noise Gate", detail);
-
-    int carrier = Module7_GetCarrier();
-    if (IsValidClient(carrier, true))
-    {
-        Format(detail, sizeof(detail), "live: %d/%d guards, carrier %N",
-            Module7_GetBodyguardCount(), Module7_GetTargetCount(), carrier);
-    }
-    else
-    {
-        Format(detail, sizeof(detail), "live: %d/%d guards, no carrier",
-            Module7_GetBodyguardCount(), Module7_GetTargetCount());
-    }
-    PrintModuleLine(client, 7, "Carrier Escort Roster", detail);
-
-    Format(detail, sizeof(detail), "total: %d shattered, %d deadlock hunts", Module8_GetTotalQueueShattered(), Module8_GetTotalDeadlockHunt());
-    PrintModuleLine(client, 8, "Polite Queue Breaker", detail);
-
-    Format(detail, sizeof(detail), "live: %d/%d roster | total: %d elected, %d gated",
-        Module9_GetRosterCount(), Module9_GetRosterSize(), Module9_GetTotalElections(), Module9_GetTotalGated());
-    PrintModuleLine(client, 9, "T Loose-Bomb Fetch Roster", detail);
-
-    float dummyPos[3];
-    int chief = Module10_GetChiefDefuser(dummyPos);
-    if (chief != -1)
-    {
-        Format(detail, sizeof(detail), "live: chief %N | total: %d elected, %d gated", chief, Module10_GetTotalChiefs(), Module10_GetTotalGated());
-    }
-    else
-    {
-        Format(detail, sizeof(detail), "live: none | total: %d elected, %d gated", Module10_GetTotalChiefs(), Module10_GetTotalGated());
-    }
-    PrintModuleLine(client, 10, "CT Chief Defuser", detail);
-
-    Format(detail, sizeof(detail), "total: %d requests", Module11_GetTotalSniperRequests());
-    PrintModuleLine(client, 11, "Sniper Corridor Deterrence", detail);
-
-    Format(detail, sizeof(detail), "total: %d redirected", Module12_GetTotalCampRedirected());
-    PrintModuleLine(client, 12, "Sniper Camp Gate", detail);
-
-    PrintModuleLine(client, 13, "Sniper Buy Chance", "formula 50-10*M, dynamic rifle dice");
-    PrintModuleLine(client, 14, "Defend Rush Chance", "formula 40-10*M, 4 lea sites patched");
-
-    Format(detail, sizeof(detail), "total: %d rescaled, %d short", Module15_GetTotalHideRescaled(), Module15_GetTotalShortHides());
-    PrintModuleLine(client, 15, "Hide Duration x(1-0.15*M)", detail);
-
-    ReplyToCommand(client, "[BotRouteFix] ------------------------------------------------------------");
-
-    if (bDebug)
-    {
-        char m2PlantDelay[48];
-        m2PlantDelay[0] = '\0';
-        if (Item_IsArmed(ITEM_M2_CLOCK))
-        {
-            Format(m2PlantDelay, sizeof(m2PlantDelay), " | Plant delay %.1fs", Module2_GetCurrentPlantDelay());
-        }
-
-        // M7 名册是事项数据：武装时读名册缓存，未武装时读全局持包状态并标记 escort 不可用，
-        // 避免展示 M7 停运后的 stale 名册。
-        char m7Escorts[48];
-        int liveCarrier;
-        if (Item_IsArmed(ITEM_M7_ESCORT))
-        {
-            liveCarrier = Module7_GetCarrier();
-            Format(m7Escorts, sizeof(m7Escorts), "%d/%d",
-                Module7_GetBodyguardCount(), Module7_GetTargetCount());
-        }
-        else
-        {
-            liveCarrier = GetC4Carrier();
-            strcopy(m7Escorts, sizeof(m7Escorts), "--/-- (escort disabled)");
-        }
-
-        if (IsValidClient(liveCarrier, true))
-        {
-            char liveMoraleStr[16];
-            int liveMorale = GetEffectiveCarrierMorale(liveCarrier);
-            GetMoraleName(liveMorale, liveMoraleStr, sizeof(liveMoraleStr));
-
-            if (IsHumanPlayer(liveCarrier))
+            if (IsBot(bombCarrier, false))
             {
-                ReplyToCommand(client, "[BotRouteFix] [Live] T Carrier: %N (Human, Team Morale: %d %s) | Escorts %s%s",
-                    liveCarrier, liveMorale, liveMoraleStr, m7Escorts, m2PlantDelay);
+                int carrierMorale = GetBotMorale(bombCarrier);
+                char carrierMoraleName[16];
+                GetMoraleName(carrierMorale, carrierMoraleName, sizeof(carrierMoraleName));
+                ReplyToCommand(client, "[BotRouteFix] [Live] Bomb: CARRIED by %N (Morale: %s%d %s)",
+                    bombCarrier, (carrierMorale >= 0) ? "+" : "", carrierMorale, carrierMoraleName);
             }
             else
             {
-                ReplyToCommand(client, "[BotRouteFix] [Live] T Carrier: %N (Morale: %d %s) | Escorts %s%s",
-                    liveCarrier, liveMorale, liveMoraleStr, m7Escorts, m2PlantDelay);
+                int teamMorale = GetEffectiveCarrierMorale(bombCarrier);
+                char teamMoraleName[16];
+                GetMoraleName(teamMorale, teamMoraleName, sizeof(teamMoraleName));
+                ReplyToCommand(client, "[BotRouteFix] [Live] Bomb: CARRIED by %N (Human, Team Morale: %s%d %s)",
+                    bombCarrier, (teamMorale >= 0) ? "+" : "", teamMorale, teamMoraleName);
             }
         }
         else
         {
-            ReplyToCommand(client, "[BotRouteFix] [Live] T Carrier: -- (no active carrier)");
+            ReplyToCommand(client, "[BotRouteFix] [Live] Bomb: DROPPED");
+        }
+    }
+
+    // 后半士气两行：第一行 AVG 只统计存活；第二行 per-bot 名单不筛存活
+    // （阵亡者冻结值也列入，名单长度可能大于 alive 数，属预期口径差）。
+    // 强依赖 CCSBot_Morale_Offset：丢失时两行合并为一行 unavailable，不输出假数据。
+    if (g_iOffset_Morale > 0)
+    {
+        int tAlive = 0, ctAlive = 0;
+        for (int i = 1; i <= MaxClients; i++)
+        {
+            if (IsTeamBot(i, 2, true))
+            {
+                tAlive++;
+            }
+            else if (IsTeamBot(i, 3, true))
+            {
+                ctAlive++;
+            }
         }
 
-        int tMorale  = GetTeamAverageBotMorale(2);
-        int ctMorale = GetTeamAverageBotMorale(3);
-
-        char m1GuardChance[32];
-        if (Item_IsArmed(ITEM_M1_GUARD))
+        char tAvgStr[16], ctAvgStr[16];
+        if (tAlive > 0)
         {
-            Format(m1GuardChance, sizeof(m1GuardChance), "%.0f%%", Module1_CalculateGuardBombsiteChance(ctMorale));
+            int tAvg = GetTeamAverageBotMorale(2);
+            char tAvgName[16];
+            GetMoraleName(tAvg, tAvgName, sizeof(tAvgName));
+            Format(tAvgStr, sizeof(tAvgStr), "%s%d %s", (tAvg >= 0) ? "+" : "", tAvg, tAvgName);
         }
         else
         {
-            strcopy(m1GuardChance, sizeof(m1GuardChance), "disabled");
+            strcopy(tAvgStr, sizeof(tAvgStr), "--");
         }
-
-        char m13BuyChance[48];
-        if (Item_IsArmed(ITEM_M13_BUY))
+        if (ctAlive > 0)
         {
-            Format(m13BuyChance, sizeof(m13BuyChance), "T %.0f%% / CT %.0f%%",
-                Module13_CalculateSniperBuyChance(tMorale), Module13_CalculateSniperBuyChance(ctMorale));
+            int ctAvg = GetTeamAverageBotMorale(3);
+            char ctAvgName[16];
+            GetMoraleName(ctAvg, ctAvgName, sizeof(ctAvgName));
+            Format(ctAvgStr, sizeof(ctAvgStr), "%s%d %s", (ctAvg >= 0) ? "+" : "", ctAvg, ctAvgName);
         }
         else
         {
-            strcopy(m13BuyChance, sizeof(m13BuyChance), "disabled");
+            strcopy(ctAvgStr, sizeof(ctAvgStr), "--");
         }
+        ReplyToCommand(client, "[BotRouteFix] [Live] T %d bots alive (AVG Morale: %s) | CT %d bots alive (AVG Morale: %s)",
+            tAlive, tAvgStr, ctAlive, ctAvgStr);
 
-        char m14RushChance[48];
-        if (Item_IsArmed(ITEM_M14_DEFEND))
+        char tMoraleList[384], ctMoraleList[384];
+        tMoraleList[0] = '\0';
+        ctMoraleList[0] = '\0';
+        for (int j = 1; j <= MaxClients; j++)
         {
-            Format(m14RushChance, sizeof(m14RushChance), "T %.0f%% / CT %.0f%%",
-                Module14_CalculateDefendRushChance(tMorale), Module14_CalculateDefendRushChance(ctMorale));
+            char tmp[16];
+            Format(tmp, sizeof(tmp), "%s%d", (GetBotMorale(j) >= 0) ? "+" : "", GetBotMorale(j));
+            if (IsTeamBot(j, 2, false))
+            {
+                if (tMoraleList[0] != '\0')
+                {
+                    StrCat(tMoraleList, sizeof(tMoraleList), ", ");
+                }
+                StrCat(tMoraleList, sizeof(tMoraleList), tmp);
+            }
+            else if (IsTeamBot(j, 3, false))
+            {
+                if (ctMoraleList[0] != '\0')
+                {
+                    StrCat(ctMoraleList, sizeof(ctMoraleList), ", ");
+                }
+                StrCat(ctMoraleList, sizeof(ctMoraleList), tmp);
+            }
+        }
+        ReplyToCommand(client, "[BotRouteFix] [Live] T Morale: [%s] | CT Morale: [%s]", tMoraleList, ctMoraleList);
+    }
+    else
+    {
+        ReplyToCommand(client, "[BotRouteFix] [Live] Morale: unavailable (CCSBot_Morale_Offset missing)");
+    }
+
+    char live[160];
+
+    // M01 名单归属 GUARD 事项（M01 双事项，但只有 GUARD 有 live）。
+    if (ModuleHasLive(1) && Item_IsArmed(ITEM_M1_GUARD))
+    {
+        PrintChanceRoster(client, 1, "Guard", true);
+    }
+
+    // M02：包点锁 + 当前运包延迟（CLOCK 未武装但锁仍在时标注；per-bot 士气值不进 live）。
+    // 约束：locked 蕴含 LOCK 已武装（锁状态只由锁补丁置位）。
+    if (ModuleHasLive(2))
+    {
+        if (Item_IsArmed(ITEM_M2_CLOCK))
+        {
+            if (Module2_IsBombsiteLocked())
+            {
+                Format(live, sizeof(live), "LOCKED Zone #%d | delay %.1fs",
+                    Module2_GetLockedBombsiteIndex(), Module2_GetCurrentPlantDelay());
+            }
+            else
+            {
+                Format(live, sizeof(live), "NATIVE GetClosestZone | delay %.1fs",
+                    Module2_GetCurrentPlantDelay());
+            }
+        }
+        else if (Module2_IsBombsiteLocked())
+        {
+            Format(live, sizeof(live), "LOCKED Zone #%d (clock disabled)",
+                Module2_GetLockedBombsiteIndex());
         }
         else
         {
-            strcopy(m14RushChance, sizeof(m14RushChance), "disabled");
+            Format(live, sizeof(live), "NATIVE GetClosestZone (clock disabled)");
         }
+        ReplyToCommand(client, "[BotRouteFix] [Live] M02 | %s", live);
+    }
 
-        ReplyToCommand(client, "[BotRouteFix] [Live] Bomb: %s | Morale AVG T %d / CT %d",
-            g_bBombPlanted ? "PLANTED" : "NOT PLANTED", tMorale, ctMorale);
-        ReplyToCommand(client, "[BotRouteFix] [Live] Dice @ AVG morale - CT Guard: %s | SniperBuy: %s | DefendRush: %s",
-            m1GuardChance, m13BuyChance, m14RushChance);
+    if (ModuleHasLive(3))
+    {
+        Format(live, sizeof(live), "%d areas tracked", Module3_GetTotalNavAreaCount());
+        ReplyToCommand(client, "[BotRouteFix] [Live] M03 | %s", live);
+    }
+
+    // M04 认领数归属 HUNT 事项（M04 双事项，但只有 HUNT 有 live）。
+    if (ModuleHasLive(4) && Item_IsArmed(ITEM_M4_HUNT))
+    {
+        Format(live, sizeof(live), "total %d claims", Module4_GetTotalHuntClaims());
+        ReplyToCommand(client, "[BotRouteFix] [Live] M04 | %s", live);
+    }
+
+    // M05：只列已武装事项的计数器（reload-hide 事项无计数器；无可列时不出行）。
+    if (ModuleHasLive(5))
+    {
+        live[0] = '\0';
+        if (Item_IsArmed(ITEM_M5_DODGE))
+        {
+            Format(live, sizeof(live), "dodge total %d forced", Module5_GetTotalDodgeForced());
+        }
+        if (Item_IsArmed(ITEM_M5_RETREAT))
+        {
+            if (live[0] != '\0')
+            {
+                StrCat(live, sizeof(live), " | ");
+            }
+            char m5LiveTmp[64];
+            Format(m5LiveTmp, sizeof(m5LiveTmp), "retreat total %d triggered", Module5_GetTotalRetreatTriggered());
+            StrCat(live, sizeof(live), m5LiveTmp);
+        }
+        if (live[0] != '\0')
+        {
+            ReplyToCommand(client, "[BotRouteFix] [Live] M05 | %s", live);
+        }
+    }
+
+    // M06：只放聚合计数器，per-bot 处置/梯度是逐行日志的事，不进 live。
+    if (ModuleHasLive(6))
+    {
+        Format(live, sizeof(live), "total %d blocked, %d allowed",
+            Module6_GetTotalNoiseIntercepted(), Module6_GetTotalNoiseAllowed());
+        ReplyToCommand(client, "[BotRouteFix] [Live] M06 | %s", live);
+    }
+
+    // M07：当前名册快照（持包人 + 保镖数）。单事项模块，ModuleHasLive 已足够；
+    // 护送事项坏了即模块 FAILED，本来就不出行。
+    if (ModuleHasLive(7))
+    {
+        int carrier = Module7_GetCarrier();
+        if (IsValidClient(carrier, true))
+        {
+            Format(live, sizeof(live), "%d/%d guards, carrier %N",
+                Module7_GetBodyguardCount(), Module7_GetTargetCount(), carrier);
+        }
+        else
+        {
+            Format(live, sizeof(live), "%d/%d guards, no carrier",
+                Module7_GetBodyguardCount(), Module7_GetTargetCount());
+        }
+        ReplyToCommand(client, "[BotRouteFix] [Live] M07 | %s", live);
+    }
+
+    // M08：双事项，只列已武装事项的计数器（M05 同款拼法，无特例）。
+    if (ModuleHasLive(8))
+    {
+        live[0] = '\0';
+        if (Item_IsArmed(ITEM_M8_QUEUE))
+        {
+            Format(live, sizeof(live), "total %d shattered", Module8_GetTotalQueueShattered());
+        }
+        if (Item_IsArmed(ITEM_M8_DEADLOCK))
+        {
+            if (live[0] != '\0')
+            {
+                StrCat(live, sizeof(live), " | ");
+            }
+            char m8LiveTmp[64];
+            Format(m8LiveTmp, sizeof(m8LiveTmp), "total %d deadlock hunts", Module8_GetTotalDeadlockHunt());
+            StrCat(live, sizeof(live), m8LiveTmp);
+        }
+        if (live[0] != '\0')
+        {
+            ReplyToCommand(client, "[BotRouteFix] [Live] M08 | %s", live);
+        }
+    }
+
+    if (ModuleHasLive(9))
+    {
+        Format(live, sizeof(live), "%d/%d roster | total %d elected, %d gated",
+            Module9_GetRosterCount(), Module9_GetRosterSize(),
+            Module9_GetTotalElections(), Module9_GetTotalGated());
+        ReplyToCommand(client, "[BotRouteFix] [Live] M09 | %s", live);
+    }
+
+    if (ModuleHasLive(10))
+    {
+        float dummyPos[3];
+        int chief = Module10_GetChiefDefuser(dummyPos);
+        if (chief != -1)
+        {
+            Format(live, sizeof(live), "chief %N | total %d elected, %d gated",
+                chief, Module10_GetTotalChiefs(), Module10_GetTotalGated());
+        }
+        else
+        {
+            Format(live, sizeof(live), "none | total %d elected, %d gated",
+                Module10_GetTotalChiefs(), Module10_GetTotalGated());
+        }
+        ReplyToCommand(client, "[BotRouteFix] [Live] M10 | %s", live);
+    }
+
+    if (ModuleHasLive(11))
+    {
+        Format(live, sizeof(live), "total %d requests", Module11_GetTotalSniperRequests());
+        ReplyToCommand(client, "[BotRouteFix] [Live] M11 | %s", live);
+    }
+
+    // M12：重定向计数器 + 两队逐 bot 留守理论骰子（per-bot 重骰本身是逐行日志的事）。
+    if (ModuleHasLive(12))
+    {
+        Format(live, sizeof(live), "total %d redirected", Module12_GetTotalCampRedirected());
+        ReplyToCommand(client, "[BotRouteFix] [Live] M12 | %s", live);
+    }
+    if (ModuleHasLive(12))
+    {
+        PrintChanceRoster(client, 12, "Camp", false);
+    }
+
+    // M13：两队逐 bot 买狙理论骰子（引擎内掷骰，名单是整队分布快照）。
+    if (ModuleHasLive(13))
+    {
+        PrintChanceRoster(client, 13, "Buy", false);
+    }
+
+    // M14：两队逐 bot 前沿理论骰子（引擎内掷骰，名单是整队分布快照）。
+    if (ModuleHasLive(14))
+    {
+        PrintChanceRoster(client, 14, "Rush", false);
+    }
+
+    // M15：只放聚合计数器；per-bot 时长缩放是逐行日志的事，不进 live。
+    if (ModuleHasLive(15))
+    {
+        Format(live, sizeof(live), "total %d rescaled, %d short",
+            Module15_GetTotalHideRescaled(), Module15_GetTotalShortHides());
+        ReplyToCommand(client, "[BotRouteFix] [Live] M15 | %s", live);
     }
 
     ReplyToCommand(client, "[BotRouteFix] ============================================================");

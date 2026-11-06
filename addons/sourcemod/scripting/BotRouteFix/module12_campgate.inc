@@ -431,7 +431,7 @@ int Module12_GetTotalCampRedirected()
  * @param morale        Bot 士气数值 (-3 ~ +3)
  * @return              留守概率 (0.0 ~ 100.0)
  */
-static float CalculateCampChance(int morale)
+float Module12_CalculateCampChance(int morale)
 {
     float chance = CAMP_CHANCE_BASE - CAMP_CHANCE_STEP * float(morale);
     if (chance > CAMP_CHANCE_MAX)
@@ -481,7 +481,7 @@ bool Module12_CampGate(int client)
     }
 
     int morale = GetBotMorale(client);
-    float chance = CalculateCampChance(morale);
+    float chance = Module12_CalculateCampChance(morale);
     if (GetRandomFloat(0.0, 100.0) < chance)
     {
         return false; // 留守：Hide 照常进行

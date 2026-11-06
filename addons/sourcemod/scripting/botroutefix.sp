@@ -87,7 +87,7 @@ public void OnPluginStart()
     //    总开关 sm_botroutefix_enable 已彻底移除：模块启停统一走各模块 EnableModuleX() 业务态，
     //    避免一刀切拦截事件总线与对局炸弹状态。
     CreateConVar("sm_botroutefix_version", PLUGIN_VERSION, "BotRouteFix plugin version", FCVAR_NOTIFY | FCVAR_DONTRECORD);
-    g_cvDebug  = CreateConVar("sm_botroutefix_debug",  "0", "Enable or disable verbose debug telemetry output", FCVAR_NONE, true, 0.0, true, 1.0);
+    g_cvDebug  = CreateConVar("sm_botroutefix_debug",  "0", "Enable or disable per-module verbose debug logging and debug visuals", FCVAR_NONE, true, 0.0, true, 1.0);
 
     // 2. Load Gamedata and detect architecture
     g_hGameConf = LoadGameConfigFile(GAMEDATA);
