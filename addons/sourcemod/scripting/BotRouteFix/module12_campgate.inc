@@ -101,6 +101,12 @@ static bool PrepModule12_CampBackend()
         return false;
     }
 
+    if (g_iOffset_Morale <= 0)
+    {
+        LogError("[BotRouteFix] [Module 12] Morale offset missing; camp item FAILED.");
+        return false;
+    }
+
     // Task/Disposition 由 OnPluginStart 统一解析，此处只做门禁
     if (g_iOffset_Task <= 0 || g_iOffset_Disposition <= 0)
     {

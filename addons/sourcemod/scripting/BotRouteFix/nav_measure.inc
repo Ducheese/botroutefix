@@ -16,6 +16,15 @@
 //
 // 不是 SDKCall 包裹，是独立测量子系统（借用 ComputePath 句柄做实测引擎）。
 // 软加载：偏移缺失只记日志，测距整体待机，不杀插件。
+//
+// 本文件的第二职责：导航/计时器级共享偏移的唯一家（InitNavMeasure 一次解析，
+// 事项 Prep 只做 > 0 门禁，不再各自私下 GameConfGetOffset）：
+//   g_iOffset_TimerDuration / g_iOffset_TimerTimestamp → M5 后撤计时器、M8 排队 polite 计时器
+//   g_iOffset_Danger / g_iOffset_DangerTimestamp       → M3 软衰减、M8 排队钉刺、M11 走廊钉刺
+//   g_iPtrSize                                         → M3 容器解析、M8 排队（缺失回退 g_bIsWin64 ? 8 : 4）
+//   g_iOffset_Task 由 global.inc 提供（OnPluginStart 解析），此处只用不存。
+// 待定：M8 的 Path/PathLength/PathStride/PathLadder/IsStopping 与本文件同 key 私有并存
+// （变量名不同：g_iOffset_* vs g_iNav_*），收敛与否等拍板后再动。
 //========================================================================================
 
 #define NAV_MEASURE_MAX_PATH_NODES  256     // 与 cs_bot.h 的 MAX_PATH_LENGTH 对齐
@@ -24,13 +33,11 @@
 static Address g_NavProbeAreas[NAV_MEASURE_MAX_PATH_NODES];
 static int g_iNavProbeCount = 0;
 
-// 无损测距偏移组（导航/计时器级共享：M3/M5/M8/M11 的同名私有拷贝已删除，统一由 InitNavMeasure 一次解析，事项 Prep 只做 > 0 门禁）
-// g_iOffset_Task 由 global.inc 提供（OnPluginStart 解析），此处不再另存
-int g_iOffset_TimerDuration  = -1;
-int g_iOffset_TimerTimestamp = -1;
-int g_iOffset_Danger         = -1;
-int g_iOffset_DangerTimestamp = -1;
-int g_iPtrSize               = 4;
+//========================================================================================
+// OFFSET GROUPS（命名公约：g_iNav_* = 本文件测距私用；g_iOffset_* = 跨模块共享）
+//========================================================================================
+
+// A 组：测距本体私用（快照/还原路径状态；只在本文件读写）
 static int g_iNav_Path         = -1;
 static int g_iNav_PathStride   = -1;
 static int g_iNav_PathLength   = -1;
@@ -39,8 +46,15 @@ static int g_iNav_IsStopping   = -1;
 static int g_iNav_ConnectPos   = -1;
 static bool g_bNavMeasureReady = false;
 
+// B 组：跨模块共享（非 static；解析点唯一在 InitNavMeasure，事项 Prep 只做 > 0 门禁）
+int g_iOffset_TimerDuration   = -1;
+int g_iOffset_TimerTimestamp  = -1;
+int g_iOffset_Danger          = -1;
+int g_iOffset_DangerTimestamp = -1;
+int g_iPtrSize                = 4;
+
 /**
- * 加载无损测距所需偏移（软加载：缺失只记日志，测距整体待机）
+ * 加载无损测距所需偏移 + 一次解析跨模块共享偏移（软加载：缺失只记日志，测距整体待机）
  */
 bool InitNavMeasure()
 {
@@ -49,14 +63,15 @@ bool InitNavMeasure()
         return false;
     }
 
+    // A 组：测距本体（进待机门，缺一不可）
     g_iNav_Path       = GameConfGetOffset(g_hGameConf, "CCSBot_Path_Offset");
     g_iNav_PathStride = GameConfGetOffset(g_hGameConf, "CCSBot_PathStride");
     g_iNav_PathLength = GameConfGetOffset(g_hGameConf, "CCSBot_PathLength_Offset");
     g_iNav_PathLadder = GameConfGetOffset(g_hGameConf, "CCSBot_PathLadder_Offset");
     g_iNav_IsStopping = GameConfGetOffset(g_hGameConf, "CCSBot_IsStopping_Offset");
     g_iNav_ConnectPos = GameConfGetOffset(g_hGameConf, "ConnectInfo_Vector_Offset");
-    // 以下五组为跨模块共享：Timer/Danger/PtrSize 由此一次解析（原 M3/M5/M8/M11 私有拷贝已删）；
-    // Danger 只解析不进待机门（测距本体用不到它，缺失由各事项 Prep 自查）。
+
+    // B 组：跨模块共享（只解析；Danger 不进待机门——测距本体用不到它，缺失由各事项 Prep 自查）
     g_iOffset_TimerDuration   = GameConfGetOffset(g_hGameConf, "CountdownTimer_Duration_Offset");
     g_iOffset_TimerTimestamp  = GameConfGetOffset(g_hGameConf, "CountdownTimer_Timestamp_Offset");
     g_iOffset_Danger          = GameConfGetOffset(g_hGameConf, "NavArea_Danger_Offset");
@@ -87,6 +102,10 @@ stock bool BotNavReady()
 {
     return g_bNavMeasureReady;
 }
+
+//========================================================================================
+// PROBE CORE（内部实现；外部统一走下面的 PUBLIC API，不得直调）
+//========================================================================================
 
 /**
  * 路径探测核心：备份关键导航状态 → 解 repath 节流 → ComputePath 实测 → 读取路径 NavArea → 还原
@@ -254,6 +273,10 @@ static int NavMeasure_ProbePath(int client, const float target[3], int maxAreas,
     distance = totalDist;
     return writtenAreas;
 }
+
+//========================================================================================
+// PUBLIC API（跨模块调用点：BotNavReady 门禁 + 测距/走廊探测 + 采集读取）
+//========================================================================================
 
 /**
  * 真实地面行走距离（旧版 GetNavMeshWalkDistance 原样移植）

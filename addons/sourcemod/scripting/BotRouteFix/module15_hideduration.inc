@@ -93,6 +93,12 @@ static bool PrepModule15_HideBackend()
         return false;
     }
 
+    if (g_iOffset_Morale <= 0)
+    {
+        LogError("[BotRouteFix] [Module 15] Morale offset missing; hide duration item FAILED.");
+        return false;
+    }
+
     g_iOffset_HideDuration = GameConfGetOffset(g_hGameConf, "HideState_Duration_Offset");
     if (g_iOffset_HideDuration <= 0)
     {
