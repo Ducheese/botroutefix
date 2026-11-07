@@ -133,6 +133,7 @@
 - **Pre 门控 + 事件花名册 (Pre Gate & Event Roster)**：
   - 本模块 Pre 钩上述查询函数：CT 一律回 false 实施纵深防御兜底（视力 `CanSeeLooseBomb` 与捡包听觉不受影响）；T 非名册成员直接回 false 并计入拦截（遥测 `gated`）；运行时无候选（全员不可达/无人存活）则放行，这是运行时无对象，不是后端 fail-open。
   - 掉包事件递延一帧（等 C4 归属落定，当场查恒为"人手里"）后，以无主 `weapon_c4` 坐标为圆心、无损实测（`BotNavWalkDistance`：备份移动状态→解 repath 节流→`ComputePath` 实测→逐段累加→全量还原，调用方零副作用）真实地面行走距离取最近 3 存活 T，不可达跳过；测距未就绪时 M9 事项 FAILED，钩子不挂载，行为回原生。成员阵亡/掉线按掉包点真实距离回补，全灭则解散回原生（防"包烂地上没人捡"死锁）；有人捡包/回合开始/换图即清。
+  - **蹲守者解蹲 (Camp Unstick)**：当选/回补时 task==19（`MOVE_TO_SNIPER_SPOT`，蹲守承诺态）的强制 `Hunt()` 一次——蹲坑 Hide 里到不了 `NoticeLooseBomb`（Idle 的 loose 检查排在狙击手守点/架枪掷骰之后，M12 再把 task-19 的 Hide 留守），不踢名册就是摆设；Hunt 落 `SEEK_AND_DESTROY`，M12 不认，交接干净。`Hunt` SDKCall 缺失则跳过（名册照转被动门禁）。残血等其他 task 的长蹲 task 看不出来（Hide 不改 task），靠 Hide 到期自愈， observed 了再补 M15 蹲守时长表。
 
 ### 模块 10：CT 首席拆包员 (Chief Defuser)
 - **原生全员撞包 (Swarm on Planted Bomb)**：
@@ -178,6 +179,7 @@
     - 士气 0（均势）：60% 留守蹲点
     - 士气 +3（大胜）：30% 留守蹲点（其余 70% 判定为前压）
   - 若掷骰未中决定前压，模块 12 返回 `true`，触发模块 15 短路跳过蹲守时长缩放。
+  - **名册优先（与 M9 两手抓）**：task-19 的 Hide 若命中 M9 抢包名册，跳过士气重骰直接递延 Hunt——M9 选举时的强制 Hunt 是一次性的，Idle 狙击手露营掷骰随时能把人再拐回 task-19，这边不拒收就前功尽弃；M9 无名册时本条零行为变化。
 - **递延一帧切状态 (Safe Deferred State Transition)**：
   - 若重骰判定不留守，利用 `RequestFrame` 递延至下一帧调用底层 `CCSBot::Hunt()`，并强制将作战姿态重写为 `ENGAGE_AND_INVESTIGATE`。
   - 彻底规避 Source 引擎状态机在 `OnEnter` 内同步切状态被外层覆盖的经典缺陷，完美实现高士气狙击手带头前冲搜敌。

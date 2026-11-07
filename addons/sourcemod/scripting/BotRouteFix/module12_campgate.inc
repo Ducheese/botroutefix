@@ -50,6 +50,9 @@
 //   - 唯一事项 = camp 门禁（ITEM_M12_CAMP）；六处骰子旁路是该事项的后端链，全成或全败。
 //   - 事实上的 Hook 宿主归 M15；本模块借用其 OnEnter Post，不单独注册 Detour。
 //   - 本模块不写代码段以外的对局状态；重定向计数只在事项武装时累加。
+//   - 名册优先（与 M9 两手抓）：task 19 的 Hide 若命中 M9 抢包名册，跳过士气重骰，
+//     直接走递延 Hunt 通道——M9 那一脚是一次性的，Idle 狙击手露营掷骰随时能把人
+//     再拐回 task 19，这边不拒收就前功尽弃；M9 无名册时本条零行为变化。
 //========================================================================================
 
 //========================================================================================
@@ -498,6 +501,16 @@ bool Module12_CampGate(int client)
     if (task != BOT_TASK_MOVE_TO_SNIPER_SPOT)
     {
         return false;
+    }
+
+    // 名册优先（两手抓的第二手）：M9 抢包名册里的人正在捡包（或正被 M9 解蹲），
+    // 绝不能留守——走与骰子未过相同的递延 Hunt 通道。M9 无名册时 IsInRoster 恒 false，
+    // 本分支零行为变化，不需要在 Prep 里加耦合。
+    if (Module9_IsInRoster(client))
+    {
+        RequestFrame(Module12_FrameHunt, GetClientUserId(client));
+        DebugLog("[BotRouteFix] [Module 12] Bot %N in M9 fetch roster, camp bypassed, Hunt deferred", client);
+        return true;
     }
 
     int morale = GetBotMorale(client);
