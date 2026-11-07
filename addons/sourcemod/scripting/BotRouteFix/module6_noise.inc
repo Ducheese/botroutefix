@@ -1,37 +1,29 @@
-#if defined _botroutefix_module6_tmorale_included
+#if defined _botroutefix_module6_noise_included
     #endinput
 #endif
-#define _botroutefix_module6_tmorale_included
+#define _botroutefix_module6_noise_included
 
 //========================================================================================
-// [模块 6] T 阵营士气接战策略与守包听觉出击梯度 (TMorale Disposition & Audio Interception)
+// [模块 6] 噪声出击统一梯度 (Noise Interception Gradient)
 //
 // 业务背景与引擎逆向分析：
 //
-// 1. 下包前 T 包匪行为 (Pre-Plant C4 Carrier Morale Disposition):
-//    - 机制分析: 原生引擎在分路推进时，任何战区（如中路）一声枪响（2000码广播）都会使全图
-//               Bot 有 30%~60% 概率触发 InvestigateNoise 调头去凑热闹，导致包匪放弃下包。
-//    - 补丁方案: 依赖事件（round_freeze_end 开局与 item_pickup 捡包）单次赋值:
-//        * 低士气 (Morale <= -1): 设为 OPPORTUNITY_FIRE (1)，底层 HeardInterestingNoise()
-//          对声音直接免疫，心无旁骛直奔包点下包；
-//        * 高士气 (Morale >= 0): 保持原生 ENGAGE_AND_INVESTIGATE (0)。
+// 原生引擎在远端枪响（2000码广播）时，Bot 有 30%~60% 概率触发 InvestigateNoise
+// 调头去凑热闹；而 Defuse/Plant/Move 等关键任务在 C++ 源码里根本不调
+// InvestigateNoise，进钩子的只有巡逻推进（HuntState）与掩体架枪（HideState）
+// 两类 Bot。因此钩子内部不需要任务黑白名单、不需要阵营门禁、不需要下包状态门禁：
+// 进来的 Bot 一律按实时士气走同一套梯度（下包前/后、T/CT 全员一致）。
 //
-// 2. 下包后 T 全队守点梯度 (Post-Plant T Defense Morale Gradient):
-//    - 机制分析: C4 已经安放，低士气 T 应当誓死卡在掩体内守包，而不是被远端枪声勾引出掩体白给。
-//    - 补丁方案: 下包瞬间 (bomb_planted):
-//        * 低士气 (Morale <= -1): 设为 OPPORTUNITY_FIRE (1)，清空噪声时间戳，HideState
-//          底层自动阻断出击，全员死守掩体架枪；
-//        * 高士气 (Morale >= 0): 保持 ENGAGE_AND_INVESTIGATE (0)。
-//
-// 3. 守包出击拦截 (DHook Pre on CCSBot::InvestigateNoise):
-//    - 针对任务: 仅针对守包掩体任务 (Task 4: GUARD_TICKING_BOMB)，逃跑 (Task 9) 与搜敌 (Task 0) 自然放行。
-//    - 梯度约束: 针对保持 ENGAGE 的非负士气 T (Morale >= 0)，按士气阶梯约束最大可调查声音距离:
+// 统一契约：
+//    - 负士气 (Morale <= -1)：直接拦截（等效强制 OPPO），一律不调查；
+//    - 非负士气 (Morale >= 0)：按士气阶梯约束最大可调查声音距离：
 //        Morale  0 -> maxNoiseDist =  500.0 码
 //        Morale +1 -> maxNoiseDist = 1000.0 码
 //        Morale +2 -> maxNoiseDist = 2000.0 码
-//        Morale +3 -> maxNoiseDist = 3000.0 码
-//    - 超距或概率判定 (1.0 - dist / maxNoiseDist) 未命中时，清空噪声时间戳并直接 MRES_Supercede
-//      拦截状态切换，强制 Bot 保持掩体架枪，阻断战火黑洞效应。
+//        Morale +3及以上 -> maxNoiseDist = 3000.0 码
+//    - 超距或线性距离概率 (1.0 - dist / maxNoiseDist) 未命中时，清空噪声时间戳并直接
+//      MRES_Supercede 拦截，阻断战火黑洞效应；命中则放行。
+// 零内存篡改：不再写 m_disposition，纯入口拦截；拦截/放行均计入遥测。
 //========================================================================================
 
 //========================================================================================
@@ -44,13 +36,11 @@
 #define NOISE_DIST_MORALE_2     2000.0  // 士气 +2 (优势): 允许探查主干道 2000 码
 #define NOISE_DIST_MORALE_3     3000.0  // 士气 +3 (大优): 全图大范围出击 3000 码
 
-// 接战策略与任务宏定义
-#define MORALE_HOLD_THRESHOLD   -1      // 保守死守掩体士气阈值 (<= -1 专注运包/死守掩体)
-#define BOT_TASK_GUARD_TICKING_BOMB 4   // 引擎原生任务枚举：GUARD_TICKING_BOMB (守已安放的雷包)
+// 士气门限宏定义
+#define MORALE_HOLD_THRESHOLD   -1      // 保守拦截士气阈值 (<= -1 一律不调查)
 
 // 模块 Detour 句柄与统计
-// 注：对局炸弹状态 g_bBombPlanted 已上收至 global.inc，由 events.inc 事件总线唯一维护，
-//     本模块只读消费，模块启停不再影响对局状态流转。
+// 注：本模块不读 g_bBombPlanted（g_bBombPlanted 仍由 events.inc 维护，供 M5/M7/M10 消费）。
 static Handle g_hInvestigateNoiseDetour = null;
 static int g_iTotalNoiseIntercepted = 0;
 static int g_iTotalNoiseAllowed = 0;
@@ -68,31 +58,29 @@ static int g_iOffset_NoiseTimestamp = -1;
 //========================================================================================
 
 /**
- * 事项后端：噪声控制（事件写 disposition + dhook 拦截）
+ * 事项后端：噪声控制（纯 dhook 拦截）
  *
- * 条件 = disposition/task/noise 偏移 + morale 偏移 + InvestigateNoise Detour 挂载。
- * 事件写入与钩子拦截同属一件事，缺一不可：任一后端缺失整个事项 FAILED，
- * 不允许只跑事件写入。
+ * 条件 = morale/noise 偏移 + InvestigateNoise Detour 挂载。
+ * 不再写 m_disposition，不再依赖 task/disposition 偏移（可视化腰环仍经由
+ * Module6_GetBotDisposition 只读引擎原生 disposition，那是另一条只读链路）。
  *
  * @return              true = 噪声事项后端就绪
  */
 static bool PrepModule6_NoiseBackend()
 {
-    // Task/Disposition 由 OnPluginStart 统一解析，此处只做门禁
     g_iOffset_NoisePosition  = GameConfGetOffset(g_hGameConf, "CCSBot_NoisePosition_Offset");
     g_iOffset_NoiseTimestamp = GameConfGetOffset(g_hGameConf, "CCSBot_NoiseTimestamp_Offset");
 
-    bool offsetsOk = (g_iOffset_Disposition > 0 && g_iOffset_Task > 0
-        && g_iOffset_NoisePosition > 0 && g_iOffset_NoiseTimestamp > 0
-        && g_iOffset_Morale > 0);
+    bool offsetsOk = (g_iOffset_Morale > 0
+        && g_iOffset_NoisePosition > 0 && g_iOffset_NoiseTimestamp > 0);
     if (!offsetsOk)
     {
-        LogError("[BotRouteFix] [Module 6] Offsets or morale offset missing; noise item FAILED.");
+        LogError("[BotRouteFix] [Module 6] Morale or noise offsets missing; noise item FAILED.");
         return false;
     }
 
-    LogMessage("[BotRouteFix] [Module 6] Noise offsets verified (disposition=%d, task=%d, noisepos=%d, noisets=%d, morale=%d).",
-        g_iOffset_Disposition, g_iOffset_Task, g_iOffset_NoisePosition, g_iOffset_NoiseTimestamp, g_iOffset_Morale);
+    LogMessage("[BotRouteFix] [Module 6] Noise offsets verified (morale=%d, noisepos=%d, noisets=%d).",
+        g_iOffset_Morale, g_iOffset_NoisePosition, g_iOffset_NoiseTimestamp);
 
     if (!MountInvestigateNoiseDetour())
     {
@@ -135,11 +123,11 @@ static bool MountInvestigateNoiseDetour()
 //========================================================================================
 
 /**
- * 初始化模块 6 的唯一事项：噪声控制（事件写 disposition + dhook 拦截）
+ * 初始化模块 6 的唯一事项：噪声控制（纯 dhook 拦截）
  *
  * @return              true = 事项已武装
  */
-bool InitModule6_TMorale()
+bool InitModule6_Noise()
 {
     if (g_hGameConf == null)
     {
@@ -151,7 +139,7 @@ bool InitModule6_TMorale()
     bool noiseReady = PrepModule6_NoiseBackend();
     Item_SetReady(ITEM_M6_NOISE, noiseReady);
 
-    EnableModule6_TMorale(true);
+    EnableModule6_Noise(true);
     if (!Item_IsArmed(ITEM_M6_NOISE))
     {
         LogModuleAllFailed(6);
@@ -169,7 +157,7 @@ bool InitModule6_TMorale()
  *
  * @param enable        true = 武装；false = 解除武装
  */
-void EnableModule6_TMorale(bool enable)
+void EnableModule6_Noise(bool enable)
 {
     if (enable == g_bModule6_Active)
     {
@@ -193,9 +181,9 @@ void EnableModule6_TMorale(bool enable)
  *
  * 本模块没有持久代码补丁，只停用钩子并复位业务态，最后释放 Detour 句柄。
  */
-void RestoreModule6_TMorale()
+void RestoreModule6_Noise()
 {
-    EnableModule6_TMorale(false);
+    EnableModule6_Noise(false);
 
     if (g_hInvestigateNoiseDetour != null)
     {
@@ -234,6 +222,7 @@ int Module6_GetTotalNoiseAllowed()
  * 获取 Bot 当前接战策略 (Disposition)
  *
  * 跨模块只读 getter（可视化按数据源绘制），不参与本模块事项状态。
+ * M6 不再写 disposition；这里只读引擎原生值。
  *
  * @param client        客户端索引
  * @return              0: ENGAGE_AND_INVESTIGATE, 1: OPPORTUNITY_FIRE, -1: 无效/非Bot
@@ -261,69 +250,18 @@ int Module6_GetBotDisposition(int client)
 }
 
 //========================================================================================
-// MODULE 6 EVENT HANDLERS
-//========================================================================================
-
-/**
- * 冻结结束 (round_freeze_end): 配置开局包匪接战策略
- */
-void Module6_OnRoundFreezeEnd()
-{
-    if (!Item_IsArmed(ITEM_M6_NOISE))
-    {
-        return;
-    }
-
-    ApplyCarrierMoraleDisposition();
-}
-
-/**
- * 拾取道具 (item_pickup): 若新持有者产生，更新包匪策略
- */
-void Module6_OnItemPickup(int client, const char[] item)
-{
-    #pragma unused client
-    if (!Item_IsArmed(ITEM_M6_NOISE))
-    {
-        return;
-    }
-
-    if (GameRules_GetProp("m_bFreezePeriod") != 0)
-    {
-        return;
-    }
-
-    if (StrEqual(item, "c4") || StrEqual(item, "weapon_c4"))
-    {
-        ApplyCarrierMoraleDisposition();
-    }
-}
-
-/**
- * 下包完成 (bomb_planted): 配置 T 全队守点姿态梯度
- * （g_bBombPlanted 由事件总线在分发前置真，本模块只读）
- */
-void Module6_OnBombPlanted()
-{
-    if (!Item_IsArmed(ITEM_M6_NOISE))
-    {
-        return;
-    }
-
-    ApplyPlantedBombTMoraleDisposition();
-}
-
-//========================================================================================
 // MODULE 6 DETOUR & HOOKS (CCSBOT::INVESTIGATENOISE)
 //========================================================================================
 
 /**
- * CCSBot::InvestigateNoise Pre：守包掩体 T 的出击拦截
+ * CCSBot::InvestigateNoise Pre：噪声出击统一梯度拦截
  *
- * 事项 M6 噪声控制的执行点；只在噪声事项武装且已下包时拦截。
- * 负士气直接阻断；非负士气按士气阶梯限距 + 概率判定。
+ * 事项 M6 噪声控制的唯一执行点；下包前/后、T/CT 全员同一套梯度。
+ * 负士气直接阻断（等效强制 OPPO）；非负士气按士气阶梯限距 + 线性距离概率判定。
+ * Defuse/Plant/Move 等关键任务在引擎层根本不调本函数，进钩子的只有
+ * 巡逻推进与掩体架枪两类 Bot，故不判任务、不判阵营、不判下包状态。
  *
- * @param client        被调查 noise 的 Bot 客户端索引
+ * @param client        试图出击调查声音的 Bot 客户端索引
  * @param hParams       DHook 参数
  * @return              MRES_Supercede = 拦截出击；MRES_Ignored = 放行
  */
@@ -334,34 +272,21 @@ public MRESReturn Hook_InvestigateNoise_Pre(int client, DHookParam hParams)
         return MRES_Ignored;
     }
 
-    if (!g_bBombPlanted)
-    {
-        return MRES_Ignored;
-    }
-
-    if (!IsTeamBot(client, 2, true))
+    if (!IsBot(client, true))
     {
         return MRES_Ignored;
     }
 
     Address pBot = GetEntityAddress(client);
-    if (pBot == Address_Null || g_iOffset_Task <= 0 || g_iOffset_Morale <= 0 || g_iOffset_NoisePosition <= 0)
+    if (pBot == Address_Null || g_iOffset_Morale <= 0 || g_iOffset_NoisePosition <= 0)
     {
         return MRES_Ignored;
     }
 
-    // 仅拦截守包任务 (Task 4: GUARD_TICKING_BOMB)
-    // 逃跑任务 (Task 9: ESCAPE_FROM_BOMB) 与搜敌任务 (Task 0: SEEK_AND_DESTROY) 自然放行
-    int task = LoadFromAddress(pBot + view_as<Address>(g_iOffset_Task), NumberType_Int32);
-    if (task != BOT_TASK_GUARD_TICKING_BOMB)
-    {
-        return MRES_Ignored;
-    }
-
-    // 下包初态虽已分流，但残局士气可能动态跌落，此处获取实时士气进行严密二次校验与防御阻断
+    // 实时士气裁决（残局士气动态跌落也在此处拦下，无需事件快照）
     int morale = GetBotMorale(client);
 
-    // 负士气 T 直接阻断
+    // 负士气直接阻断
     if (morale <= MORALE_HOLD_THRESHOLD)
     {
         if (g_iOffset_NoiseTimestamp > 0)
@@ -458,80 +383,4 @@ static void RestoreModule6_NoiseBackend()
 {
     SyncDetourEnabled(g_hInvestigateNoiseDetour, g_bNoiseDetourEnabled, false, Hook_InvestigateNoise_Pre, false, "Module 6");
     Item_SetArmed(ITEM_M6_NOISE, false);
-}
-
-//========================================================================================
-// MODULE 6 DISPOSITION PRIMITIVES
-//========================================================================================
-
-/**
- * 根据持包者士气更新其接战策略
- * 低士气 (<= -1) -> OPPORTUNITY_FIRE (1) 专注运包
- * 高士气 (>= 0)  -> ENGAGE_AND_INVESTIGATE (0)
- *
- * 内部原语，只被本模块事件处理调用。
- */
-static void ApplyCarrierMoraleDisposition()
-{
-    int carrier = GetC4Carrier();
-    if (!IsBot(carrier, true))
-    {
-        return;
-    }
-
-    Address pCarrier = GetEntityAddress(carrier);
-    if (pCarrier == Address_Null || g_iOffset_Morale <= 0 || g_iOffset_Disposition <= 0)
-    {
-        return;
-    }
-
-    int morale = GetBotMorale(carrier);
-    if (morale <= MORALE_HOLD_THRESHOLD)
-    {
-        StoreToAddress(pCarrier + view_as<Address>(g_iOffset_Disposition), 1, NumberType_Int32); // OPPORTUNITY_FIRE
-        DebugLog("[BotRouteFix] [Module 6] C4 Carrier %N (Morale %s%d) set to OPPORTUNITY_FIRE (Focused Plant)", carrier, (morale >= 0) ? "+" : "", morale);
-    }
-    else
-    {
-        StoreToAddress(pCarrier + view_as<Address>(g_iOffset_Disposition), 0, NumberType_Int32); // ENGAGE_AND_INVESTIGATE
-        DebugLog("[BotRouteFix] [Module 6] C4 Carrier %N (Morale %s%d) kept as ENGAGE_AND_INVESTIGATE", carrier, (morale >= 0) ? "+" : "", morale);
-    }
-}
-
-/**
- * 下包后根据全队 T 士气配置守点梯度
- * 低士气 (<= -1) -> OPPORTUNITY_FIRE (1) 死守掩体
- * 高士气 (>= 0)  -> ENGAGE_AND_INVESTIGATE (0) 动态架枪
- *
- * 内部原语，只被本模块事件处理调用。
- */
-static void ApplyPlantedBombTMoraleDisposition()
-{
-    for (int i = 1; i <= MaxClients; i++)
-    {
-        if (IsTeamBot(i, 2, true))
-        {
-            Address pBot = GetEntityAddress(i);
-            if (pBot == Address_Null || g_iOffset_Morale <= 0 || g_iOffset_Disposition <= 0)
-            {
-                continue;
-            }
-
-            int morale = GetBotMorale(i);
-            if (morale <= MORALE_HOLD_THRESHOLD)
-            {
-                StoreToAddress(pBot + view_as<Address>(g_iOffset_Disposition), 1, NumberType_Int32); // OPPORTUNITY_FIRE
-                if (g_iOffset_NoiseTimestamp > 0)
-                {
-                    StoreToAddress(pBot + view_as<Address>(g_iOffset_NoiseTimestamp), view_as<int>(0.0), NumberType_Int32);
-                }
-                DebugLog("[BotRouteFix] [Module 6] Post-Plant T %N (Morale %s%d) -> OPPORTUNITY_FIRE (Site Camp)", i, (morale >= 0) ? "+" : "", morale);
-            }
-            else
-            {
-                StoreToAddress(pBot + view_as<Address>(g_iOffset_Disposition), 0, NumberType_Int32); // ENGAGE_AND_INVESTIGATE
-                DebugLog("[BotRouteFix] [Module 6] Post-Plant T %N (Morale %s%d) -> ENGAGE_AND_INVESTIGATE (Dynamic Guard)", i, (morale >= 0) ? "+" : "", morale);
-            }
-        }
-    }
 }

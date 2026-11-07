@@ -476,7 +476,7 @@ void ApplyModulesConfig()
     EnableModule3_Danger(active[3]);
     EnableModule4_Hunt(active[4]);
     EnableModule5_Combat(active[5]);
-    EnableModule6_TMorale(active[6]);
+    EnableModule6_Noise(active[6]);
     EnableModule7_Escort(active[7]);
     EnableModule8_Queue(active[8]);
     EnableModule9_Loot(active[9]);

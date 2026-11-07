@@ -220,7 +220,7 @@ public Action Command_Status(int client, int args)
     PrintModuleState(client, 3, "NavArea Danger Soft-Decay");
     PrintModuleState(client, 4, "Hunt Target Claim & 45s Bypass");
     PrintModuleState(client, 5, "Combat Dodge / Reload Hide / Retreat");
-    PrintModuleState(client, 6, "T Morale Disposition & Noise Gate (M<0/500/1000/2000/3000)");
+    PrintModuleState(client, 6, "Noise Interception Gradient (M<0/500/1000/2000/3000)");
     PrintModuleState(client, 7, "Carrier Escort Roster (3-M)");
     PrintModuleState(client, 8, "Polite Queue Breaker");
     PrintModuleState(client, 9, "T Loose-Bomb Fetch Roster");
@@ -416,7 +416,7 @@ public Action Command_Status(int client, int args)
         }
     }
 
-    // M06：只放聚合计数器，per-bot 处置/梯度是逐行日志的事，不进 live。
+    // M06：只放聚合计数器，per-bot 拦截/放行是逐行日志的事，不进 live。
     if (ModuleHasLive(6))
     {
         Format(live, sizeof(live), "total %d blocked, %d allowed",

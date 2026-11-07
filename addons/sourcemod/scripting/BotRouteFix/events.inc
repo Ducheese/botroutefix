@@ -84,7 +84,6 @@ public void Event_RoundFreezeEnd(Event event, const char[] name, bool dontBroadc
 {
     // 冻结时间结束，Bot 决策树正式激活
     Module2_OnRoundFreezeEnd();
-    Module6_OnRoundFreezeEnd();
     Module7_OnRoundFreezeEnd();
 }
 
@@ -100,7 +99,6 @@ public void Event_ItemPickup(Event event, const char[] name, bool dontBroadcast)
     event.GetString("item", item, sizeof(item));
 
     Module2_OnItemPickup(client, item);
-    Module6_OnItemPickup(client, item);
     Module7_OnItemPickup(client, item);
     Module9_OnItemPickup(client, item);
 }
@@ -131,7 +129,6 @@ public void Event_BombPlanted(Event event, const char[] name, bool dontBroadcast
     g_bBombPlanted = true;
 
     Module2_OnBombPlanted();
-    Module6_OnBombPlanted();
     Module7_OnBombPlanted();
     Module10_OnBombPlanted();
 }

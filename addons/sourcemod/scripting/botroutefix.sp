@@ -15,7 +15,7 @@
 //   - BotRouteFix/module3_danger.inc  : [模块 3] CNavArea 危险度开局软衰减 (NavArea Danger Soft-Decay)
 //   - BotRouteFix/module4_hunt.inc    : [模块 4] HuntState 搜敌机制重构 (45秒老家破除、时间戳认领与随机覆盖 NOP)
 //   - BotRouteFix/module5_combat.inc  : [模块 5] 战斗决策重构 (AttackState 闪避/换弹、残血、一打多强制后撤)
-//   - BotRouteFix/module6_tmorale.inc : [模块 6] T 阵营士气接战策略与守包听觉出击梯度 (TMorale)
+//   - BotRouteFix/module6_noise.inc   : [模块 6] 噪声出击统一梯度 (Noise Interception)
 //   - BotRouteFix/module7_escort.inc  : [模块 7] T 包匪贴身保镖花名册 (Carrier Escort Roster)
 //   - BotRouteFix/module8_queue.inc   : [模块 8] 礼貌排队打碎与死锁强切 Hunt (Queue Breaker & Deadlock Hunt Transition)
 //   - BotRouteFix/module9_loot.inc    : [模块 9] 掉包 Top3 抢包花名册 (Loot Roster, NoticeLooseBomb Pre)
@@ -47,7 +47,7 @@
 #include "BotRouteFix/module3_danger"
 #include "BotRouteFix/module4_hunt"
 #include "BotRouteFix/module5_combat"
-#include "BotRouteFix/module6_tmorale"
+#include "BotRouteFix/module6_noise"
 #include "BotRouteFix/module7_escort"
 #include "BotRouteFix/module8_queue"
 #include "BotRouteFix/module9_loot"
@@ -127,7 +127,7 @@ public void OnPluginStart()
     InitModule3_Danger();
     InitModule4_Hunt();
     InitModule5_Combat();
-    InitModule6_TMorale();
+    InitModule6_Noise();
     InitModule7_Escort();
     InitModule8_Queue();
     InitModule9_Loot();
@@ -175,7 +175,7 @@ public void OnPluginEnd()
     RestoreModule9_Loot();
     RestoreModule8_Queue();
     RestoreModule7_Escort();
-    RestoreModule6_TMorale();
+    RestoreModule6_Noise();
     RestoreModule5_Combat();
     RestoreModule4_Hunt();
     RestoreModule3_Danger();

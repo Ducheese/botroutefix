@@ -90,24 +90,17 @@
   - 供模块 11 调用；请求带 2 秒 TTL，Bot 未在窗口内进入 `AttackState` 则自动作废，杜绝跨状态残影误触发；
   - 命中请求时完全穿透 `< 35 HP` 残血门控与节流阀，赋予单拍立即后撤特权；最终是硬豁免/短蹲/放行由本模块按矩阵统一裁决，模块 11 不再自行判任务与包点豁免。
 
-### 模块 6：T 阵营士气接战策略与守包听觉出击梯度 (Morale Disposition & Audio Interception)
-- **下包前 T 包匪行为 (Pre-Plant Carrier Morale Disposition)**：
-  - 原生引擎任何战区的枪声广播（2000码）都会诱使全图 Bot 产生 30%~60% 几率调头去凑热闹，导致包匪放弃运包下包。
-  - 本模块在 `round_freeze_end` 与 `item_pickup`（获得 C4）时，依据持包者士气单次赋值：
-    - 低士气（Morale $\le$ -1）：赋予 `OPPORTUNITY_FIRE` (1)，底层 `HeardInterestingNoise()` 自动对声音免疫，心无旁骛直奔包点下包；
-    - 高士气（Morale $\ge$ 0）：保持原生 `ENGAGE_AND_INVESTIGATE` (0)。
-- **下包后 T 全队守点梯度 (Post-Plant Defense & Audio Interception)**：
-  - 下包瞬间（`bomb_planted`）全队 T 按士气分层：
-    - 低士气（Morale $\le$ -1）：设为 `OPPORTUNITY_FIRE` (1) 并清空声音时间戳，HideState 门控自动阻断出击，死守掩体架枪；
-    - 高士气（Morale $\ge$ 0）：保持 `ENGAGE_AND_INVESTIGATE` (0) 允许视情出击。
-  - 出击拦截（DHook Pre on `CCSBot::InvestigateNoise`）：
-    - 仅拦截守包掩体任务（Task 4: `GUARD_TICKING_BOMB`）；
-    - 针对保持 ENGAGE 的非负士气 T，按士气阶梯约束最大可调查声音距离：
-      - 士气 0 $\rightarrow$ 最大 500.0 码
-      - 士气 +1 $\rightarrow$ 最大 1000.0 码
-      - 士气 +2 $\rightarrow$ 最大 2000.0 码
-      - 士气 +3 $\rightarrow$ 最大 3000.0 码
-    - 超距或线性概率衰减（$1.0 - \text{dist} / \text{maxDist}$）未命中时，清空声音时间戳并直接 `MRES_Supercede` 拦截状态切换，原地保持架枪，彻底瓦解战火黑洞效应！
+### 模块 6：噪声出击统一梯度 (Noise Interception Gradient)
+- **纯 DHook 入口拦截（Pre on `CCSBot::InvestigateNoise`）**：
+  - 原生引擎任何战区的枪声广播（2000码）都会诱使 Bot 产生 30%~60% 几率调头去凑热闹；但 Defuse/Plant/Move 等关键任务在引擎层根本不调本函数，进钩子的只有巡逻推进与掩体架枪两类 Bot——因此不判任务、不判阵营、不判下包状态，进来的 Bot 一律按实时士气走同一套梯度（下包前/后、T/CT 全员一致）。
+  - 低士气（Morale <= -1）：直接拦截（等效强制 OPPO），一律不调查；
+  - 非负士气（Morale >= 0）：按士气阶梯约束最大可调查声音距离：
+    - 士气 0 -> 最大 500.0 码
+    - 士气 +1 -> 最大 1000.0 码
+    - 士气 +2 -> 最大 2000.0 码
+    - 士气 +3 及以上 -> 最大 3000.0 码
+  - 超距或线性概率衰减（1.0 - dist / maxDist）未命中时，清空声音时间戳并直接 `MRES_Supercede` 拦截，彻底瓦解战火黑洞效应！命中则放行。
+- **零内存篡改**：不再写 `m_disposition`；拦截/放行均计入遥测（`total blocked/allowed` 进 status M06 行）。
 
 ### 模块 7：T 包匪贴身保镖花名册 (Carrier Escort Roster)
 - **编制随士气浮动 (Morale-Scaled Roster)**：
@@ -250,7 +243,7 @@
 | M3 | 1 | 事件写 danger 衰减 |
 | M4 | 2 | 随机覆盖 NOP / dhook 写(45s bypass + 认领) |
 | M5 | 3 | 换弹掩体 NOP / 闪避 dhook 写 / 后撤（整体） |
-| M6 | 1 | 噪声控制（事件写 disposition + dhook 拦截） |
+| M6 | 1 | 噪声控制（纯 dhook 统一梯度拦截） |
 | M7 | 1 | 保镖名册（事件 SDKCall） |
 | M8 | 2 | 排队打碎 dhook 写 / 死锁 Hunt dhook SDKCall |
 | M9 | 1 | 抢包门禁（dhook） |
@@ -278,7 +271,7 @@
 - **谁执行最终改写，谁拥有事项。**
   - M11 只发撤退请求，最终后撤由 M5 执行 → 撤退归 M5，M11 只有走廊 danger。
   - M15 亲手写 `m_duration` → 短蹲与缩放同属 M15 一件事；M15 关闭/FAILED 时短蹲一起停。
-  - M6 亲手写 `m_disposition` → 事件写入与钩子拦截同属 M6 一件事，钩子缺失时事件写入也不跑。
+  - M6 纯入口拦截、不写内存 → 单事项，Detour 缺失即 FAILED。
   - M9 / M10 的选举只是本模块门禁的预热，不改变引擎行为，不计事项。
 - **跨模块 getter / 请求不参与本模块状态**（用户第 3 条）：M5 读 M7/M9 getter、M11 给 M5 发请求、M5 给 M15 发短蹲请求，提供方缺席只让局部不生效，不改变消费方状态。
 - **M11 特例**：走廊事项因 nav 缺失 FAILED 时，只要 Detour 仍在，撤退请求仍照发；是否真退由 M5 自己的后端决定。M11 的遥测只统计 `requests`，真正 `retreats` 由 M5 统计。
@@ -413,7 +406,7 @@ addons\sourcemod\
         ├── module3_danger.inc        [模块 3] CNavArea 危险度开局软衰减 (NavArea Danger Soft-Decay)
         ├── module4_hunt.inc          [模块 4] HuntState 搜敌机制重构 (45秒老家破除、时间戳认领与随机覆盖 NOP)
         ├── module5_combat.inc        [模块 5] 战斗决策重构 (闪避 100%、换弹进掩体 100%、残血/一打多/见狙后撤与三档豁免裁决)
-        ├── module6_tmorale.inc       [模块 6] T 阵营士气接战策略与守包听觉出击梯度 (TMorale)
+        ├── module6_noise.inc         [模块 6] 噪声出击统一梯度 (Noise Interception)
         ├── module7_escort.inc        [模块 7] T 包匪贴身保镖花名册 (Carrier Escort Roster)
         ├── module8_queue.inc         [模块 8] 门口礼貌排队打碎与死锁强切 Hunt (Polite Queue Breaker & Deadlock Hunt Transition)
         ├── module9_loot.inc          [模块 9] 掉包 Top3 抢包花名册 (Loose-Bomb Fetch Roster)
@@ -467,8 +460,8 @@ addons\sourcemod\
   - 武装确认统一走 `LogModuleArmed`：`[Module N] <label> items armed (<detail>) [<arch>]`，多事项列名，单事项只放数字。
 - **变体**：部分武装 → `LogModulePartial`（`Partial activation (...)`）；事项全灭 → `LogModuleAllFailed`（`All items failed; module will report FAILED.`）；失败原因各事项就地 `LogError`。
 - **Hook 回调日志口径**：前缀统一 `[BotRouteFix] [Module N]`；`DebugLog` 只记离散事件/状态变化（选举/拾取/安放/重定向/放行/认领），不记每 tick 求值——M4 的 `HuntState::OnUpdate` pre/post 刻意零输出（高频 tick），它的可观测面是 status 的 `total claims` 计数器；`LogError` 只用于不变量破坏（如 M7 非法名册数），普通业务分支一律 `DebugLog`；新增 Hook 回调必须带一行说明决策的 `DebugLog`，不留注释掉的死代码。
-- **准备期与运行期的门禁分界**：准备期输出（Prep/Mount/Apply/Restore/Enable 内的句柄创建、签名绑定、基线备份、补丁落子、`verified`/`Resolved` 确认行）走 Init 口径，**无条件输出，不受 `sm_botroutefix_debug` 约束**；运行期离散事件（Hook 回调/事件响应内的逐条决策，如持包人变更、锁落子/还原、士气处置切换）**必须走 `DebugLog`，受 debug 约束**。M2 锁落子/还原与 M6 包匪处置的 `DebugLog` 属后者（每回合触发的运行期事件），不是准备期，门控正确。
-- **各模块检查点清单**：M1 守点/反冲各 1 个写入点；M2 单例指针 + 时钟偏移 + 锁写入点；M3 危险度偏移 + nav 解析 + 状态重置；M4 随机旁路写入点 + 搜寻偏移；M5 reload 写入点 + 闪避偏移 + 后撤后端；M6 噪音感知偏移；M7 follow SDKCall + 士气偏移；M8 排队偏移 + 死锁 SDKCall；M9/M10 无（纯 hook/名册）；M11 走廊对抗偏移；M12 蹲守偏移 + 6 个 bypass 点；M13 rewrite/cave 二选一（按架构）；M14 4 站点 + 1 常量池；M15 隐藏时长偏移。
+- **准备期与运行期的门禁分界**：准备期输出（Prep/Mount/Apply/Restore/Enable 内的句柄创建、签名绑定、基线备份、补丁落子、`verified`/`Resolved` 确认行）走 Init 口径，**无条件输出，不受 `sm_botroutefix_debug` 约束**；运行期离散事件（Hook 回调/事件响应内的逐条决策，如持包人变更、锁落子/还原、士气处置切换）**必须走 `DebugLog`，受 debug 约束**。M2 锁落子/还原与 M6 逐条拦截/放行的 `DebugLog` 属后者（运行期逐 noise 事件），不是准备期，门控正确。
+- **各模块检查点清单**：M1 守点/反冲各 1 个写入点；M2 单例指针 + 时钟偏移 + 锁写入点；M3 危险度偏移 + nav 解析 + 状态重置；M4 随机旁路写入点 + 搜寻偏移；M5 reload 写入点 + 闪避偏移 + 后撤后端；M6 士气 + 噪音感知偏移；M7 follow SDKCall + 士气偏移；M8 排队偏移 + 死锁 SDKCall；M9/M10 无（纯 hook/名册）；M11 走廊对抗偏移；M12 蹲守偏移 + 6 个 bypass 点；M13 rewrite/cave 二选一（按架构）；M14 4 站点 + 1 常量池；M15 隐藏时长偏移。
 
 ---
 
