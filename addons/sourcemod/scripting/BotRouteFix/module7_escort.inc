@@ -10,6 +10,8 @@
 //   - 距离一律欧氏 3D 平方（含 Z，跨楼层天然排后）
 //   - 全量重算只做 diff；减员按调用时实时士气重算编制，多退少补
 //   - 纯事件驱动，无 timer；运包时钟归 module2，本模块永不写时钟
+//   - 传染源切断：BotFollowMeme::Interpret 入口写 ret（64=C3 / 32=C2 08 00），
+//     原生开局 "Going to plant the bomb" meme 全员盲从链物理灭活，名册不再被冲垮
 //========================================================================================
 
 //========================================================================================
@@ -28,6 +30,10 @@ static int g_iBodyguardList[MAXPLAYERS + 1];
 static int g_iBodyguardCount = 0;
 static int g_iEscortTarget = 0;
 
+// Meme 灭活补丁：BotFollowMeme::Interpret 入口 ret（64 位 1 字节 C3 / 32 位 3 字节 C2 08 00）
+static MemoryPatch g_PatchFollowMeme7;
+static int g_FollowMeme7PatchBytes[3];
+
 enum struct EscortCandidate
 {
     int client;
@@ -41,8 +47,9 @@ enum struct EscortCandidate
 /**
  * 事项后端：保镖花名册事项（ITEM_M7_ESCORT）
  *
- * 只校验 Follow/StopFollowing SDKCall 句柄与包匪士气偏移，不做任何名单操作。
- * 任一后端缺失返回 false，Init 会把护送事项标记为 FAILED。
+ * 校验 Follow/StopFollowing SDKCall 句柄、包匪士气偏移与 meme 灭活补丁三端，
+ * 不做任何名单操作。任一后端缺失返回 false，Init 会把护送事项标记为 FAILED。
+ * meme 补丁缺席时名册会被原生开局 meme 冲垮，故与 SDKCall 同等对待、不降级。
  *
  * @return              true = 护送事项后端就绪
  */
@@ -50,6 +57,7 @@ static bool PrepModule7_EscortBackend()
 {
     bool sdkOk = (g_hSDKCall_Follow != null && g_hSDKCall_StopFollowing != null);
     bool moraleOk = (g_iOffset_Morale > 0);
+    bool memeOk = PrepModule7_FollowMemeBackend();
 
     if (!sdkOk)
     {
@@ -60,12 +68,89 @@ static bool PrepModule7_EscortBackend()
         LogError("[BotRouteFix] [Module 7] Morale offset missing; escort item FAILED.");
     }
 
-    if (sdkOk && moraleOk)
+    if (sdkOk && moraleOk && memeOk)
     {
-        LogMessage("[BotRouteFix] [Module 7] Carrier escort backend verified (follow SDKCall, morale=%d).",
+        LogMessage("[BotRouteFix] [Module 7] Carrier escort backend verified (follow SDKCall, morale=%d, meme ret).",
             g_iOffset_Morale);
     }
-    return (sdkOk && moraleOk);
+    return (sdkOk && moraleOk && memeOk);
+}
+
+/**
+ * 事项后端：BotFollowMeme::Interpret 入口 ret 灭活
+ *
+ * 只定位/校验/备份并把构造好的 ret 字节写入缓冲，不写代码段。
+ * 补丁语义：meme 解释器入口直接返回，原生开局 "Going to plant the bomb"
+ * 全员盲从链（1000 码内 receiver->Follow(sender) + CoveringFriend 应答）
+ * 物理灭活；M7 自己的 BotFollow SDKCall 走直调，不受影响。
+ * 架构差异：64 位调用方清栈用 1 字节 C3；32 位 thiscall 被调方清 8 字节
+ * 参数用 3 字节 C2 08 00——裸 C3 会坏栈，两种架构不可混用。
+ *
+ * @return              true = 灭活补丁后端就绪
+ */
+static bool PrepModule7_FollowMemeBackend()
+{
+    Address sigAddr = GameConfGetAddress(g_hGameConf, "FollowMeme_Interpret");
+    if (sigAddr == Address_Null)
+    {
+        LogError("[BotRouteFix] [Module 7] Failed to locate signature for BotFollowMeme_Interpret!");
+        return false;
+    }
+
+    int patchSize = g_bIsWin64 ? 1 : 3;
+    g_PatchFollowMeme7.Init("FollowMeme7_Ret", sigAddr, patchSize);
+
+    int b0 = LoadFromAddress(sigAddr, NumberType_Int8);
+    int b1 = LoadFromAddress(sigAddr + view_as<Address>(1), NumberType_Int8);
+
+    // 幂等性检测：入口已是 ret 即自家补丁；有备份=保持基线，无备份=外来残留记 false
+    bool alreadyRet = g_bIsWin64 ? (b0 == 0xC3)
+        : (b0 == 0xC2 && b1 == 0x08
+            && LoadFromAddress(sigAddr + view_as<Address>(2), NumberType_Int8) == 0x00);
+    if (alreadyRet)
+    {
+        if (!g_PatchFollowMeme7.hasBackup)
+        {
+            g_PatchFollowMeme7.isPatched = false;
+            LogError("[BotRouteFix] [Module 7] FollowMeme already ret without baseline @ %X; escort item FAILED.", sigAddr);
+            return false;
+        }
+        LogMessage("[BotRouteFix] [Module 7] FollowMeme ret already present @ %X, skipping", sigAddr);
+        return true;
+    }
+
+    // 预检：入口必须是标准帧 prologue（32: 55 8B EC；64: 48 89 开头）
+    bool prologueOk = g_bIsWin64 ? (b0 == 0x48 && b1 == 0x89)
+        : (b0 == 0x55 && b1 == 0x8B
+            && LoadFromAddress(sigAddr + view_as<Address>(2), NumberType_Int8) == 0xEC);
+    if (!prologueOk)
+    {
+        LogError("[BotRouteFix] [Module 7] FollowMeme entry opcode mismatch (got %02X %02X), patch aborted!",
+            b0, b1);
+        return false;
+    }
+
+    if (!g_PatchFollowMeme7.BackupOriginal())
+    {
+        LogError("[BotRouteFix] [Module 7] FollowMeme baseline backup failed; escort item FAILED.");
+        return false;
+    }
+
+    // 构造 ret：64 = C3；32 = C2 08 00（清 8 字节栈参数）
+    if (g_bIsWin64)
+    {
+        g_FollowMeme7PatchBytes[0] = 0xC3;
+    }
+    else
+    {
+        g_FollowMeme7PatchBytes[0] = 0xC2;
+        g_FollowMeme7PatchBytes[1] = 0x08;
+        g_FollowMeme7PatchBytes[2] = 0x00;
+    }
+
+    LogMessage("[BotRouteFix] [Module 7] FollowMeme ret verified @ %X [%s]",
+        sigAddr, g_bIsWin64 ? "64-bit" : "32-bit");
+    return true;
 }
 
 //========================================================================================
@@ -324,9 +409,10 @@ void Module7_OnClientDisconnect(int client)
 //========================================================================================
 
 /**
- * 应用护送事项：只有 Prep 已就绪才武装并重配名单
+ * 应用护送事项：先落 meme 灭活补丁，再武装并重配名单
  *
  * 事项 ITEM_M7_ESCORT 的应用入口；不做句柄与偏移校验（那是 Prep 的职责）。
+ * 补丁写入失败证伪了 Prep 的模板校验，必须同步清 Ready 并回滚，不留半吊子。
  * 失败时该事项 FAILED。
  *
  * @return              true = 名单已武装
@@ -340,16 +426,27 @@ static bool ApplyModule7_EscortBackend()
         return false;
     }
 
+    // 先落 meme 灭活补丁：补丁不在位，Escort_Refresh 配出的名册会被原生开局 meme 瞬间冲垮
+    if (!g_PatchFollowMeme7.Apply(g_FollowMeme7PatchBytes))
+    {
+        g_PatchFollowMeme7.Restore();
+        Item_SetReady(ITEM_M7_ESCORT, false);
+        Item_SetArmed(ITEM_M7_ESCORT, false);
+        LogError("[BotRouteFix] [Module 7] FollowMeme ret write failed; escort item FAILED.");
+        return false;
+    }
+
     Item_SetArmed(ITEM_M7_ESCORT, true);
     Escort_Refresh();
     return true;
 }
 
 /**
- * 还原护送事项：解除武装并解散名单（停用即全员放行回原生）
+ * 还原护送事项：先恢复 meme 解释器字节，再解除武装并解散名单（停用即全员放行回原生）
  */
 static void RestoreModule7_EscortBackend()
 {
+    g_PatchFollowMeme7.Restore();
     Item_SetArmed(ITEM_M7_ESCORT, false);
     Escort_ReleaseAll();
 }

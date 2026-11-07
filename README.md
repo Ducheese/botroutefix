@@ -111,6 +111,10 @@
   - 名单只做差量更新：换包匪才解散重配；保镖阵亡/掉线立即除名并按实时士气多退少补，转队在下一次 `Escort_Refresh()` 时除名，不抖散整条跟随链。
 - **包离手即解散 (Release on Loose)**：
   - 掉包、下包、拆包、爆炸、包匪阵亡/掉线时全体解散（发 `StopFollowing` 恢复自由身，可就近捡包或转入守点）；回合开始静默清零。
+- **开局 meme 传染源切断 (FollowMeme Ret)**：
+  - 原生 `cs_bot_move_to.cpp:227` 包匪出门即广播 `GoingToPlantTheBomb`，`BotFollowMeme::Interpret`（`cs_bot_chatter.cpp:170`）对 1000 码内全员 `receiver->Follow(sender)`，无人数上限——M7 刚配平的名册瞬间被冲成跟包长龙。
+  - 本模块在 `BotFollowMeme::Interpret` 入口写 ret（64 位 1 字节 `C3` / 32 位 3 字节 `C2 08 00`，thiscall 被调方清栈、裸 `C3` 会坏栈），meme 全员盲从链物理灭活；该 meme 唯一挂载点就是开局广播，无线电与其他 meme 不受影响；M7 自己的 `BotFollow` SDKCall 走直调，不受影响。
+  - 补丁归属护送事项：签名缺失/入口 opcode 不符/写入失败 → 事项 FAILED（名册无补丁守不住，不降级）；停用/卸载原样还原。
   - `item_pickup` 在冻结期被忽略；模块启用/热重载时会立即按当前持包者配一次保镖（可能打断买枪），中途捡包递延一帧等槽位归属落定。
 
 ### 模块 8：门口礼貌排队打碎与死锁强切 Hunt (Polite Queue Breaker & Deadlock Hunt Transition)
@@ -244,7 +248,7 @@
 | M4 | 2 | 随机覆盖 NOP / dhook 写(45s bypass + 认领) |
 | M5 | 3 | 换弹掩体 NOP / 闪避 dhook 写 / 后撤（整体） |
 | M6 | 1 | 噪声控制（纯 dhook 统一梯度拦截） |
-| M7 | 1 | 保镖名册（事件 SDKCall） |
+| M7 | 1 | 保镖名册（事件 SDKCall + meme ret 补丁） |
 | M8 | 2 | 排队打碎 dhook 写 / 死锁 Hunt dhook SDKCall |
 | M9 | 1 | 抢包门禁（dhook） |
 | M10 | 1 | 拆包门禁（dhook） |
@@ -461,7 +465,7 @@ addons\sourcemod\
 - **变体**：部分武装 → `LogModulePartial`（`Partial activation (...)`）；事项全灭 → `LogModuleAllFailed`（`All items failed; module will report FAILED.`）；失败原因各事项就地 `LogError`。
 - **Hook 回调日志口径**：前缀统一 `[BotRouteFix] [Module N]`；`DebugLog` 只记离散事件/状态变化（选举/拾取/安放/重定向/放行/认领），不记每 tick 求值——M4 的 `HuntState::OnUpdate` pre/post 刻意零输出（高频 tick），它的可观测面是 status 的 `total claims` 计数器；`LogError` 只用于不变量破坏（如 M7 非法名册数），普通业务分支一律 `DebugLog`；新增 Hook 回调必须带一行说明决策的 `DebugLog`，不留注释掉的死代码。
 - **准备期与运行期的门禁分界**：准备期输出（Prep/Mount/Apply/Restore/Enable 内的句柄创建、签名绑定、基线备份、补丁落子、`verified`/`Resolved` 确认行）走 Init 口径，**无条件输出，不受 `sm_botroutefix_debug` 约束**；运行期离散事件（Hook 回调/事件响应内的逐条决策，如持包人变更、锁落子/还原、士气处置切换）**必须走 `DebugLog`，受 debug 约束**。M2 锁落子/还原与 M6 逐条拦截/放行的 `DebugLog` 属后者（运行期逐 noise 事件），不是准备期，门控正确。
-- **各模块检查点清单**：M1 守点/反冲各 1 个写入点；M2 单例指针 + 时钟偏移 + 锁写入点；M3 危险度偏移 + nav 解析 + 状态重置；M4 随机旁路写入点 + 搜寻偏移；M5 reload 写入点 + 闪避偏移 + 后撤后端；M6 士气 + 噪音感知偏移；M7 follow SDKCall + 士气偏移；M8 排队偏移 + 死锁 SDKCall；M9/M10 无（纯 hook/名册）；M11 走廊对抗偏移；M12 蹲守偏移 + 6 个 bypass 点；M13 rewrite/cave 二选一（按架构）；M14 4 站点 + 1 常量池；M15 隐藏时长偏移。
+- **各模块检查点清单**：M1 守点/反冲各 1 个写入点；M2 单例指针 + 时钟偏移 + 锁写入点；M3 危险度偏移 + nav 解析 + 状态重置；M4 随机旁路写入点 + 搜寻偏移；M5 reload 写入点 + 闪避偏移 + 后撤后端；M6 士气 + 噪音感知偏移；M7 follow SDKCall + 士气偏移 + FollowMeme ret 补丁；M8 排队偏移 + 死锁 SDKCall；M9/M10 无（纯 hook/名册）；M11 走廊对抗偏移；M12 蹲守偏移 + 6 个 bypass 点；M13 rewrite/cave 二选一（按架构）；M14 4 站点 + 1 常量池；M15 隐藏时长偏移。
 
 ---
 

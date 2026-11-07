@@ -179,7 +179,7 @@ public Action Timer_RenderVisualsFast(Handle timer)
 
             // 包匪胸膛连目标包点，黄色 (包点不画光环)
             static const int colorM2Beam[4] = {255, 170, 0, 220}; // 黄色
-            if (Item_IsArmed(ITEM_M2_LOCK))
+            if (Item_IsArmed(ITEM_M2_LOCK) && Module2_IsBombsiteLocked())
             {
                 float targetPos[3];
                 if (Module2_GetTargetBombsitePosition(targetPos))

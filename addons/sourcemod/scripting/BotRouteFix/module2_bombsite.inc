@@ -339,6 +339,11 @@ static float CalculatePlantDelay(int morale)
  */
 bool Module2_GetTargetBombsitePosition(float pos[3])
 {
+    if (!g_bBombsiteLocked || g_iLockedZoneIndex < 0)
+    {
+        return false;
+    }
+
     if (g_pTheCSBotsPtr == Address_Null || g_iOffset_ZoneCount <= 0 || g_iOffset_ZoneBase <= 0 || g_iZoneStride <= 0)
     {
         return false;
@@ -351,17 +356,12 @@ bool Module2_GetTargetBombsitePosition(float pos[3])
     }
 
     int zoneCount = LoadFromAddress(pTheCSBots + view_as<Address>(g_iOffset_ZoneCount), NumberType_Int32);
-    if (zoneCount <= 0)
+    if (zoneCount <= 0 || g_iLockedZoneIndex >= zoneCount)
     {
         return false;
     }
 
     int targetZone = g_iLockedZoneIndex;
-    if (targetZone < 0 || targetZone >= zoneCount)
-    {
-        targetZone = 0;
-    }
-
     Address pZone = pTheCSBots + view_as<Address>(g_iOffset_ZoneBase + targetZone * g_iZoneStride);
     int offsetCenter = g_bIsWin64 ? 140 : 72;
 
