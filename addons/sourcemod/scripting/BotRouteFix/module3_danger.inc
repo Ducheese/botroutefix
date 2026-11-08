@@ -351,6 +351,122 @@ bool Module3_GetNavAreaDanger(Address pArea, float &dangerT, float &dangerCT)
 }
 
 //========================================================================================
+// MODULE 3 DANGER DISTRIBUTION DUMP (诊断：遍历全图 area 读双阵营沉降后 danger)
+//========================================================================================
+//
+// 仅手动命令触发（sm_botroutefix_dangerdist [tag]），无自动落盘。
+// 摘要同时 LogMessage（服务端日志）与 ReplyToCommand（调用者回显）。
+//========================================================================================
+
+// 直方图分箱：0 | (0,0.05) | [0.05,0.2) | [0.2,0.5) | [0.5,1) | [1,2) | [2,5) | [5,+inf)
+static int DangerDistBin(float d)
+{
+    if (d <= 0.0) return 0;
+    if (d < 0.05) return 1;
+    if (d < 0.2)  return 2;
+    if (d < 0.5)  return 3;
+    if (d < 1.0)  return 4;
+    if (d < 2.0)  return 5;
+    if (d < 5.0)  return 6;
+    return 7;
+}
+
+/**
+ * 遍历 TheNavAreas，逐 area 读沉降后双阵营 danger，写 CSV；摘要同时进
+ * 服务端日志（LogMessage）与调用者回显（ReplyToCommand）。
+ *
+ * @param tag           文件名标签（data/botroutefix_danger_<tag>.csv）
+ * @param client        回显目标（0 = 服务端控制台）
+ */
+void Module3_DumpDangerDist(const char[] tag, int client = 0)
+{
+    if (g_pTheNavAreasCount == Address_Null || g_pTheNavAreasBase == Address_Null)
+    {
+        LogError("[BotRouteFix] [Module 3] Dump aborted: TheNavAreas unresolved.");
+        return;
+    }
+    int count = LoadFromAddress(g_pTheNavAreasCount, NumberType_Int32);
+    if (count <= 0 || count > NAV_AREA_MAX_SANITY)
+    {
+        LogError("[BotRouteFix] [Module 3] Dump aborted: bad area count %d.", count);
+        return;
+    }
+    Address pArray = LoadAddressFromAddress(g_pTheNavAreasBase);
+    if (pArray == Address_Null)
+    {
+        LogError("[BotRouteFix] [Module 3] Dump aborted: null area array.");
+        return;
+    }
+
+    char path[PLATFORM_MAX_PATH];
+    BuildPath(Path_SM, path, sizeof(path), "data/botroutefix_danger_%s.csv", tag);
+    Handle hFile = OpenFile(path, "w");
+    if (hFile == null)
+    {
+        LogError("[BotRouteFix] [Module 3] Dump aborted: cannot open %s.", path);
+        return;
+    }
+
+    WriteFileLine(hFile, "index,danger_t,danger_ct");
+
+    int binsT[8];
+    int binsCT[8];
+    float maxT = 0.0, maxCT = 0.0, sumT = 0.0, sumCT = 0.0;
+    int nzT = 0, nzCT = 0, written = 0;
+
+    for (int i = 0; i < count; i++)
+    {
+        Address pArea = LoadAddressFromAddress(pArray + view_as<Address>(i * g_iPtrSize));
+        if (pArea == Address_Null)
+        {
+            continue;
+        }
+        float dT, dCT;
+        if (!Module3_GetNavAreaDanger(pArea, dT, dCT))
+        {
+            continue;
+        }
+        WriteFileLine(hFile, "%d,%.3f,%.3f", i, dT, dCT);
+        written++;
+
+        binsT[DangerDistBin(dT)]++;
+        binsCT[DangerDistBin(dCT)]++;
+        if (dT > 0.0) { nzT++; sumT += dT; if (dT > maxT) { maxT = dT; } }
+        if (dCT > 0.0) { nzCT++; sumCT += dCT; if (dCT > maxCT) { maxCT = dCT; } }
+    }
+    delete hFile;
+
+    LogMessage("[BotRouteFix] [Module 3] Dump %s: %d/%d areas -> %s", tag, written, count, path);
+    LogMessage("[BotRouteFix] [Module 3] Dist %s T : nz=%d max=%.2f mean=%.3f bins[0|0.05|0.2|0.5|1|2|5|inf]=%d %d %d %d %d %d %d %d",
+        tag, nzT, maxT, sumT / float(count), binsT[0], binsT[1], binsT[2], binsT[3], binsT[4], binsT[5], binsT[6], binsT[7]);
+    LogMessage("[BotRouteFix] [Module 3] Dist %s CT: nz=%d max=%.2f mean=%.3f bins[0|0.05|0.2|0.5|1|2|5|inf]=%d %d %d %d %d %d %d %d",
+        tag, nzCT, maxCT, sumCT / float(count), binsCT[0], binsCT[1], binsCT[2], binsCT[3], binsCT[4], binsCT[5], binsCT[6], binsCT[7]);
+    ReplyToCommand(client, "[BotRouteFix] [Module 3] Dump %s: %d/%d areas -> %s", tag, written, count, path);
+    ReplyToCommand(client, "[BotRouteFix] [Module 3] T : nz=%d max=%.2f mean=%.3f bins=%d %d %d %d %d %d %d %d",
+        nzT, maxT, sumT / float(count), binsT[0], binsT[1], binsT[2], binsT[3], binsT[4], binsT[5], binsT[6], binsT[7]);
+    ReplyToCommand(client, "[BotRouteFix] [Module 3] CT: nz=%d max=%.2f mean=%.3f bins=%d %d %d %d %d %d %d %d",
+        nzCT, maxCT, sumCT / float(count), binsCT[0], binsCT[1], binsCT[2], binsCT[3], binsCT[4], binsCT[5], binsCT[6], binsCT[7]);
+}
+
+/**
+ * 手动落盘命令：sm_botroutefix_dangerdist [tag]（缺省 manual）
+ */
+public Action Command_DangerDist(int client, int args)
+{
+    char tag[32];
+    if (args >= 1)
+    {
+        GetCmdArg(1, tag, sizeof(tag));
+    }
+    else
+    {
+        strcopy(tag, sizeof(tag), "manual");
+    }
+    Module3_DumpDangerDist(tag, client);
+    return Plugin_Handled;
+}
+
+//========================================================================================
 // MODULE 3 EVENT HANDLERS
 //========================================================================================
 

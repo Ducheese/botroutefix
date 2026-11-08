@@ -13,6 +13,7 @@
 void InitCommands()
 {
     RegAdminCmd("sm_botroutefix_status", Command_Status, ADMFLAG_GENERIC, "View BotRouteFix module status and architecture info");
+    RegAdminCmd("sm_botroutefix_dangerdist", Command_DangerDist, ADMFLAG_GENERIC, "Dump per-area danger distribution to data/botroutefix_danger_<tag>.csv");
 }
 
 //========================================================================================
