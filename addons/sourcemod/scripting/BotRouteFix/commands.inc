@@ -12,8 +12,28 @@
  */
 void InitCommands()
 {
-    RegAdminCmd("sm_botroutefix_status", Command_Status, ADMFLAG_GENERIC, "View BotRouteFix module status and architecture info");
-    RegAdminCmd("sm_botroutefix_dangerdist", Command_DangerDist, ADMFLAG_GENERIC, "Dump per-area danger distribution to data/botroutefix_danger_<tag>.csv");
+    RegAdminCmd("sm_brf_status", Command_Status, ADMFLAG_GENERIC, "View BotRouteFix module status and architecture info");
+    RegAdminCmd("sm_brf_dangerdist", Command_DangerDist, ADMFLAG_GENERIC, "Dump per-area danger distribution to data/botroutefix_danger_<tag>.csv");
+}
+
+/**
+ * 手动落盘命令：sm_brf_dangerdist [tag]（缺省 manual）
+ *
+ * 命令入口集中于此（跨模块调用 M3 落盘函数）；注册见 InitCommands。
+ */
+public Action Command_DangerDist(int client, int args)
+{
+    char tag[32];
+    if (args >= 1)
+    {
+        GetCmdArg(1, tag, sizeof(tag));
+    }
+    else
+    {
+        strcopy(tag, sizeof(tag), "manual");
+    }
+    Module3_DumpDangerDist(tag, client);
+    return Plugin_Handled;
 }
 
 //========================================================================================
@@ -179,7 +199,7 @@ static void PrintChanceRoster(int client, int module, const char[] tag, bool ctO
 //========================================================================================
 
 /**
- * 服务端状态遥测（sm_botroutefix_status），分两段：
+ * 服务端状态遥测（sm_brf_status），分两段：
  *   前半 = 15 模块启停状态（ACTIVE 光杆 counts，DEGRADED/FAILED 点名 failed 事项居中、
  *          counts 挂尾，INACTIVE 显示 disabled by rule；不带 live，不报 active 名单）；
  *   后半 = Live：全局快照（炸弹三态 + 双方士气两行，与任何模块开关无关）+
@@ -190,7 +210,7 @@ static void PrintChanceRoster(int client, int module, const char[] tag, bool ctO
  * 签名依赖声明：炸弹携带/掉落/已安放走事件 + 武器槽扫描；包点 A/B 暂无内存来源，
  * 不显示；士气与概率名单强依赖 CCSBot_Morale_Offset，丢失时士气行显示 unavailable，
  * 概率名单行不出（不出假数据）。
- * 注：本命令显示内容与 sm_botroutefix_debug 无关；debug 只控制各模块内部
+ * 注：本命令显示内容与 sm_brf_debug 无关；debug 只控制各模块内部
  * DebugLog 与调试可视化。头部的 Debug: ON/OFF 仅为开关状态展示。
  */
 public Action Command_Status(int client, int args)

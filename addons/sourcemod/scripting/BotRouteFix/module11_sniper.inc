@@ -25,7 +25,8 @@
 //         每次感知更新推入的 m_enemyQueue 瞬时感知威胁队列逆序回溯提取当帧目击的狙击手实体；
 //      3) 武器判断全面覆盖：同时检索 m_hActiveWeapon 与 Slot 0 主武器，杜绝狙击手切副手/刀具时漏判；
 //    - 走廊加压：经 NavMeasure 的临时探测（内部调用 CCSBot::ComputePath，快照-还原）生成通往狙击手的
-//      A* 走廊，最多遍历前 20 步 NavArea 钉刺 +0.8f 危险度（封顶 2.5f，遵循 1.0/120.0s 沉降契约）；
+//      A* 走廊，最多遍历前 64 步 NavArea 钉刺 +0.8f 危险度（封顶 2.5f，遵循 1.0/120.0s 沉降契约；
+//      步数上限与可视化名单容量 MAX_PRESSURIZED_AREAS 对齐，单次事件输出恒能完整落盘）；
 //      爬梯中跳过探测（梯子子状态不在快照范围）；
 //    - 撤退请求：仅发 Module5_RequestSniperRetreat（带 2 秒 TTL），不碎路径——
 //      是否真撤、撤多久由 M5 按身份/阶段裁决，避免硬豁免目标被本模块打断使命动作。
@@ -46,7 +47,7 @@
 
 #define SNIPER_NAIL_DANGER      0.8
 #define SNIPER_NAIL_MAX         2.5
-#define SNIPER_MAX_STEPS        20
+#define SNIPER_MAX_STEPS        64
 // 沉降速率 DANGER_DECAY_RATE_SEC 统一定义于 global.inc
 
 // 贴脸无效化距离（units）：距狙小于此值视为步枪，不钉 danger、不碎路径、不请求撤退
@@ -59,6 +60,21 @@ static bool g_bModule11_RuleOn = false;
 static bool g_bSpottedSniperHooked = false;
 static Handle g_hSpottedSniperDetour = null;
 static int g_iTotalSniperRequests = 0;
+
+// 目击连线追踪：发现者 -> 狙击手（SpottedSniper 事件驱动，高亮 10 秒，与 M9/M10 同画法）
+#define SNIPER_PAIR_HIGHLIGHT_SEC   10.0
+#define MAX_SNIPER_PAIRS            8
+static int g_SniperPairSpotter[MAX_SNIPER_PAIRS];
+static int g_SniperPairSniper[MAX_SNIPER_PAIRS];
+static float g_flSniperPairExpire[MAX_SNIPER_PAIRS];
+static int g_iSniperPairCount = 0;
+
+// 走廊高亮追踪：被加压过的走廊 NavArea（钉刺后高亮 60 秒，只画圈）
+#define SNIPER_CORRIDOR_HIGHLIGHT_SEC   60.0
+#define MAX_PRESSURIZED_AREAS           64
+static Address g_PressurizedAreas[MAX_PRESSURIZED_AREAS];
+static float g_flPressurizedExpire[MAX_PRESSURIZED_AREAS];
+static int g_iPressurizedAreaCount = 0;
 
 // 缓存偏移（Danger/DangerTimestamp 上收 nav_measure.inc 共享，本文件只用不存）
 static int g_iOffset_ChatterMe       = -1;
@@ -257,6 +273,85 @@ int Module11_GetTotalSniperRequests()
     return g_iTotalSniperRequests;
 }
 
+/**
+ * 获取当前高亮期内的目击连线二元组（发现者 -> 狙击手）。
+ *
+ * 事项 M11 目击连线可视化的读取出口（跨模块只读，供 visuals 快定时绘制）。
+ * 失败语义：无记录/全部过期时返回 0（调用方画零线）。
+ * 门禁：无（读侧解耦；写侧由钩子载体门禁，模块关闭时名单恒空）。
+ *
+ * @param spotters      输出发现者客户端索引数组
+ * @param snipers       输出狙击手客户端索引数组
+ * @return              实际有效对数
+ */
+int Module11_GetSniperPairs(int spotters[MAX_SNIPER_PAIRS], int snipers[MAX_SNIPER_PAIRS])
+{
+    float curtime = GetGameTime();
+    int count = 0;
+    for (int i = 0; i < g_iSniperPairCount; i++)
+    {
+        if (g_SniperPairSpotter[i] > 0 && g_SniperPairSniper[i] > 0 && curtime < g_flSniperPairExpire[i])
+        {
+            spotters[count] = g_SniperPairSpotter[i];
+            snipers[count] = g_SniperPairSniper[i];
+            count++;
+        }
+    }
+    return count;
+}
+
+/**
+ * 获取当前高亮期内的加压走廊 NavArea（只画圈用）。
+ *
+ * 事项 M11 走廊可视化的读取出口（跨模块只读，供 visuals 慢定时绘制）。
+ * 失败语义：名单为空/全部过期时返回 0（调用方画零环）。
+ * 门禁：无（读侧解耦；写侧由钉刺事项武装门禁，关闭时名单恒空）。
+ *
+ * @param areas         输出 NavArea 指针数组
+ * @param expires       输出各 Area 的过期时间戳
+ * @return              实际有效数量
+ */
+int Module11_GetPressurizedCorridors(Address areas[MAX_PRESSURIZED_AREAS], float expires[MAX_PRESSURIZED_AREAS])
+{
+    float curtime = GetGameTime();
+    int count = 0;
+    for (int i = 0; i < g_iPressurizedAreaCount; i++)
+    {
+        if (g_PressurizedAreas[i] != Address_Null && curtime < g_flPressurizedExpire[i])
+        {
+            areas[count] = g_PressurizedAreas[i];
+            expires[count] = g_flPressurizedExpire[i];
+            count++;
+        }
+    }
+    return count;
+}
+
+//========================================================================================
+// MODULE 11 EVENT HANDLERS
+//========================================================================================
+
+/**
+ * 回合重置：清空目击连线名单（与 M8 同步，避免跨回合残影）。
+ *
+ * 纯幂等清理，依底层契约天然豁免守卫。
+ */
+void Module11_OnRoundStart()
+{
+    g_iSniperPairCount = 0;
+    g_iPressurizedAreaCount = 0;
+}
+
+/**
+ * 地图加载：换图清空名单（客户端槽位会被复用，旧索引野掉）。
+ *
+ * 纯幂等清理，依底层契约天然豁免守卫。
+ */
+void Module11_OnMapStart()
+{
+    Module11_OnRoundStart();
+}
+
 //========================================================================================
 // MODULE 11 DETOUR & HOOKS (BOTCHATTERINTERFACE::SPOTTEDSNIPER, POST)
 //========================================================================================
@@ -309,6 +404,9 @@ public MRESReturn Hook_SpottedSniper_Post(Address pThis, DHookParam hParams)
         return MRES_Ignored;
     }
 
+    // 目击连线追踪登记（与走廊钉刺解耦：贴脸放行也画，画的是目击关系不是走廊威胁）
+    RecordSniperPair(spotter, sniper, curtime + SNIPER_PAIR_HIGHLIGHT_SEC);
+
     int teamIdx = spotterTeam - 2;
 
     // 3. 贴脸无效化：distance < 265 时狙击枪退化为步枪，只构成点威胁、不构成走廊威胁。
@@ -339,6 +437,7 @@ public MRESReturn Hook_SpottedSniper_Post(Address pThis, DHookParam hParams)
             if (Sniper_NailDanger(pArea, teamIdx, curtime))
             {
                 nailedAreas++;
+                RecordPressurizedCorridor(pArea, curtime + SNIPER_CORRIDOR_HIGHLIGHT_SEC);
             }
         }
     }
@@ -567,4 +666,101 @@ static bool Sniper_NailDanger(Address pArea, int teamIdx, float curtime)
     StoreToAddress(pArea + view_as<Address>(g_iOffset_Danger + teamIdx * 4), view_as<int>(newDanger), NumberType_Int32);
     StoreToAddress(pArea + view_as<Address>(g_iOffset_DangerTimestamp + teamIdx * 4), view_as<int>(curtime), NumberType_Int32);
     return true;
+}
+
+/**
+ * 目击连线追踪登记：记下 (发现者, 狙击手) 二元组，高亮 SNIPER_PAIR_HIGHLIGHT_SEC 秒。
+ *
+ * 事项 M11 目击连线可视化的追踪登记（写侧；SpottedSniper 钩子内调用，不分贴脸/走廊）。
+ * 同一二元组重复登记只刷新过期时间；满 8 组挤掉最早过期的。任一槽位无效直接返回。
+ * 与 M8 RecordBlockedArea 同构（定长名单 + 刷新续期 + 挤最旧）。
+ */
+static void RecordSniperPair(int spotter, int sniper, float expireTime)
+{
+    if (spotter <= 0 || sniper <= 0)
+    {
+        return;
+    }
+
+    for (int i = 0; i < g_iSniperPairCount; i++)
+    {
+        if (g_SniperPairSpotter[i] == spotter && g_SniperPairSniper[i] == sniper)
+        {
+            if (expireTime > g_flSniperPairExpire[i])
+            {
+                g_flSniperPairExpire[i] = expireTime;
+            }
+            return;
+        }
+    }
+
+    if (g_iSniperPairCount < MAX_SNIPER_PAIRS)
+    {
+        g_SniperPairSpotter[g_iSniperPairCount] = spotter;
+        g_SniperPairSniper[g_iSniperPairCount] = sniper;
+        g_flSniperPairExpire[g_iSniperPairCount] = expireTime;
+        g_iSniperPairCount++;
+        return;
+    }
+
+    int oldestIdx = 0;
+    float oldestTime = g_flSniperPairExpire[0];
+    for (int i = 1; i < MAX_SNIPER_PAIRS; i++)
+    {
+        if (g_flSniperPairExpire[i] < oldestTime)
+        {
+            oldestTime = g_flSniperPairExpire[i];
+            oldestIdx = i;
+        }
+    }
+    g_SniperPairSpotter[oldestIdx] = spotter;
+    g_SniperPairSniper[oldestIdx] = sniper;
+    g_flSniperPairExpire[oldestIdx] = expireTime;
+}
+
+/**
+ * 走廊加压可视化追踪登记：记下钉过 danger 的走廊 NavArea，高亮 SNIPER_CORRIDOR_HIGHLIGHT_SEC 秒。
+ *
+ * 事项 M11 走廊可视化的追踪登记（写侧；钉刺路径调用，调用点已按事项武装门禁）。
+ * 同一 Area 重复登记只刷新过期时间；满上限挤掉最早过期的。空地址直接返回。
+ */
+static void RecordPressurizedCorridor(Address pArea, float expireTime)
+{
+    if (pArea == Address_Null)
+    {
+        return;
+    }
+
+    for (int i = 0; i < g_iPressurizedAreaCount; i++)
+    {
+        if (g_PressurizedAreas[i] == pArea)
+        {
+            if (expireTime > g_flPressurizedExpire[i])
+            {
+                g_flPressurizedExpire[i] = expireTime;
+            }
+            return;
+        }
+    }
+
+    if (g_iPressurizedAreaCount < MAX_PRESSURIZED_AREAS)
+    {
+        g_PressurizedAreas[g_iPressurizedAreaCount] = pArea;
+        g_flPressurizedExpire[g_iPressurizedAreaCount] = expireTime;
+        g_iPressurizedAreaCount++;
+        return;
+    }
+
+    int oldestIdx = 0;
+    float oldestTime = g_flPressurizedExpire[0];
+    for (int i = 1; i < MAX_PRESSURIZED_AREAS; i++)
+    {
+        if (g_flPressurizedExpire[i] < oldestTime)
+        {
+            oldestTime = g_flPressurizedExpire[i];
+            oldestIdx = i;
+        }
+    }
+    g_PressurizedAreas[oldestIdx] = pArea;
+    g_flPressurizedExpire[oldestIdx] = expireTime;
 }

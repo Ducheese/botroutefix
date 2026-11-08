@@ -496,7 +496,7 @@ void ApplyModulesConfig()
  */
 void InitModuleManager()
 {
-    g_cvModules = CreateConVar("sm_botroutefix_modules", "all",
+    g_cvModules = CreateConVar("sm_brf_modules", "all",
         "Configure active tactical modules ('all', 'none', whitelist '1,2,5-8', or blacklist 'all,-5,-13')",
         FCVAR_NOTIFY);
 

@@ -71,7 +71,7 @@ stock void StoreAddressToAddress(Address addr, Address val, bool updateMemAccess
 //========================================================================================
 
 /**
- * 输出调试级战术遥测日志（仅在 sm_botroutefix_debug 开启时输出到控制台）
+ * 输出调试级战术遥测日志（仅在 sm_brf_debug 开启时输出到控制台）
  *
  * @param format     格式化字符串
  * @param ...        格式化参数列表

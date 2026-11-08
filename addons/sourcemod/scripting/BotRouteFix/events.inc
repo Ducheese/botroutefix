@@ -78,6 +78,7 @@ public void Event_RoundStart(Event event, const char[] name, bool dontBroadcast)
     Module8_OnRoundStart();
     Module9_OnRoundStart();
     Module10_OnRoundStart();
+    Module11_OnRoundStart();
 }
 
 public void Event_RoundFreezeEnd(Event event, const char[] name, bool dontBroadcast)

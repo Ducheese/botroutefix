@@ -350,30 +350,13 @@ bool Module3_GetNavAreaDanger(Address pArea, float &dangerT, float &dangerCT)
     return true;
 }
 
-//========================================================================================
-// MODULE 3 DANGER DISTRIBUTION DUMP (诊断：遍历全图 area 读双阵营沉降后 danger)
-//========================================================================================
-//
-// 仅手动命令触发（sm_botroutefix_dangerdist [tag]），无自动落盘。
-// 摘要同时 LogMessage（服务端日志）与 ReplyToCommand（调用者回显）。
-//========================================================================================
-
-// 直方图分箱：0 | (0,0.05) | [0.05,0.2) | [0.2,0.5) | [0.5,1) | [1,2) | [2,5) | [5,+inf)
-static int DangerDistBin(float d)
-{
-    if (d <= 0.0) return 0;
-    if (d < 0.05) return 1;
-    if (d < 0.2)  return 2;
-    if (d < 0.5)  return 3;
-    if (d < 1.0)  return 4;
-    if (d < 2.0)  return 5;
-    if (d < 5.0)  return 6;
-    return 7;
-}
-
 /**
  * 遍历 TheNavAreas，逐 area 读沉降后双阵营 danger，写 CSV；摘要同时进
  * 服务端日志（LogMessage）与调用者回显（ReplyToCommand）。
+ *
+ * 事项 M3 高危可视化与手动落盘的落盘入口（跨模块只读观测 + 文件输出）。
+ * 失败语义：容器未解析/数量非法/数组基址空/文件打不开，一律 LogError 并返回（无文件或空文件）。
+ * 门禁：无（命令即授权；与 M3 事项启停解耦）。
  *
  * @param tag           文件名标签（data/botroutefix_danger_<tag>.csv）
  * @param client        回显目标（0 = 服务端控制台）
@@ -446,24 +429,6 @@ void Module3_DumpDangerDist(const char[] tag, int client = 0)
         nzT, maxT, sumT / float(count), binsT[0], binsT[1], binsT[2], binsT[3], binsT[4], binsT[5], binsT[6], binsT[7]);
     ReplyToCommand(client, "[BotRouteFix] [Module 3] CT: nz=%d max=%.2f mean=%.3f bins=%d %d %d %d %d %d %d %d",
         nzCT, maxCT, sumCT / float(count), binsCT[0], binsCT[1], binsCT[2], binsCT[3], binsCT[4], binsCT[5], binsCT[6], binsCT[7]);
-}
-
-/**
- * 手动落盘命令：sm_botroutefix_dangerdist [tag]（缺省 manual）
- */
-public Action Command_DangerDist(int client, int args)
-{
-    char tag[32];
-    if (args >= 1)
-    {
-        GetCmdArg(1, tag, sizeof(tag));
-    }
-    else
-    {
-        strcopy(tag, sizeof(tag), "manual");
-    }
-    Module3_DumpDangerDist(tag, client);
-    return Plugin_Handled;
 }
 
 //========================================================================================
@@ -583,6 +548,23 @@ static void DecayAllNavAreaDanger()
     DebugLog("[BotRouteFix] ============== Round Start ==============");
     DebugLog("[BotRouteFix] [Module 3] Decayed danger (80%% reduction) across %d NavAreas (%d active) for round start.",
         count, decayCount);
+}
+
+/**
+ * 直方图分箱：0 | (0,0.05) | [0.05,0.2) | [0.2,0.5) | [0.5,1) | [1,2) | [2,5) | [5,+inf)
+ *
+ * 事项 M3 高危可视化收集与手动落盘的共用分箱原语（纯函数，无失败态）。
+ */
+static int DangerDistBin(float d)
+{
+    if (d <= 0.0) return 0;
+    if (d < 0.05) return 1;
+    if (d < 0.2)  return 2;
+    if (d < 0.5)  return 3;
+    if (d < 1.0)  return 4;
+    if (d < 2.0)  return 5;
+    if (d < 5.0)  return 6;
+    return 7;
 }
 
 

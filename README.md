@@ -431,12 +431,12 @@ addons\sourcemod\
 ### ConVar
 | ConVar | 默认值 | 说明 |
 | :--- | :--- | :--- |
-| `sm_botroutefix_version` | `"2.0.0"` | 插件版本（FCVAR_NOTIFY） |
-| `sm_botroutefix_modules` | `"all"`   | 模块规则：灵活配置启用哪些模块（支持 `"all"`、`"none"`、排除模式 `"-5, -13"` 或 `"all, -5"`、指定模式 `"1, 2, 5-8"`） |
-| `sm_botroutefix_debug`   | `"0"`     | 是否开启各模块内部逐行调试日志与调试可视化 |
+| `sm_brf_version` | `"2.0.0"` | 插件版本（FCVAR_NOTIFY） |
+| `sm_brf_modules` | `"all"`   | 模块规则：灵活配置启用哪些模块（支持 `"all"`、`"none"`、排除模式 `"-5, -13"` 或 `"all, -5"`、指定模式 `"1, 2, 5-8"`） |
+| `sm_brf_debug`   | `"0"`     | 是否开启各模块内部逐行调试日志与调试可视化 |
 
 #### 模块规则说明
-通过 `sm_botroutefix_modules` 单一参数即可灵活管理 15 个战术模块，支持以下用法：
+通过 `sm_brf_modules` 单一参数即可灵活管理 15 个战术模块，支持以下用法：
 - **默认全开**：`"all"` 或 `"*"`（1~15 号全部开启，开箱即用推荐）；
 - **排除模式（做减法）**：以 `-` 开头，在全开基准上关闭指定项。如 `"-5, -13"`（全开，仅关闭模块 5 和 13），`"all, -8-10"`（全开，排除 8~10 号）；
 - **指定模式（做加法）**：输入正整数或区间，仅开启列出的项。如 `"8, 9"`（仅开启模块 8 和 9，其余全关），`"1-4, 7"`；
@@ -448,13 +448,13 @@ addons\sourcemod\
 - **越界处理**：部分越界自动截断到 1~15（`"15-20"` 视为 15，`"0-5"` 视为 1~5）；完全越界（`"99"`、`"20-30"`、`"-99"`）视为无效 Token，若整条规则无任何有效项则回退 `"all"`；
 - **容错设计**：支持逗号、分号或空格分隔，区间支持 `-` 与 `~`，输入不区分大小写，变更即刻热生效；规则日志仅在规则实际变化时打印，换图不会重复刷屏。
 
-> 旧总开关 `sm_botroutefix_enable` 已彻底移除：事件总线不再做任何全局粗暴拦截，
+> 旧总开关 `sm_botroutefix_enable`（历史名）已彻底移除：事件总线不再做任何全局粗暴拦截，
 > 模块启停统一收敛为各模块独立业务态（`EnableModuleX`），避免一刀切拦截对局炸弹状态与事件分发。
 
 ### 控制台指令
 | 指令 | 权限 | 说明 |
 | :--- | :--- | :--- |
-| `sm_botroutefix_status` | 管理员 (`ADMFLAG_GENERIC`) | 分两段：前半 15 模块启停行（`ACTIVE` 光杆 counts，`DEGRADED` / `FAILED` 点名 failed 事项居中、counts 永远挂尾，`INACTIVE` 显示 `disabled by rule`；静态士气公式在模块名里，label 定稿见 `F:\Git\scratch\botroutefix-status-labels.md`）；后半 `Live`（与上分隔行等长）：全局炸弹三态 `PLANTED` / `DROPPED` / `CARRIED by <人> (士气/身份)`（不显示包点）+ 士气两行（`T n bots alive (AVG Morale: +x 名)`，avg 只统计存活；`T Morale: [...]` 全员名单不筛存活；偏移丢失时显示 `unavailable`）+ 各模块快照行（`M01 CT Guard` / `M02 锁+延迟五变种` / `M03~M15 计数器与名册` + `M12/M13/M14` per-bot 概率名单；仅 `ACTIVE` / `DEGRADED`；per-bot 现算值不进 live）。累积计数器单调递增、换图不清零 |
+| `sm_brf_status` | 管理员 (`ADMFLAG_GENERIC`) | 分两段：前半 15 模块启停行（`ACTIVE` 光杆 counts，`DEGRADED` / `FAILED` 点名 failed 事项居中、counts 永远挂尾，`INACTIVE` 显示 `disabled by rule`；静态士气公式在模块名里，label 定稿见 `F:\Git\scratch\botroutefix-status-labels.md`）；后半 `Live`（与上分隔行等长）：全局炸弹三态 `PLANTED` / `DROPPED` / `CARRIED by <人> (士气/身份)`（不显示包点）+ 士气两行（`T n bots alive (AVG Morale: +x 名)`，avg 只统计存活；`T Morale: [...]` 全员名单不筛存活；偏移丢失时显示 `unavailable`）+ 各模块快照行（`M01 CT Guard` / `M02 锁+延迟五变种` / `M03~M15 计数器与名册` + `M12/M13/M14` per-bot 概率名单；仅 `ACTIVE` / `DEGRADED`；per-bot 现算值不进 live）。累积计数器单调递增、换图不清零 |
 
 ### 初始化日志口径（Initialization 契约）
 
@@ -466,7 +466,7 @@ addons\sourcemod\
   - 武装确认统一走 `LogModuleArmed`：`[Module N] <label> items armed (<detail>) [<arch>]`，多事项列名，单事项只放数字。
 - **变体**：部分武装 → `LogModulePartial`（`Partial activation (...)`）；事项全灭 → `LogModuleAllFailed`（`All items failed; module will report FAILED.`）；失败原因各事项就地 `LogError`。
 - **Hook 回调日志口径**：前缀统一 `[BotRouteFix] [Module N]`；`DebugLog` 只记离散事件/状态变化（选举/拾取/安放/重定向/放行/认领），不记每 tick 求值——M4 的 `HuntState::OnUpdate` pre/post 刻意零输出（高频 tick），它的可观测面是 status 的 `total claims` 计数器；`LogError` 只用于不变量破坏（如 M7 非法名册数），普通业务分支一律 `DebugLog`；新增 Hook 回调必须带一行说明决策的 `DebugLog`，不留注释掉的死代码。
-- **准备期与运行期的门禁分界**：准备期输出（Prep/Mount/Apply/Restore/Enable 内的句柄创建、签名绑定、基线备份、补丁落子、`verified`/`Resolved` 确认行）走 Init 口径，**无条件输出，不受 `sm_botroutefix_debug` 约束**；运行期离散事件（Hook 回调/事件响应内的逐条决策，如持包人变更、锁落子/还原、士气处置切换）**必须走 `DebugLog`，受 debug 约束**。M2 锁落子/还原与 M6 逐条拦截/放行的 `DebugLog` 属后者（运行期逐 noise 事件），不是准备期，门控正确。
+- **准备期与运行期的门禁分界**：准备期输出（Prep/Mount/Apply/Restore/Enable 内的句柄创建、签名绑定、基线备份、补丁落子、`verified`/`Resolved` 确认行）走 Init 口径，**无条件输出，不受 `sm_brf_debug` 约束**；运行期离散事件（Hook 回调/事件响应内的逐条决策，如持包人变更、锁落子/还原、士气处置切换）**必须走 `DebugLog`，受 debug 约束**。M2 锁落子/还原与 M6 逐条拦截/放行的 `DebugLog` 属后者（运行期逐 noise 事件），不是准备期，门控正确。
 - **各模块检查点清单**：M1 守点/反冲各 1 个写入点；M2 单例指针 + 时钟偏移 + 锁写入点；M3 危险度偏移 + nav 解析 + 状态重置；M4 随机旁路写入点 + 搜寻偏移；M5 reload 写入点 + 闪避偏移 + 后撤后端；M6 士气 + 噪音感知偏移；M7 follow SDKCall + 士气偏移 + FollowMeme ret 补丁；M8 排队偏移 + 死锁 SDKCall；M9/M10 无（纯 hook/名册）；M11 走廊对抗偏移；M12 蹲守偏移 + 6 个 bypass 点；M13 rewrite/cave 二选一（按架构）；M14 4 站点 + 1 常量池；M15 隐藏时长偏移。
 
 ---

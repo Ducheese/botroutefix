@@ -7,7 +7,7 @@
 // VISUALS & TELEMETRY DEBUG OVERLAY SUBSYSTEM
 //
 // 游戏内视觉特效呈现子系统 (Visuals & TempEnts Engine)：
-// 受 sm_botroutefix_debug 单一 ConVar 总控约束：
+// 受 sm_brf_debug 单一 ConVar 总控约束：
 //   - debug == 0 时：两组 Timer 首行早退，0 计算、0 内存开销、0 网络流量静默；
 //   - debug == 1 时：利用 CS:S 原生 TempEnts (TE_SetupBeam*) 将 8 大模块实时战术决策
 //     以激光线、光环与 3D 警戒盒直接画进游戏世界。
@@ -23,13 +23,22 @@
 //     用 TE_SetupBeamFollow 拖尾跟随人物，0.6s 接力续 0.8s；
 //   - M6 (Disposition): 腰部静止环不区分阵营（绿色 OPPORTUNITY_FIRE vs 粉色 ENGAGE_AND_INVESTIGATE）；
 //   - M7 (Escort): 保镖胸膛连包匪胸膛，绿色光索（粗 3.0）；
-//   - M8 (Queue): 加过 danger 的 NavArea 显示红色 3D 警戒盒，持续至少 1 分钟；死锁打破时电光冲击波；
+//   - M8 (Queue): 堵路 NavArea 红色地面脉冲环（只画圈不画框，钉 danger 后高亮 60 秒）；死锁打破时电光冲击波；
+//   - M11 (Sniper): 发现者连狙击手青色波浪线（M9/M10 同款，目击后高亮 10 秒）＋加压走廊青色脉冲环（只画圈不画框，钉刺后高亮 60 秒）；
+//   - 包点：全图 func_bomb_target 白色 3D 体积框（即 m_bInBombZone 判定边界），只受 debug 总控，不按事项门控。
 //   - M9 (Loot): 抢包花名册 T 胸膛连掉落 C4，黄色波浪光束（粗 3.0，振幅 12.0）；
 //   - M10 (Defuse): 首席拆包 CT 胸膛连已安放 C4，蓝色波浪光束（粗 3.0，振幅 12.0）。
 //========================================================================================
 
 static int g_iLaserBeam = -1;
 static int g_iHalo = -1;
+
+// 包点 trigger 体积缓存（func_bomb_target 全枚举，静态盒，换图重解）
+#define MAX_BOMBSITES 8
+static float g_vecBombsiteMins[MAX_BOMBSITES][3];
+static float g_vecBombsiteMaxs[MAX_BOMBSITES][3];
+static int g_iBombsiteCount = 0;
+static bool g_bBombsitesResolved = false;
 
 /**
  * 预缓存原生激光与光环精灵纹理
@@ -38,6 +47,9 @@ void Visuals_OnMapStart()
 {
     g_iLaserBeam = PrecacheModel("materials/sprites/laserbeam.vmt", true);
     g_iHalo      = PrecacheModel("materials/sprites/halo01.vmt", true);
+
+    g_iBombsiteCount = 0;
+    g_bBombsitesResolved = false;
 }
 
 /**
@@ -83,7 +95,7 @@ static void NavArea_GetCenter(Address pArea, float center[3])
     center[2] = view_as<float>(LoadFromAddress(pArea + view_as<Address>(offsetCenter + 8), NumberType_Int32));
 }
 
-static void NavArea_GetCorners(Address pArea, float c0[3], float c1[3], float c2[3], float c3[3])
+stock void NavArea_GetCorners(Address pArea, float c0[3], float c1[3], float c2[3], float c3[3])
 {
     if (pArea == Address_Null)
     {
@@ -111,7 +123,7 @@ static void NavArea_GetCorners(Address pArea, float c0[3], float c1[3], float c2
     c3[0] = nwX; c3[1] = seY; c3[2] = swZ;
 }
 
-static void DrawNavAreaBox(Address pArea, const int color[4], float height = 36.0, float life = 1.05)
+stock void DrawNavAreaBox(Address pArea, const int color[4], float height = 36.0, float life = 1.05)
 {
     float c0[3], c1[3], c2[3], c3[3];
     NavArea_GetCorners(pArea, c0, c1, c2, c3);
@@ -122,13 +134,7 @@ static void DrawNavAreaBox(Address pArea, const int color[4], float height = 36.
     t2[0] = c2[0]; t2[1] = c2[1]; t2[2] = c2[2] + height;
     t3[0] = c3[0]; t3[1] = c3[1]; t3[2] = c3[2] + height;
 
-    // 底面矩形边框
-    DrawBeam(c0, c1, color, 3.0, 0.0, life);
-    DrawBeam(c1, c2, color, 3.0, 0.0, life);
-    DrawBeam(c2, c3, color, 3.0, 0.0, life);
-    DrawBeam(c3, c0, color, 3.0, 0.0, life);
-
-    // 四角垂直立柱
+    // 四角垂直立柱（底面矩形边框已省略，只留柱与顶面）
     DrawBeam(c0, t0, color, 3.0, 0.0, life);
     DrawBeam(c1, t1, color, 3.0, 0.0, life);
     DrawBeam(c2, t2, color, 3.0, 0.0, life);
@@ -144,6 +150,75 @@ static void DrawNavAreaBox(Address pArea, const int color[4], float height = 36.
     float center[3];
     NavArea_GetCenter(pArea, center);
     DrawRing(center, 20.0, 80.0, color, 3.0, life, 15);
+}
+
+/**
+ * 枚举全图 func_bomb_target，缓存其世界碰撞盒（m_vecOrigin + m_vecMins/Maxs）。
+ * 实体尚未生成时返回 false，调用方下次 tick 重试；换图由 Visuals_OnMapStart 复位。
+ */
+static bool ResolveBombsiteBoxes()
+{
+    if (g_bBombsitesResolved)
+    {
+        return true;
+    }
+
+    g_iBombsiteCount = 0;
+
+    int ent = -1;
+    while ((ent = FindEntityByClassname(ent, "func_bomb_target")) != -1)
+    {
+        if (g_iBombsiteCount >= MAX_BOMBSITES)
+        {
+            break;
+        }
+
+        float origin[3], mins[3], maxs[3];
+        GetEntPropVector(ent, Prop_Data, "m_vecOrigin", origin);
+        GetEntPropVector(ent, Prop_Data, "m_vecMins", mins);
+        GetEntPropVector(ent, Prop_Data, "m_vecMaxs", maxs);
+
+        for (int a = 0; a < 3; a++)
+        {
+            g_vecBombsiteMins[g_iBombsiteCount][a] = origin[a] + mins[a];
+            g_vecBombsiteMaxs[g_iBombsiteCount][a] = origin[a] + maxs[a];
+        }
+        g_iBombsiteCount++;
+    }
+
+    if (g_iBombsiteCount > 0)
+    {
+        g_bBombsitesResolved = true;
+    }
+    return g_bBombsitesResolved;
+}
+
+/**
+ * 按世界碰撞盒画 12 条边（静态 trigger 体积即 m_bInBombZone 判定边界）。
+ */
+static void DrawBrushBox(const float mins[3], const float maxs[3], const int color[4], float life = 1.05)
+{
+    float b0[3], b1[3], b2[3], b3[3], t0[3], t1[3], t2[3], t3[3];
+    b0[0] = mins[0]; b0[1] = mins[1]; b0[2] = mins[2];
+    b1[0] = maxs[0]; b1[1] = mins[1]; b1[2] = mins[2];
+    b2[0] = maxs[0]; b2[1] = maxs[1]; b2[2] = mins[2];
+    b3[0] = mins[0]; b3[1] = maxs[1]; b3[2] = mins[2];
+    t0[0] = mins[0]; t0[1] = mins[1]; t0[2] = maxs[2];
+    t1[0] = maxs[0]; t1[1] = mins[1]; t1[2] = maxs[2];
+    t2[0] = maxs[0]; t2[1] = maxs[1]; t2[2] = maxs[2];
+    t3[0] = mins[0]; t3[1] = maxs[1]; t3[2] = maxs[2];
+
+    // 四角垂直立柱（底面矩形边框已省略，只留柱与顶面）
+    DrawBeam(b0, t0, color, 3.0, 0.0, life);
+    DrawBeam(b1, t1, color, 3.0, 0.0, life);
+    DrawBeam(b2, t2, color, 3.0, 0.0, life);
+    DrawBeam(b3, t3, color, 3.0, 0.0, life);
+
+    // 顶面矩形边框
+    DrawBeam(t0, t1, color, 2.0, 0.0, life);
+    DrawBeam(t1, t2, color, 2.0, 0.0, life);
+    DrawBeam(t2, t3, color, 2.0, 0.0, life);
+    DrawBeam(t3, t0, color, 2.0, 0.0, life);
 }
 
 //========================================================================================
@@ -429,11 +504,33 @@ public Action Timer_RenderVisualsFast(Handle timer)
         }
     }
 
+    //------------------------------------------------------------------------------------
+    // [M11] 目击连线：发现者胸膛直连狙击手胸膛青色波浪光束（M9/M10 同款）
+    //------------------------------------------------------------------------------------
+    if (Item_IsArmed(ITEM_M11_CORRIDOR))
+    {
+        int spotters[MAX_SNIPER_PAIRS], snipers[MAX_SNIPER_PAIRS];
+        int pairCount = Module11_GetSniperPairs(spotters, snipers);
+
+        static const int colorSniperLink[4] = {0, 220, 255, 220}; // 青色（与 M5 遇狙同色）
+        for (int i = 0; i < pairCount; i++)
+        {
+            if (!IsBot(spotters[i], true) || !IsValidClient(snipers[i], true))
+            {
+                continue;
+            }
+            float spotterChest[3], sniperChest[3];
+            GetBotChestPosition(spotters[i], spotterChest);
+            GetBotChestPosition(snipers[i], sniperChest);
+            DrawBeam(spotterChest, sniperChest, colorSniperLink, 3.0, 12.0, 0.25);
+        }
+    }
+
     return Plugin_Continue;
 }
 
 /**
- * 慢速循环 (每 1.0s 刷新一次持续 60s 的堵路 3D 警戒框)
+ * 慢速循环 (每 1.0s 刷新一次：M8 堵路红环 + 白色包点体积框 + M11 走廊青环)
  */
 public Action Timer_RenderVisualsSlow(Handle timer)
 {
@@ -448,7 +545,7 @@ public Action Timer_RenderVisualsSlow(Handle timer)
     }
 
     //------------------------------------------------------------------------------------
-    // [M8] 堵路 NavArea 红色 3D 警戒框 (持续至少 1 分钟)
+    // [M8] 堵路 NavArea 红色地面脉冲环（只画圈不画框，钉 danger 后高亮 60 秒）
     //------------------------------------------------------------------------------------
     if (Item_IsArmed(ITEM_M8_QUEUE))
     {
@@ -459,7 +556,40 @@ public Action Timer_RenderVisualsSlow(Handle timer)
         static const int colorBlockedArea[4] = {255, 30, 30, 220}; // 红色
         for (int i = 0; i < count; i++)
         {
-            DrawNavAreaBox(areas[i], colorBlockedArea, 36.0, 1.05);
+            float center[3];
+            NavArea_GetCenter(areas[i], center);
+            DrawRing(center, 20.0, 80.0, colorBlockedArea, 3.0, 1.05, 15);
+        }
+    }
+
+    //------------------------------------------------------------------------------------
+    // [包点] 全图 func_bomb_target 白色 3D 体积框
+    //   不按事项门控（M2/M7 无关）：只要 debug 总控开着就画，画的就是 m_bInBombZone 判定边界。
+    //------------------------------------------------------------------------------------
+    if (ResolveBombsiteBoxes())
+    {
+        static const int colorBombsite[4] = {255, 255, 255, 220}; // 白色
+        for (int i = 0; i < g_iBombsiteCount; i++)
+        {
+            DrawBrushBox(g_vecBombsiteMins[i], g_vecBombsiteMaxs[i], colorBombsite, 1.05);
+        }
+    }
+
+    //------------------------------------------------------------------------------------
+    // [M11] 狙击加压走廊青色脉冲光环（与 M5 遇狙同色，只画圈不画框，钉刺后高亮 60 秒）
+    //------------------------------------------------------------------------------------
+    if (Item_IsArmed(ITEM_M11_CORRIDOR))
+    {
+        Address corridorAreas[MAX_PRESSURIZED_AREAS];
+        float corridorExpires[MAX_PRESSURIZED_AREAS];
+        int corridorCount = Module11_GetPressurizedCorridors(corridorAreas, corridorExpires);
+
+        static const int colorPressurized[4] = {0, 220, 255, 220}; // 青色
+        for (int i = 0; i < corridorCount; i++)
+        {
+            float center[3];
+            NavArea_GetCenter(corridorAreas[i], center);
+            DrawRing(center, 20.0, 100.0, colorPressurized, 3.0, 1.05, 12);
         }
     }
 
