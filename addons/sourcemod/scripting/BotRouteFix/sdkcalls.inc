@@ -16,6 +16,7 @@ Handle g_hSDKCall_StopFollowing    = null;
 Handle g_hSDKCall_ComputePath      = null;
 Handle g_hSDKCall_IsOutnumbered    = null;
 Handle g_hSDKCall_Hunt             = null;
+Handle g_hSDKCall_ResetStuckMonitor = null;
 Handle g_hSDKCall_IsSniper         = null;
 
 //========================================================================================
@@ -110,6 +111,22 @@ static bool PrepSDKCall_Hunt()
 }
 
 /**
+ * 事项 M8 排队打碎的 ResetStuckMonitor 后端准备；缺失则 M8 queue 事项 FAILED。
+ */
+static bool PrepSDKCall_ResetStuckMonitor()
+{
+    StartPrepSDKCall(SDKCall_Entity);
+    PrepSDKCall_SetFromConf(g_hGameConf, SDKConf_Signature, "CCSBot_ResetStuckMonitor");
+    g_hSDKCall_ResetStuckMonitor = EndPrepSDKCall();
+    if (g_hSDKCall_ResetStuckMonitor == null)
+    {
+        LogError("[BotRouteFix] [SDKCalls] CCSBot_ResetStuckMonitor unavailable (M8 queue will FAIL).");
+        return false;
+    }
+    return true;
+}
+
+/**
  * 狙击手引擎真值后端准备（CCSBot::IsSniper，主武器槽类型判定；非事项后端）。
  * 缺失不影响任何事项：M12 名单回退为不过滤（与旧行为一致），M11 回退名册硬编码。
  */
@@ -143,11 +160,12 @@ bool InitSDKCalls()
     if (!PrepSDKCall_ComputePath())    allReady = false;
     if (!PrepSDKCall_IsOutnumbered())  allReady = false;
     if (!PrepSDKCall_Hunt())           allReady = false;
+    if (!PrepSDKCall_ResetStuckMonitor()) allReady = false;
     if (!PrepSDKCall_IsSniper())       allReady = false;
 
     if (allReady)
     {
-        LogMessage("[BotRouteFix] [SDKCalls] All SDKCall backends ready (Follow, StopFollowing, ComputePath, IsOutnumbered, Hunt, IsSniper)");
+        LogMessage("[BotRouteFix] [SDKCalls] All SDKCall backends ready (Follow, StopFollowing, ComputePath, IsOutnumbered, Hunt, ResetStuckMonitor, IsSniper)");
     }
 
     return allReady;
@@ -186,6 +204,12 @@ void CleanupSDKCalls()
     {
         delete g_hSDKCall_Hunt;
         g_hSDKCall_Hunt = null;
+    }
+
+    if (g_hSDKCall_ResetStuckMonitor != null)
+    {
+        delete g_hSDKCall_ResetStuckMonitor;
+        g_hSDKCall_ResetStuckMonitor = null;
     }
 
     if (g_hSDKCall_IsSniper != null)
@@ -273,6 +297,26 @@ stock bool BotHunt(int bot)
     }
 
     SDKCall(g_hSDKCall_Hunt, bot);
+    return true;
+}
+
+/**
+ * 重置指定 Bot 的卡住监视器（CCSBot::ResetStuckMonitor）
+ *
+ * 清除 m_isStuck、卡住计时、速度采样与 m_areaEnteredTimestamp；
+ * M8 排队打碎后调用，与原生 polite timeout 的 ResetStuckMonitor() 对齐。
+ *
+ * @param bot       Bot 客户端索引 (必须为存活有效 Bot)
+ * @return          是否成功发起 SDKCall
+ */
+stock bool BotResetStuckMonitor(int bot)
+{
+    if (g_hSDKCall_ResetStuckMonitor == null || !IsBot(bot, true))
+    {
+        return false;
+    }
+
+    SDKCall(g_hSDKCall_ResetStuckMonitor, bot);
     return true;
 }
 

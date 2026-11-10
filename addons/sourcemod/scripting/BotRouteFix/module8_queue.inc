@@ -87,6 +87,12 @@ static bool PrepModule8_QueueBackend()
         return false;
     }
 
+    if (g_hSDKCall_ResetStuckMonitor == null)
+    {
+        LogError("[BotRouteFix] [Module 8] ResetStuckMonitor SDKCall missing; queue item FAILED.");
+        return false;
+    }
+
     LogMessage("[BotRouteFix] [Module 8] Queue offsets verified (waiting=%d, polite=%d, duration=%d, timestamp=%d, pathlen=%d, path=%d, stride=%d, stopping=%d, ladder=%d, danger=%d, dangerts=%d).",
         g_iOffset_Waiting, g_iOffset_PoliteTimer, g_iOffset_TimerDuration, g_iOffset_TimerTimestamp,
         g_iOffset_PathLength, g_iOffset_Path, g_iPathStride, g_iOffset_IsStopping, g_iOffset_PathLadder,
@@ -400,6 +406,9 @@ public MRESReturn Hook_UpdatePathMovement_Post(int client, DHookParam hParams)
     // 1. 清等待旗
     StoreToAddress(pBot + view_as<Address>(g_iOffset_Waiting), 0, NumberType_Int8);
 
+    // 1b. 复位卡住监视器（对齐原生 polite timeout 的 ResetStuckMonitor，避免残留 m_isStuck 导致 Wiggle/提前 give-up）
+    BotResetStuckMonitor(client);
+
     // 2. 钉住当前被堵 node 与下一个 node，逼 A* 绕开
     int pathIndex = LoadFromAddress(pBot + view_as<Address>(g_iOffset_PathIndex), NumberType_Int32);
     if (pathIndex < 0)
@@ -435,12 +444,10 @@ public MRESReturn Hook_UpdatePathMovement_Post(int client, DHookParam hParams)
         }
     }
 
-    // 4. 碎路径（引擎 DestroyPath 手工版）+ 礼貌 timer 置 -1 去残留，逼立即重算
+    // 4. 碎路径（引擎 DestroyPath 手工版三字段：isStopping/pathLength/pathLadder），逼立即重算
     StoreToAddress(pBot + view_as<Address>(g_iOffset_IsStopping), 0, NumberType_Int8);
     StoreToAddress(pBot + view_as<Address>(g_iOffset_PathLength), 0, NumberType_Int32);
-    StoreToAddress(pBot + view_as<Address>(g_iOffset_PathIndex), 0, NumberType_Int32);
     StoreAddressToAddress(pBot + view_as<Address>(g_iOffset_PathLadder), Address_Null);
-    StoreToAddress(pBot + view_as<Address>(g_iOffset_PoliteTimer + g_iOffset_TimerTimestamp), view_as<int>(-1.0), NumberType_Int32);
 
     g_iTotalQueueShattered++;
     DebugLog("[BotRouteFix] [Module 8] Bot %N broke %.1fs polite queue, nailed doorway danger", client, elapsedWait);
