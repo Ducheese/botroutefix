@@ -784,5 +784,3 @@ static void RestoreModule2_LockBackend()
             g_PatchBombsiteLock.address);
     }
 }
-
-

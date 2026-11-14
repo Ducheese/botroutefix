@@ -20,8 +20,10 @@
 // 归属原则：谁执行最终改写，谁拥有事项。
 //   - M11 只发撤退请求，最终后撤由 M5 执行 → 撤退归 M5，M11 只有走廊 danger。
 //   - M15 亲手写 m_duration → 短蹲与缩放同属 M15 一件事。
-//   - M6 亲手写 disposition → 事件写入与钩子拦截同属 M6 一件事。
-//   - M9/M10 的选举只是本模块门禁的预热，不改变引擎行为，不计事项。
+//   - M6 亲手写下包 OPPO → 下包 OPPO 归 M6，噪声钩子拦截与事件写入同属 M6 一件事（Detour / 偏移 / SDKCall 缺失即 FAILED）。
+//   - M9 亲手写抢包 OPPO → 抢包 OPPO 归 M9；M9 名册选举只是本事项门禁的预热（Detour / 偏移 / SDKCall 缺失即 FAILED）。
+//   - M10 的选举只是本模块门禁的预热，不改变引擎行为，不计事项。
+//   - GUARD_TICKING_BOMB 谁都不写：T 方守包听到枪声必须能出击，一刀切不合理。
 //========================================================================================
 
 #define ITEM_M1_ANTI_RUSH       1
@@ -93,7 +95,7 @@ void InitItems()
     strcopy(g_sItemName[ITEM_M5_RETREAT], 48, "M5 retreat");
 
     g_iItemModule[ITEM_M6_NOISE] = 6;
-    strcopy(g_sItemName[ITEM_M6_NOISE], 48, "M6 noise control");
+    strcopy(g_sItemName[ITEM_M6_NOISE], 48, "M6 noise + OPPO guard");
 
     g_iItemModule[ITEM_M7_ESCORT] = 7;
     strcopy(g_sItemName[ITEM_M7_ESCORT], 48, "M7 carrier escort");
@@ -104,7 +106,7 @@ void InitItems()
     strcopy(g_sItemName[ITEM_M8_DEADLOCK], 48, "M8 deadlock Hunt SDKCall");
 
     g_iItemModule[ITEM_M9_LOOT] = 9;
-    strcopy(g_sItemName[ITEM_M9_LOOT], 48, "M9 loose-bomb gate");
+    strcopy(g_sItemName[ITEM_M9_LOOT], 48, "M9 fetch roster + OPPO guard");
 
     g_iItemModule[ITEM_M10_DEFUSE] = 10;
     strcopy(g_sItemName[ITEM_M10_DEFUSE], 48, "M10 defuse gate");

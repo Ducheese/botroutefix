@@ -100,7 +100,10 @@
     - 士气 +2 -> 最大 2000.0 码
     - 士气 +3 及以上 -> 最大 3000.0 码
   - 超距或线性概率衰减（1.0 - dist / maxDist）未命中时，清空声音时间戳并直接 `MRES_Supercede` 拦截，彻底瓦解战火黑洞效应！命中则放行。
-- **零内存篡改**：不再写 `m_disposition`；拦截/放行均计入遥测（`total blocked/allowed` 进 status M06 行）。
+- **下包 OPPO 守卫（Plant Bomb OPPO Guard）**：
+  - 持包人跑位（`task == TASK_PLANT_BOMB`，下包任务只派给持包者）遭遇战脱视时，通过 `CCSBot::SetState` Post 钩子补写 `DISP_OPPORTUNITY`（对标 CT 原生 `DEFUSE_BOMB` 的 OPPO），防止 33.3% 概率落入 Ambush Hide 蹲坑 3~15 秒断档；
+  - 两项守卫边界：真正埋包动作（`PlantBombState`）的 `SELF_DEFENSE (2)` 原样保留；`GUARD_TICKING_BOMB` 坚决不碰（T 守包人保持听声出击梯度）；
+  - 遥测更新为 `total blocked, allowed, oppo-guarded` 进 status M06 行。
 
 ### 模块 7：T 包匪贴身保镖花名册 (Carrier Escort Roster)
 - **编制随士气浮动 (Morale-Scaled Roster)**：
@@ -134,6 +137,7 @@
   - 本模块 Pre 钩上述查询函数：CT 一律回 false 实施纵深防御兜底（视力 `CanSeeLooseBomb` 与捡包听觉不受影响）；T 非名册成员直接回 false 并计入拦截（遥测 `gated`）；运行时无候选（全员不可达/无人存活）则放行，这是运行时无对象，不是后端 fail-open。
   - 掉包事件递延一帧（等 C4 归属落定，当场查恒为"人手里"）后，以无主 `weapon_c4` 坐标为圆心、无损实测（`BotNavWalkDistance`：备份移动状态→解 repath 节流→`ComputePath` 实测→逐段累加→全量还原，调用方零副作用）真实地面行走距离取最近 3 存活 T，不可达跳过；测距未就绪时 M9 事项 FAILED，钩子不挂载，行为回原生。成员阵亡/掉线按掉包点真实距离回补，全灭则解散回原生（防"包烂地上没人捡"死锁）；有人捡包/回合开始/换图即清。
   - **蹲守者解蹲 (Camp Unstick)**：当选/回补时 task==19（`MOVE_TO_SNIPER_SPOT`，蹲守承诺态）的强制 `Hunt()` 一次——蹲坑 Hide 里到不了 `NoticeLooseBomb`（Idle 的 loose 检查排在狙击手守点/架枪掷骰之后，M12 再把 task-19 的 Hide 留守），不踢名册就是摆设；Hunt 落 `SEEK_AND_DESTROY`，M12 不认，交接干净。`Hunt` SDKCall 缺失则跳过（名册照转被动门禁）。残血等其他 task 的长蹲 task 看不出来（Hide 不改 task），靠 Hide 到期自愈， observed 了再补 M15 蹲守时长表。
+  - **名册捡包手 OPPO 守卫（Fetch Bomb OPPO Guard）**：M9 限制了捡包人手，必须保证人手质量；在 `CCSBot::SetState` Post 钩子处通过指针地址比对确认处于 `FetchBombState`，补写 `DISP_OPPORTUNITY`，杜绝选出的抢包手跟丢敌人后蹲死；遥测更新为 `%d/%d roster | total %d elected, %d gated, %d oppo-guarded` 进 status M09 行。
 
 ### 模块 10：CT 首席拆包员 (Chief Defuser)
 - **原生全员撞包 (Swarm on Planted Bomb)**：
@@ -249,10 +253,10 @@
 | M3 | 1 | 事件写 danger 衰减 |
 | M4 | 2 | 随机覆盖 NOP / dhook 写(45s bypass + 认领) |
 | M5 | 3 | 换弹掩体 NOP / 闪避 dhook 写 / 后撤（整体） |
-| M6 | 1 | 噪声控制（纯 dhook 统一梯度拦截） |
+| M6 | 1 | M6 noise + OPPO guard（噪声拦截 + SetState Post 下包 OPPO 守卫） |
 | M7 | 1 | 保镖名册（事件 SDKCall + meme ret 补丁） |
 | M8 | 2 | 排队打碎 dhook 写 / 死锁 Hunt dhook SDKCall |
-| M9 | 1 | 抢包门禁（dhook） |
+| M9 | 1 | M9 fetch roster + OPPO guard（NoticeLooseBomb Pre + SetState Post 抢包 OPPO 守卫） |
 | M10 | 1 | 拆包门禁（dhook） |
 | M11 | 1 | 走廊 danger（dhook） |
 | M12 | 1 | camp 门禁（补丁 + 宿主钩子 + Hunt SDK） |
@@ -277,8 +281,10 @@
 - **谁执行最终改写，谁拥有事项。**
   - M11 只发撤退请求，最终后撤由 M5 执行 → 撤退归 M5，M11 只有走廊 danger。
   - M15 亲手写 `m_duration` → 短蹲与缩放同属 M15 一件事；M15 关闭/FAILED 时短蹲一起停。
-  - M6 纯入口拦截、不写内存 → 单事项，Detour 缺失即 FAILED。
-  - M9 / M10 的选举只是本模块门禁的预热，不改变引擎行为，不计事项。
+  - M6 亲手写下包 OPPO → 下包 OPPO 归 M6，噪声钩子拦截与事件写入同属 M6 一件事（Detour / 偏移 / SDKCall 缺失即 FAILED）。
+  - M9 亲手写抢包 OPPO → 抢包 OPPO 归 M9；M9 名册选举只是本事项门禁的预热（Detour / 偏移 / SDKCall 缺失即 FAILED）。
+  - M10 的选举只是本模块门禁的预热，不改变引擎行为，不计事项。
+  - GUARD_TICKING_BOMB 谁都不写：T 方守包听到枪声必须能出击，一刀切不合理。
 - **跨模块 getter / 请求不参与本模块状态**（用户第 3 条）：M5 读 M7/M9 getter、M11 给 M5 发请求、M5 给 M15 发短蹲请求，提供方缺席只让局部不生效，不改变消费方状态。
 - **M11 特例**：走廊事项因 nav 缺失 FAILED 时，只要 Detour 仍在，撤退请求仍照发；是否真退由 M5 自己的后端决定。M11 的遥测只统计 `requests`，真正 `retreats` 由 M5 统计。
 - **共享钩子**：M12 借用 M15 的 `HideState::OnEnter` Host Detour。宿主可用性是 M12 事项的后端条件；宿主不可用 → M12 FAILED，且 6 处补丁不得单独驻留。M15 关闭但 M12 开启时宿主保持挂载，M15 自己的代码路径由事项武装态关闭。
@@ -286,7 +292,7 @@
 
 ### 后端包含 morale
 
-`g_iOffset_Morale` 是 M2 运包时钟、M6 噪声控制、M7 保镖人数、M12 门禁重骰、M13 买狙公式、M15 时长缩放的必需后端。缺失时对应事项 FAILED，**不允许 `GetBotMorale()` 静默返回 0 继续按均势跑**。
+`g_iOffset_Morale` 是 M2 运包时钟、M6 噪声与 OPPO 守卫、M7 保镖人数、M12 门禁重骰、M13 买狙公式、M15 时长缩放的必需后端。缺失时对应事项 FAILED，**不允许 `GetBotMorale()` 静默返回 0 继续按均势跑**。
 
 ### 调试可视化
 
@@ -412,10 +418,10 @@ addons\sourcemod\
         ├── module3_danger.inc        [模块 3] CNavArea 危险度开局软衰减 (NavArea Danger Soft-Decay)
         ├── module4_hunt.inc          [模块 4] HuntState 搜敌机制重构 (45秒老家破除、时间戳认领与随机覆盖 NOP)
         ├── module5_combat.inc        [模块 5] 战斗决策重构 (闪避 100%、换弹进掩体 100%、残血/一打多/见狙后撤与三档豁免裁决)
-        ├── module6_noise.inc         [模块 6] 噪声出击统一梯度 (Noise Interception)
+        ├── module6_noise.inc         [模块 6] 噪声出击统一梯度 + 下包 OPPO 守卫 (Noise Interception + Plant OPPO Guard)
         ├── module7_escort.inc        [模块 7] T 包匪贴身保镖花名册 (Carrier Escort Roster)
         ├── module8_queue.inc         [模块 8] 门口礼貌排队打碎与死锁强切 Hunt (Polite Queue Breaker & Deadlock Hunt Transition)
-        ├── module9_loot.inc          [模块 9] 掉包 Top3 抢包花名册 (Loose-Bomb Fetch Roster)
+        ├── module9_loot.inc          [模块 9] 掉包 Top3 抢包花名册 + 抢包 OPPO 守卫 (Loose-Bomb Fetch Roster + Fetch OPPO Guard)
         ├── module10_defuse.inc       [模块 10] CT 首席拆包员 (Chief Defuser)
         ├── module11_sniper.inc       [模块 11] 狙击手威慑与走廊加压 (Sniper Deterrence & Corridor Danger)
         ├── module12_campgate.inc     [模块 12] 狙击 camp 概率重构 (60-10*M, OnEnter 重骰门)
@@ -454,7 +460,7 @@ addons\sourcemod\
 ### 控制台指令
 | 指令 | 权限 | 说明 |
 | :--- | :--- | :--- |
-| `sm_brf_status` | 管理员 (`ADMFLAG_GENERIC`) | 分两段：前半 15 模块启停行（`ACTIVE` 光杆 counts，`DEGRADED` / `FAILED` 点名 failed 事项居中、counts 永远挂尾，`INACTIVE` 显示 `disabled by rule`；静态士气公式在模块名里，label 定稿见 `F:\Git\scratch\botroutefix-status-labels.md`）；后半 `Live`（与上分隔行等长）：全局炸弹三态 `PLANTED` / `DROPPED` / `CARRIED by <人> (士气/身份)`（不显示包点）+ 士气两行（`T n bots alive (AVG Morale: +x 名)`，avg 只统计存活；`T Morale: [...]` 全员名单不筛存活；偏移丢失时显示 `unavailable`）+ 各模块快照行（`M01 CT Guard` / `M02 锁+延迟五变种` / `M03~M15 计数器与名册` + `M12/M13/M14` per-bot 概率名单；仅 `ACTIVE` / `DEGRADED`；per-bot 现算值不进 live）。累积计数器单调递增、换图不清零 |
+| `sm_brf_status` | 管理员 (`ADMFLAG_GENERIC`) | 分两段：前半 15 模块启停行（`ACTIVE` 光杆 counts，`DEGRADED` / `FAILED` 点名 failed 事项居中、counts 永远挂尾，`INACTIVE` 显示 `disabled by rule`；静态士气公式在模块名里）；后半 `Live`（与上分隔行等长）：全局炸弹三态 `PLANTED` / `DROPPED` / `CARRIED by <人> (士气/身份)`（不显示包点）+ 士气两行（`T n bots alive (AVG Morale: +x 名)`，avg 只统计存活；`T Morale: [...]` 全员名单不筛存活；偏移丢失时显示 `unavailable`）+ 各模块快照行（`M01 CT Guard` / `M02 锁+延迟五变种` / `M03~M15 计数器与名册` + `M12/M13/M14` per-bot 概率名单；仅 `ACTIVE` / `DEGRADED`；per-bot 现算值不进 live）。累积计数器单调递增、换图不清零 |
 
 ### 初始化日志口径（Initialization 契约）
 
@@ -467,7 +473,7 @@ addons\sourcemod\
 - **变体**：部分武装 → `LogModulePartial`（`Partial activation (...)`）；事项全灭 → `LogModuleAllFailed`（`All items failed; module will report FAILED.`）；失败原因各事项就地 `LogError`。
 - **Hook 回调日志口径**：前缀统一 `[BotRouteFix] [Module N]`；`DebugLog` 只记离散事件/状态变化（选举/拾取/安放/重定向/放行/认领），不记每 tick 求值——M4 的 `HuntState::OnUpdate` pre/post 刻意零输出（高频 tick），它的可观测面是 status 的 `total claims` 计数器；`LogError` 只用于不变量破坏（如 M7 非法名册数），普通业务分支一律 `DebugLog`；新增 Hook 回调必须带一行说明决策的 `DebugLog`，不留注释掉的死代码。
 - **准备期与运行期的门禁分界**：准备期输出（Prep/Mount/Apply/Restore/Enable 内的句柄创建、签名绑定、基线备份、补丁落子、`verified`/`Resolved` 确认行）走 Init 口径，**无条件输出，不受 `sm_brf_debug` 约束**；运行期离散事件（Hook 回调/事件响应内的逐条决策，如持包人变更、锁落子/还原、士气处置切换）**必须走 `DebugLog`，受 debug 约束**。M2 锁落子/还原与 M6 逐条拦截/放行的 `DebugLog` 属后者（运行期逐 noise 事件），不是准备期，门控正确。
-- **各模块检查点清单**：M1 守点/反冲各 1 个写入点；M2 单例指针 + 时钟偏移 + 锁写入点；M3 危险度偏移 + nav 解析 + 状态重置；M4 随机旁路写入点 + 搜寻偏移；M5 reload 写入点 + 闪避偏移 + 后撤后端；M6 士气 + 噪音感知偏移；M7 follow SDKCall + 士气偏移 + FollowMeme ret 补丁；M8 排队偏移 + 死锁 SDKCall；M9/M10 无（纯 hook/名册）；M11 走廊对抗偏移；M12 蹲守偏移 + 6 个 bypass 点；M13 rewrite/cave 二选一（按架构）；M14 4 站点 + 1 常量池；M15 隐藏时长偏移。
+- **各模块检查点清单**：M1 守点/反冲各 1 个写入点；M2 单例指针 + 时钟偏移 + 锁写入点；M3 危险度偏移 + nav 解析 + 状态重置；M4 随机旁路写入点 + 搜寻偏移；M5 reload 写入点 + 闪避偏移 + 后撤后端；M6 士气/噪声/Task/Disp 偏移 + SetDisposition SDKCall + 双 Detour；M7 Follow/StopFollowing SDKCalls + 士气偏移 + FollowMeme ret 补丁；M8 排队偏移 + 死锁 SDKCall；M9 State/Fetch/Disp 偏移 + SetDisposition SDKCall + NavMeasure + 双 Detour；M10 无（纯 hook/名册）；M11 走廊对抗偏移；M12 蹲守偏移 + 6 个 bypass 点；M13 rewrite/cave 二选一（按架构）；M14 4 站点 + 1 常量池；M15 隐藏时长偏移。
 
 ---
 
@@ -531,7 +537,7 @@ addons\sourcemod\
 
 ### 模块启动与事项解析策略 (Soft Startup & Item Resolution)
 - 主插件入口不再对 15 个模块做链式 fail-fast。每个 `InitModule*()` 独立执行：Gamedata 签名失效、偏移未命中或二进制模板不匹配只让对应事项 `Ready=false`，插件继续加载。
-- `InitSDKCalls()` 拆成 5 个独立准备函数；缺失的 SDKCall 只让其消费方事项 FAILED（M5 后撤 / M7 保镖 / M8 死锁 Hunt / M9/M10/M11 nav / M12 camp），不再 `SetFailState`。
+- `InitSDKCalls()` 拆成 8 个独立准备函数；缺失的 SDKCall 只让其消费方事项 FAILED（M5 后撤 / M6 下包 OPPO / M7 保镖 / M8 死锁 Hunt / M9 抢包 OPPO / M9/M10/M11 nav / M11/M12 名单 / M12 camp），不再 `SetFailState`。
 - 启动阶段：15 个模块的 `InitModule*()` 解析后端后立即按 ConVar 初始值（默认 `all`）武装；`OnPluginStart` 末尾 `ApplyModulesConfig()` 再应用同一默认；`OnConfigsExecuted` 按 cfg 实际规则增量收敛。规则关闭的模块会在启动瞬间短暂武装，cfg 生效后回滚。
 - 这是当前**统一**的生命周期：Init/Enable 负责武装，Apply 负责规则收敛。若未来要改成“Init 只解析、Apply 唯一武装入口”，必须 15 个模块一起迁移；不做 M1/M2 单独延迟的半迁移。
 - 解析失败不会杀死其他模块；`g_bBombPlanted` 与事件总线始终运行，不随任何模块启停断流。

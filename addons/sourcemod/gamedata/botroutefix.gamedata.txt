@@ -172,6 +172,18 @@
 				"windows"	"\x55\x8B\xEC\x83\xEC\x20\x57\x8B\xF9\x80\xBF"
 				"windows64"	"\x48\x89\x74\x24\x2A\x57\x48\x83\xEC\x70\x33\xF6"
 			}
+			"CCSBot_SetDisposition"
+			{
+				"library"	"server"
+				"windows"	"\x55\x8B\xEC\x8B\x45\x2A\x89\x81\x2A\x2A\x2A\x2A\x83\xF8\x03"
+				"windows64"	"\x89\x91\x2A\x2A\x2A\x2A\x83\xFA\x03"
+			}
+			"CCSBot_SetState"
+			{
+				"library"	"server"
+				"windows"	"\x55\x8B\xEC\x53\x56\x8B\xF1\x57\x8B\x8E\x2A\x2A\x2A\x2A\x85\xC9"
+				"windows64"	"\x48\x89\x5C\x24\x2A\x48\x89\x74\x24\x2A\x57\x48\x83\xEC\x30\x48\x8B\xD9\x48\x8B\xFA"
+			}
 			"Camp12_O1"
 			{
 				"library"	"server"
@@ -449,6 +461,16 @@
 			{
 				"windows"	"15136"
 				"windows64"	"19184"
+			}
+			"CCSBot_State_Offset"
+			{
+				"windows"	"7148"
+				"windows64"	"8384"
+			}
+			"CCSBot_FetchBombState_Offset"
+			{
+				"windows"	"6924"
+				"windows64"	"8088"
 			}
 			"CCSBot_NoisePosition_Offset"
 			{

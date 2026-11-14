@@ -4,7 +4,7 @@
 #define _botroutefix_module6_noise_included
 
 //========================================================================================
-// [模块 6] 噪声出击统一梯度 (Noise Interception Gradient)
+// [模块 6] 噪声出击统一梯度与下包 OPPO 守卫 (Noise Interception Gradient & Plant OPPO Guard)
 //
 // 业务背景与引擎逆向分析：
 //
@@ -23,7 +23,15 @@
 //        Morale +3及以上 -> maxNoiseDist = 3000.0 码
 //    - 超距或线性距离概率 (1.0 - dist / maxNoiseDist) 未命中时，清空噪声时间戳并直接
 //      MRES_Supercede 拦截，阻断战火黑洞效应；命中则放行。
-// 零内存篡改：不再写 m_disposition，纯入口拦截；拦截/放行均计入遥测。
+// 噪声路径零内存篡改（纯入口拦截）；拦截/放行均计入遥测。
+//
+// 事项 ITEM_M6_NOISE（M6 noise + OPPO guard）：噪声拦截 + 下包 OPPO 守卫同属一件事
+// （归属原则：谁执行最终改写，谁拥有事项；两个写点都在 M6）。
+// 下包守卫（CCSBot::SetState Post）：仅对 task == TASK_PLANT_BOMB（即持包人，
+// 下包任务只会派给持包者）且当前 disposition 仍为 ENGAGE 的补写 OPPORTUNITY_FIRE，
+// 对标 CT 方 DEFUSE_BOMB 的原生 OPPO；SELF_DEFENSE / IGNORE 原样保留。
+// GUARD_TICKING_BOMB 不强制：T 方守包听到枪声必须能出击，一刀切不合理。
+// 补写计入遥测（Module6_GetTotalOppoGuarded）。
 //========================================================================================
 
 //========================================================================================
@@ -39,11 +47,22 @@
 // 士气门限宏定义
 #define MORALE_HOLD_THRESHOLD   -1      // 保守拦截士气阈值 (<= -1 一律不调查)
 
+// 下包 OPPO 守卫宏（引擎 DispositionType / task 原值；DISP_OPPORTUNITY 与 module9
+// 共用值（同为 1），两边都用 #if !defined 守卫防重定义，改值时两处同步）
+#define TASK_PLANT_BOMB           1       // 引擎原生任务枚举：PLANT_BOMB（下包任务，只派给持包者）
+#define DISP_ENGAGE               0       // ENGAGE_AND_INVESTIGATE
+#if !defined DISP_OPPORTUNITY
+#define DISP_OPPORTUNITY          1       // OPPORTUNITY_FIRE
+#endif
+
 // 模块 Detour 句柄与统计
 // 注：本模块不读 g_bBombPlanted（g_bBombPlanted 仍由 events.inc 维护，供 M5/M7/M10 消费）。
 static Handle g_hInvestigateNoiseDetour = null;
+static Handle g_hSetStateDetour = null;
+static bool g_bSetStateDetourEnabled = false;   // per-hook 真实启用态（SetState Post）
 static int g_iTotalNoiseIntercepted = 0;
 static int g_iTotalNoiseAllowed = 0;
+static int g_iTotalOppoGuarded = 0;
 
 // 模块内部启用缓存（仅用于 Enable 幂等短路；业务判据统一用 Item_IsArmed(ITEM_M6_NOISE)）
 static bool g_bModule6_Active = false;
@@ -58,13 +77,17 @@ static int g_iOffset_NoiseTimestamp = -1;
 //========================================================================================
 
 /**
- * 事项后端：噪声控制（纯 dhook 拦截）
+ * 事项后端：噪声控制 + 下包 OPPO 守卫（双 dhook 载体）
  *
- * 条件 = morale/noise 偏移 + InvestigateNoise Detour 挂载。
- * 不再写 m_disposition，不再依赖 task/disposition 偏移（可视化腰环仍经由
- * Module6_GetBotDisposition 只读引擎原生 disposition，那是另一条只读链路）。
+ * 条件 = morale/noise/task/disposition 偏移（上收 global.inc，OnPluginStart 一次解析，
+ * 这里只做 > 0 门禁）+ SetDisposition 直调（InitSDKCalls 先行准备）+ 双 Detour 挂载。
+ * 噪声路径纯入口拦截；下包守卫只在 PLANT_BOMB + ENGAGE 时补写 OPPO
+ * （可视化腰环仍经由 Module6_GetBotDisposition 只读引擎原生值，那是另一条只读链路）。
  *
- * @return              true = 噪声事项后端就绪
+ * 失败语义：任一条件（morale/noise/task/disposition 偏移、SetDisposition 直调、
+ * 双 Detour）缺失返回 false，Init 置 Ready=false 即事项 FAILED。
+ *
+ * @return              true = 双后端就绪
  */
 static bool PrepModule6_NoiseBackend()
 {
@@ -72,19 +95,38 @@ static bool PrepModule6_NoiseBackend()
     g_iOffset_NoiseTimestamp = GameConfGetOffset(g_hGameConf, "CCSBot_NoiseTimestamp_Offset");
 
     bool offsetsOk = (g_iOffset_Morale > 0
-        && g_iOffset_NoisePosition > 0 && g_iOffset_NoiseTimestamp > 0);
+        && g_iOffset_NoisePosition > 0 && g_iOffset_NoiseTimestamp > 0
+        && g_iOffset_Task > 0 && g_iOffset_Disposition > 0);
     if (!offsetsOk)
     {
-        LogError("[BotRouteFix] [Module 6] Morale or noise offsets missing; noise item FAILED.");
+        LogError("[BotRouteFix] [Module 6] Morale/noise/task/disposition offsets missing; M6 noise + OPPO guard item FAILED.");
         return false;
     }
 
-    LogMessage("[BotRouteFix] [Module 6] Noise offsets verified (morale=%d, noisepos=%d, noisets=%d).",
-        g_iOffset_Morale, g_iOffset_NoisePosition, g_iOffset_NoiseTimestamp);
+    if (g_hSDKCall_SetDisposition == null)
+    {
+        LogError("[BotRouteFix] [Module 6] SetDisposition SDKCall missing; M6 noise + OPPO guard item FAILED.");
+        return false;
+    }
+
+    LogMessage("[BotRouteFix] [Module 6] Noise offsets verified (morale=%d, noisepos=%d, noisets=%d, task=%d, disp=%d).",
+        g_iOffset_Morale, g_iOffset_NoisePosition, g_iOffset_NoiseTimestamp,
+        g_iOffset_Task, g_iOffset_Disposition);
 
     if (!MountInvestigateNoiseDetour())
     {
-        LogError("[BotRouteFix] [Module 6] InvestigateNoise hook unavailable; noise item FAILED.");
+        LogError("[BotRouteFix] [Module 6] InvestigateNoise hook unavailable; M6 noise + OPPO guard item FAILED.");
+        return false;
+    }
+
+    if (!MountSetStateDetour())
+    {
+        LogError("[BotRouteFix] [Module 6] SetState hook unavailable; M6 noise + OPPO guard item FAILED.");
+        if (g_hInvestigateNoiseDetour != null)
+        {
+            delete g_hInvestigateNoiseDetour;
+            g_hInvestigateNoiseDetour = null;
+        }
         return false;
     }
 
@@ -92,9 +134,9 @@ static bool PrepModule6_NoiseBackend()
 }
 
 /**
- * 挂载 CCSBot::InvestigateNoise Detour（事项 M6 噪声控制的钩子载体）
+ * 挂载 CCSBot::InvestigateNoise Detour（事项 ITEM_M6_NOISE（M6 noise + OPPO guard）的噪声钩子载体）
  *
- * 失败语义：句柄创建或签名绑定失败返回 false，噪声事项 FAILED。
+ * 失败语义：句柄创建或签名绑定失败返回 false，M6 noise + OPPO guard 事项 FAILED。
  *
  * @return              true = Detour 句柄已创建并绑定签名
  */
@@ -118,12 +160,43 @@ static bool MountInvestigateNoiseDetour()
     return true;
 }
 
+/**
+ * 挂载 CCSBot::SetState Post Detour（事项 ITEM_M6_NOISE（M6 noise + OPPO guard）的下包 OPPO 钩子载体）
+ *
+ * 失败语义：句柄创建或签名绑定失败返回 false，M6 noise + OPPO guard 事项 FAILED。
+ *
+ * @return              true = Detour 句柄已创建并绑定签名
+ */
+static bool MountSetStateDetour()
+{
+    g_hSetStateDetour = DHookCreateDetour(Address_Null, CallConv_THISCALL, ReturnType_Void, ThisPointer_Address);
+    if (g_hSetStateDetour == null)
+    {
+        LogError("[BotRouteFix] [Module 6] Failed to create DHook detour instance for CCSBot_SetState!");
+        return false;
+    }
+
+    if (!DHookSetFromConf(g_hSetStateDetour, g_hGameConf, SDKConf_Signature, "CCSBot_SetState"))
+    {
+        LogError("[BotRouteFix] [Module 6] Failed to set CCSBot_SetState signature from gamedata!");
+        delete g_hSetStateDetour;
+        g_hSetStateDetour = null;
+        return false;
+    }
+
+    // SetState(BotState*) 有一个指针参数；漏加参数会让 DHook trampoline 崩溃（c0000005）
+    DHookAddParam(g_hSetStateDetour, HookParamType_Int);
+    return true;
+}
+
 //========================================================================================
 // MODULE 6 LIFECYCLE
 //========================================================================================
 
 /**
- * 初始化模块 6 的唯一事项：噪声控制（纯 dhook 拦截）
+ * 初始化模块 6 的唯一事项 ITEM_M6_NOISE（M6 noise + OPPO guard）
+ *
+ * 失败语义：事项未武装时返回 false；单事项模块，不可能 DEGRADED。
  *
  * @return              true = 事项已武装
  */
@@ -131,7 +204,7 @@ bool InitModule6_Noise()
 {
     if (g_hGameConf == null)
     {
-        LogError("[BotRouteFix] [Module 6] Gamedata missing; noise item FAILED.");
+        LogError("[BotRouteFix] [Module 6] Gamedata missing; M6 noise + OPPO guard item FAILED.");
         Item_SetReady(ITEM_M6_NOISE, false);
         return false;
     }
@@ -146,7 +219,7 @@ bool InitModule6_Noise()
         return false;
     }
 
-    LogModuleArmed(6, "Noise control", Item_IsArmed(ITEM_M6_NOISE) ? "1" : "0");
+    LogModuleArmed(6, "M6 noise + OPPO guard", Item_IsArmed(ITEM_M6_NOISE) ? "1" : "0");
     return true;
 }
 
@@ -191,6 +264,12 @@ void RestoreModule6_Noise()
         g_hInvestigateNoiseDetour = null;
     }
 
+    if (g_hSetStateDetour != null)
+    {
+        delete g_hSetStateDetour;
+        g_hSetStateDetour = null;
+    }
+
     LogMessage("[BotRouteFix] [Module 6] Morale tactics hooks safely restored.");
 }
 
@@ -219,10 +298,20 @@ int Module6_GetTotalNoiseAllowed()
 }
 
 /**
+ * 查询累计补写的下包 OPPO 次数
+ *
+ * 跨模块只读 getter，不参与事项状态。
+ */
+int Module6_GetTotalOppoGuarded()
+{
+    return g_iTotalOppoGuarded;
+}
+
+/**
  * 获取 Bot 当前接战策略 (Disposition)
  *
  * 跨模块只读 getter（可视化按数据源绘制），不参与本模块事项状态。
- * M6 不再写 disposition；这里只读引擎原生值。
+ * 下包守卫可能补写 OPPO；这里读到的就是当前实际值。
  *
  * @param client        客户端索引
  * @return              0: ENGAGE_AND_INVESTIGATE, 1: OPPORTUNITY_FIRE, -1: 无效/非Bot
@@ -250,7 +339,7 @@ int Module6_GetBotDisposition(int client)
 }
 
 //========================================================================================
-// MODULE 6 DETOUR & HOOKS (CCSBOT::INVESTIGATENOISE)
+// MODULE 6 DETOUR & HOOKS (CCSBOT::INVESTIGATENOISE / CCSBOT::SETSTATE)
 //========================================================================================
 
 /**
@@ -351,36 +440,160 @@ public MRESReturn Hook_InvestigateNoise_Pre(int client, DHookParam hParams)
     return MRES_Ignored;
 }
 
+/**
+ * 事项 ITEM_M6_NOISE（M6 noise + OPPO guard）的下包 Disposition 守卫原语
+ *
+ * 只给 task == TASK_PLANT_BOMB（下包任务只会派给持包者，即持包人）且当前
+ * disposition 仍为 ENGAGE 的补写 OPPORTUNITY_FIRE，对标 CT 方 DEFUSE_BOMB 的原生 OPPO；
+ * 真正下包的 SELF_DEFENSE / IGNORE 原样保留。
+ * GUARD_TICKING_BOMB 不强制（T 方守包听到枪声必须能出击），这里不碰。
+ *
+ * 失败语义：本函数只做守卫补写、不判定事项成败；输入无效或偏移缺失时直接返回。
+ */
+static void Module6_EnforcePlantDisposition(int client)
+{
+    if (!IsBot(client, true))
+    {
+        return;
+    }
+
+    Address pBot = GetEntityAddress(client);
+    if (pBot == Address_Null)
+    {
+        return;
+    }
+
+    if (g_iOffset_Task <= 0 || g_iOffset_Disposition <= 0)
+    {
+        return;
+    }
+
+    int task = LoadFromAddress(pBot + view_as<Address>(g_iOffset_Task), NumberType_Int32);
+    if (task != TASK_PLANT_BOMB)
+    {
+        return;
+    }
+
+    int disposition = LoadFromAddress(pBot + view_as<Address>(g_iOffset_Disposition), NumberType_Int32);
+    if (disposition != DISP_ENGAGE)
+    {
+        return;
+    }
+
+    if (BotSetDisposition(client, DISP_OPPORTUNITY))
+    {
+        g_iTotalOppoGuarded++;
+        DebugLog("[BotRouteFix] [Module 6] Bot %N plant disposition -> OPPORTUNITY_FIRE", client);
+    }
+}
+
+/**
+ * 事项 ITEM_M6_NOISE（M6 noise + OPPO guard）的 CCSBot::SetState Post 钩子
+ *
+ * OnEnter/OnExit 内的 ENGAGE 重置都发生在 SetState 内部，Post 在这里统一覆盖。
+ * 只处理下包任务，其余一律放行；与 M9 的同目标钩子以后缀区分，
+ * 两个 Post 回调都会被 DHooks 依次调用。
+ *
+ * 失败语义：回调内不判定事项成败；未武装时首行自守，直接返回 MRES_Ignored。
+ */
+public MRESReturn Hook_SetState_Post_Plant(Address pThis, DHookParam hParams)
+{
+    if (!Item_IsArmed(ITEM_M6_NOISE) || pThis == Address_Null)
+    {
+        return MRES_Ignored;
+    }
+
+    int client = 0;
+    for (int i = 1; i <= MaxClients; i++)
+    {
+        if (IsClientInGame(i) && GetEntityAddress(i) == pThis)
+        {
+            client = i;
+            break;
+        }
+    }
+
+    if (client == 0)
+    {
+        return MRES_Ignored;
+    }
+
+    Module6_EnforcePlantDisposition(client);
+    return MRES_Ignored;
+}
+
+/**
+ * 事项 ITEM_M6_NOISE（M6 noise + OPPO guard）启用时的一次性补写
+ *
+ * 纯事件驱动之外的唯一一次扫描，不建 timer；只在 Apply 武装成功后调用。
+ *
+ * 失败语义：逐个尽力补写，不影响事项 Armed。
+ */
+static void Module6_SweepPlantDisposition()
+{
+    if (!Item_IsArmed(ITEM_M6_NOISE))
+    {
+        return;
+    }
+
+    for (int i = 1; i <= MaxClients; i++)
+    {
+        if (IsBot(i, true))
+        {
+            Module6_EnforcePlantDisposition(i);
+        }
+    }
+}
+
 //========================================================================================
 // MODULE 6 ITEM APPLY / RESTORE BACKENDS
 //========================================================================================
 
 /**
- * 应用噪声事项：启用 InvestigateNoise Pre 钩子
+ * 应用噪声事项：启用 InvestigateNoise Pre 钩子 + SetState Post 钩子
  *
- * 事项 M6 噪声控制的唯一应用入口；失败时该事项 FAILED。
+ * 事项 ITEM_M6_NOISE 的应用入口；不做 Detour 创建与签名绑定（那是 Prep 的职责）。
+ * 两个钩子同属一个事项：任一失败都回滚，避免只开半边；失败只清 Armed 保留 Ready。
+ * 武装成功后单次扫盘（热重载时把已在下包任务的持包人一次性补齐）。
  *
- * @return              true = Pre 钩子已启用
+ * @return              true = 双钩子已驻留
  */
 static bool ApplyModule6_NoiseBackend()
 {
-    if (!Item_IsReady(ITEM_M6_NOISE) || g_hInvestigateNoiseDetour == null)
+    if (!Item_IsReady(ITEM_M6_NOISE)
+        || g_hInvestigateNoiseDetour == null || g_hSetStateDetour == null)
     {
         Item_SetArmed(ITEM_M6_NOISE, false);
         return false;
     }
 
-    bool ok = SyncDetourEnabled(g_hInvestigateNoiseDetour, g_bNoiseDetourEnabled,
+    bool noiseOk = SyncDetourEnabled(g_hInvestigateNoiseDetour, g_bNoiseDetourEnabled,
         false, Hook_InvestigateNoise_Pre, true, "Module 6");
-    Item_SetArmed(ITEM_M6_NOISE, ok);
-    return ok;
+    bool stateOk = SyncDetourEnabled(g_hSetStateDetour, g_bSetStateDetourEnabled,
+        true, Hook_SetState_Post_Plant, true, "Module 6");
+
+    if (!noiseOk || !stateOk)
+    {
+        SyncDetourEnabled(g_hInvestigateNoiseDetour, g_bNoiseDetourEnabled,
+            false, Hook_InvestigateNoise_Pre, false, "Module 6");
+        SyncDetourEnabled(g_hSetStateDetour, g_bSetStateDetourEnabled,
+            true, Hook_SetState_Post_Plant, false, "Module 6");
+        Item_SetArmed(ITEM_M6_NOISE, false);
+        LogError("[BotRouteFix] [Module 6] Detour enable failed; M6 noise + OPPO guard item unarmed.");
+        return false;
+    }
+
+    Item_SetArmed(ITEM_M6_NOISE, true);
+    Module6_SweepPlantDisposition();
+    return true;
 }
 
 /**
- * 还原噪声事项：停用 Pre 钩子并解除武装
+ * 还原噪声事项：摘双钩并解除武装
  */
 static void RestoreModule6_NoiseBackend()
 {
     SyncDetourEnabled(g_hInvestigateNoiseDetour, g_bNoiseDetourEnabled, false, Hook_InvestigateNoise_Pre, false, "Module 6");
+    SyncDetourEnabled(g_hSetStateDetour, g_bSetStateDetourEnabled, true, Hook_SetState_Post_Plant, false, "Module 6");
     Item_SetArmed(ITEM_M6_NOISE, false);
 }

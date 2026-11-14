@@ -55,25 +55,30 @@ enum struct EscortCandidate
  */
 static bool PrepModule7_EscortBackend()
 {
-    bool sdkOk = (g_hSDKCall_Follow != null && g_hSDKCall_StopFollowing != null);
+    bool followOk = (g_hSDKCall_Follow != null);
+    bool stopFollowingOk = (g_hSDKCall_StopFollowing != null);
     bool moraleOk = (g_iOffset_Morale > 0);
     bool memeOk = PrepModule7_FollowMemeBackend();
 
-    if (!sdkOk)
+    if (!followOk)
     {
         LogError("[BotRouteFix] [Module 7] Follow SDKCall missing; escort item FAILED.");
+    }
+    if (!stopFollowingOk)
+    {
+        LogError("[BotRouteFix] [Module 7] StopFollowing SDKCall missing; escort item FAILED.");
     }
     if (!moraleOk)
     {
         LogError("[BotRouteFix] [Module 7] Morale offset missing; escort item FAILED.");
     }
 
-    if (sdkOk && moraleOk && memeOk)
+    if (followOk && stopFollowingOk && moraleOk && memeOk)
     {
-        LogMessage("[BotRouteFix] [Module 7] Carrier escort backend verified (follow SDKCall, morale=%d, meme ret).",
+        LogMessage("[BotRouteFix] [Module 7] Carrier escort backend verified (follow/stopfollowing SDKCalls, morale=%d, meme ret).",
             g_iOffset_Morale);
     }
-    return (sdkOk && moraleOk && memeOk);
+    return (followOk && stopFollowingOk && moraleOk && memeOk);
 }
 
 /**
