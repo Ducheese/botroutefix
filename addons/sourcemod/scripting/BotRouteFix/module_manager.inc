@@ -487,7 +487,7 @@ void ApplyModulesConfig()
     EnableModule14_DefendRush(active[14]);
     EnableModule15_HideDuration(active[15]);
 
-    // 协同同步 M12/M15 借钩宿主挂载状态
+    // 协同同步 M9/M12/M15 借钩宿主挂载状态
     SyncHideDurationDetourState();
 }
 

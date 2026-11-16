@@ -214,10 +214,11 @@ void RestoreModule15_HideDuration()
 }
 
 /**
- * 同步 HideState::OnEnter 宿主 Detour 的真实启用态（M12/M15 共用单钩的协同中枢）
+ * 同步 HideState::OnEnter 宿主 Detour 的真实启用态（M9/M12/M15 共用单钩的协同中枢）
  *
- * 模块 12（狙击 camp 门禁）不单独注册 Detour，而是借本模块的 Post Detour 作为执行宿主。
- * 底层钩子只要任一借钩方仍在工作就必须保持启用；只有双方全部关闭才真正 Disable。
+ * 模块 12（狙击 camp 门禁）不单独注册 Detour，而是借本模块的 Post Detour 作为执行宿主；
+ * 模块 9（抢包名册 Hide 真值门禁）同样借宿主捕获 HideState 虚表指纹。
+ * 底层钩子只要任一借钩方仍在工作就必须保持启用；只有三方全部关闭才真正 Disable。
  * 既杜绝重复 Enable/Disable 触发 "Function not detoured" 致命状态机异常，
  * 也避免"关掉模块 15 顺带把模块 12 门禁打死"的隐性耦合一刀切。
  *
@@ -225,7 +226,7 @@ void RestoreModule15_HideDuration()
  */
 bool SyncHideDurationDetourState()
 {
-    bool want = (Item_IsArmed(ITEM_M15_HIDE) || Item_IsArmed(ITEM_M12_CAMP));
+    bool want = (Item_IsArmed(ITEM_M15_HIDE) || Item_IsArmed(ITEM_M12_CAMP) || Item_IsArmed(ITEM_M9_LOOT));
     return SyncDetourEnabled(g_hHideDurationDetour, g_bHideDurationDetourEnabled,
         true, Hook_HideState_OnEnter_Post, want, "Module 15");
 }
@@ -317,6 +318,13 @@ public MRESReturn Hook_HideState_OnEnter_Post(Address pThis, DHookParam hParams)
     if (!IsBot(client, true))
     {
         return MRES_Ignored;
+    }
+
+    // 虚表指纹捕获（M9 名册 Hide 真值门禁共用）：HideState 对象即 pThis，首址即虚表。
+    // 放 M12 门禁与 M15 武装检查之前——借钩独占（M15 关/M12 开）时也要捕获；只记一次。
+    if (g_pHideStateVTable == Address_Null)
+    {
+        g_pHideStateVTable = LoadAddressFromAddress(pThis);
     }
 
     // M12 camp 门禁：task 19 的 Hide 在此重骰；被重定向去 Hunt 的直接返回，不再缩放

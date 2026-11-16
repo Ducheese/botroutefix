@@ -52,6 +52,12 @@ Address g_pTheCSBotsPtr;
 Address g_pTheNavAreasCount;
 Address g_pTheNavAreasBase;
 
+// HideState 虚表指纹（跨模块真值：M15 共享 HideState::OnEnter 钩子首次目击时捕获，
+// M9 名册落子前判"正处 Hide"用。虚表地址进程内稳定，换图不失效；捕获前恒为 Null，
+// 此时返回 false 物理成立（无 Hide 进入即无 Hide 存活），M9 同时是宿主借钩方，M12/M15
+// 关闭不会卸载宿主）
+Address g_pHideStateVTable;   // 默认零 = Address_Null，首次目击 HideState 时由 M15 钩子写入
+
 //========================================================================================
 // COMPATIBILITY (SourceMod 1.11 / 1.12 地址读写兼容层)
 //========================================================================================

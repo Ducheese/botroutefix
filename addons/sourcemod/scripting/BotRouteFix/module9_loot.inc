@@ -18,8 +18,10 @@
 // 3. 花名册（与模块 7 同构，全事件驱动，无 timer）：
 //    - bomb_dropped：递延一帧（等归属落定）后以掉包点（无主 weapon_c4 实体坐标，零耦合不读模块 7）为圆心，
 //      真实地面行走距离（BotNavWalkDistance 无损实测）取最近 3 存活 T bot，不可达跳过；
-//      当选/回补时 task 19 的蹲守者强制 Hunt 解蹲一次（蹲坑 Hide 里到不了 NoticeLooseBomb，
-//      Idle 的 loose 检查又排在狙击手守点/架枪掷骰之后，不踢就瘫痪；Hunt 落 SEEK_AND_DESTROY，M12 不认）；
+//      当选/回补时强制解蹲一次：task 19 蹲守承诺者必踢（蹲坑 Hide 里到不了 NoticeLooseBomb，
+//      Idle 的 loose 检查又排在狙击手守点/架枪掷骰之后，不踢就瘫痪），外加一切正处 HideState 者
+//      无论 task 皆踢（残血 Hide、换弹 Hide、跟丢 Ambush Hide 等——Hide 不改 task，task 判不全，
+//      真值以 m_state 虚表指纹为准，见 Loot_IsHiding）；Hunt 落 SEEK_AND_DESTROY，M12 不认；
 //      选举失败（找不到掉包）或测距未就绪 → 空名册 = 全体放行回原生；
 //    - player_death / client_disconnect：除名 + 按掉包点就近回补（共用同一函数；名单有效时 C4 必躺掉包点，
 //      按掉包点招人即按 C4 位置招人）——必选项，否则减员到全灭即全员 false，包烂地上没人捡（比原版更糟的死锁）；
@@ -199,10 +201,14 @@ void EnableModule9_Loot(bool enable)
     {
         RestoreModule9_LootBackend();
         g_bModule9_Active = false;
+        // 借钩宿主：Hide 虚表指纹依赖模块 15 的 OnEnter 钩子，本模块关闭也要重算宿主意愿
+        SyncHideDurationDetourState();
         return;
     }
 
     g_bModule9_Active = ApplyModule9_LootBackend();
+    // 借钩宿主：武装后确保 OnEnter 宿主钩子处于启用态（虚表捕获的前提）
+    SyncHideDurationDetourState();
 }
 
 /**
@@ -622,9 +628,9 @@ static bool Loot_FindDropPos(float dropPos[3])
 /**
  * 事项 M9 抢包花名册的蹲守承诺判定：task == 19 即视为蹲坑中
  *
- * task 是任务不是姿态：Hide 不改 task，所以这里只能抓到"狙击手式蹲坑"
- * （MOVE_TO_SNIPER_SPOT，M12 自己也认这个值）；残血等其他 task 的长蹲抓不到，
- * 靠 Hide 到期自愈。偏移缺失/实体无效一律按"非蹲守"处理（宁可漏踢，不错杀）。
+ * task 是任务不是姿态：狙击手进 Hide 前 task 先落 19，所以这里能抓到"还没进 Hide 的蹲守承诺"
+ * （MOVE_TO_SNIPER_SPOT，M12 自己也认这个值）；已经进 Hide 的不限 task 者由 Loot_IsHiding 兜底。
+ * 偏移缺失/实体无效一律按"非蹲守"处理（宁可漏踢，不错杀）。
  *
  * @param bot           客户端索引
  * @return              true = 正蹲守承诺中，捡包指望不上它
@@ -646,6 +652,41 @@ static bool Loot_IsCampCommitted(int bot)
 }
 
 /**
+ * 事项 M9 抢包花名册的 Hide 真值判定：m_state 虚表指纹比对
+ *
+ * 不限 task——残血 Hide、换弹 Hide、跟丢 Ambush Hide、狙击蹲坑 Hide 全中。
+ * 指纹由 M15 共享 HideState::OnEnter 钩子首次目击时捕获（g_pHideStateVTable）；
+ * 捕获前返回 false 物理上恒成立：无任何 Hide 进入即无任何存活 Bot 处 Hide，无漏判。
+ * M9 是该宿主钩子的借钩方（Enable/Disable 时同步 SyncHideDurationDetourState），
+ * 即使 M12/M15 关闭宿主也不会被卸载。
+ * m_state 恒指有效 BotState 对象，读虚表安全；偏移缺失/实体无效/哨兵按"非 Hide"处理。
+ *
+ * @param bot           客户端索引
+ * @return              true = 正处 HideState，捡包指望不上它
+ */
+static bool Loot_IsHiding(int bot)
+{
+    if (g_pHideStateVTable == Address_Null || g_iOffset_State <= 0)
+    {
+        return false;
+    }
+
+    Address pBot = GetEntityAddress(bot);
+    if (pBot == Address_Null)
+    {
+        return false;
+    }
+
+    Address state = LoadAddressFromAddress(pBot + view_as<Address>(g_iOffset_State));
+    if (state == Address_Null || state == view_as<Address>(-1))
+    {
+        return false;
+    }
+
+    return LoadAddressFromAddress(state) == g_pHideStateVTable;
+}
+
+/**
  * 事项 M9 抢包花名册的蹲守者解蹲：对名册里 task 19 的，一人一次强制 Hunt
  *
  * 蹲坑者 Hide 里永远到不了 NoticeLooseBomb（Idle 的 loose 检查排在狙击手
@@ -655,12 +696,13 @@ static bool Loot_IsCampCommitted(int bot)
  * 调用点保证帧上下文（选举/回补都在 RequestFrame 或事件里，不在钩子里），直调安全。
  *
  * @param bot           名册成员客户端索引
+ * @return              true = 已发起强制 Hunt（调用方以此跳过 Hide 复检，避免连踢两次）
  */
-static void Loot_ForceHuntIfCamping(int bot)
+static bool Loot_ForceHuntIfCamping(int bot)
 {
     if (!Loot_IsCampCommitted(bot))
     {
-        return;
+        return false;
     }
 
     if (BotHunt(bot))
@@ -671,13 +713,41 @@ static void Loot_ForceHuntIfCamping(int bot)
     {
         DebugLog("[BotRouteFix] [Module 9] Roster %N camping but Hunt SDKCall unavailable, left passive", bot);
     }
+    return true;
+}
+
+/**
+ * 事项 M9 抢包花名册的 Hide 解蹲：对名册里一切正处 HideState 者强制 Hunt
+ *
+ * task 19 快道抓不到的（残血 Hide、换弹 Hide、跟丢 Ambush Hide……）全在这里兜底：
+ * Hide 里到不了 NoticeLooseBomb（Idle/Hunt 的 loose 检查都在各自状态流里，Hide 自成一国），
+ * 不踢出来名册就是摆设。未处 Hide 时 no-op（捕获前返回 false 物理恒成立，无漏判）。
+ *
+ * @param bot           名册成员客户端索引
+ */
+static void Loot_ForceHuntIfHiding(int bot)
+{
+    if (!Loot_IsHiding(bot))
+    {
+        return;
+    }
+
+    if (BotHunt(bot))
+    {
+        DebugLog("[BotRouteFix] [Module 9] Roster %N was hiding (any task), forced Hunt to fetch", bot);
+    }
+    else
+    {
+        DebugLog("[BotRouteFix] [Module 9] Roster %N hiding but Hunt SDKCall unavailable, left passive", bot);
+    }
 }
 
 /**
  * 事项 M9 抢包花名册的选举：掉包点真实地面行走距离最近 3 存活 T bot
  *
  * 测距未就绪 / 找不到掉包 / 无存活 T bot 即空名册回原生（不拿欧氏混分，不可达跳过）。
- * 选完对 task 19 的蹲守者强制 Hunt 解蹲（否则 Hide 里永远捡不了包）。
+ * 选完强制解蹲：task 19 蹲守承诺先踢（快道，含尚未进 Hide 者），一切正处 Hide 者再踢（虚表真值）。
+ * 踢过一次的不踢第二次。
  */
 static void Loot_ElectRoster()
 {
@@ -748,12 +818,15 @@ static void Loot_ElectRoster()
         (g_iLootRoster[1] != -1) ? g_iLootRoster[1] : g_iLootRoster[0],
         (g_iLootRoster[2] != -1) ? g_iLootRoster[2] : g_iLootRoster[0]);
 
-    // 蹲守者解蹲：名册里 task 19 的不踢出来就永远捡不了包
+    // 蹲守者解蹲：名册里 task 19 的不踢出来就永远捡不了包 + 一切正处 Hide 的不限 task 全踢
     for (int i = 0; i < LOOT_ROSTER_SIZE; i++)
     {
         if (g_iLootRoster[i] != -1)
         {
-            Loot_ForceHuntIfCamping(g_iLootRoster[i]);
+            if (!Loot_ForceHuntIfCamping(g_iLootRoster[i]))
+            {
+                Loot_ForceHuntIfHiding(g_iLootRoster[i]);
+            }
         }
     }
 }
@@ -811,7 +884,10 @@ static void Loot_RemoveAndBackfill(int client, const char[] reason)
         }
         g_iTotalLootElections++;
         DebugLog("[BotRouteFix] [Module 9] Roster backfill (%s): %N joins", reason, best);
-        Loot_ForceHuntIfCamping(best);
+        if (!Loot_ForceHuntIfCamping(best))
+        {
+            Loot_ForceHuntIfHiding(best);
+        }
     }
 
     // 全灭则解散回原生（fail-open）
