@@ -532,7 +532,8 @@ static void RestoreModule8_DeadlockBackend()
  */
 static void RecordBlockedArea(Address pArea, float expireTime)
 {
-    if (pArea == Address_Null)
+    // 调用方保证：入参刚过 Queue_NailDanger 的容器校验；此处哨兵快拒即可。
+    if (pArea == Address_Null || pArea == view_as<Address>(-1))
     {
         return;
     }
@@ -578,7 +579,9 @@ static void RecordBlockedArea(Address pArea, float expireTime)
  */
 static void Queue_NailDanger(Address pArea, int teamIdx, float curtime)
 {
-    if (pArea == Address_Null)
+    // 写前门禁：哨兵快拒 + 容器 exact-match，活路径槽位不可信。
+    if (pArea == Address_Null || pArea == view_as<Address>(-1)
+        || !Module3_IsKnownNavArea(pArea))
     {
         return;
     }

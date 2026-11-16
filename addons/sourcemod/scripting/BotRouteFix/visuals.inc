@@ -35,6 +35,8 @@ static int g_iHalo = -1;
 
 // 包点 trigger 体积缓存（func_bomb_target 全枚举，静态盒，换图重解）
 #define MAX_BOMBSITES 8
+// 走廊加压环每帧绘制上限（单帧 TempEnt 预算；名单由 M11 按容器校验喂入）
+#define SNIPER_MAX_DRAW_RINGS 4
 static float g_vecBombsiteMins[MAX_BOMBSITES][3];
 static float g_vecBombsiteMaxs[MAX_BOMBSITES][3];
 static int g_iBombsiteCount = 0;
@@ -85,7 +87,7 @@ static void GetBotChestPosition(int client, float chest[3])
 
 static void NavArea_GetCenter(Address pArea, float center[3])
 {
-    if (pArea == Address_Null)
+    if (pArea == Address_Null || pArea == view_as<Address>(-1))
     {
         return;
     }
@@ -97,7 +99,7 @@ static void NavArea_GetCenter(Address pArea, float center[3])
 
 stock void NavArea_GetCorners(Address pArea, float c0[3], float c1[3], float c2[3], float c3[3])
 {
-    if (pArea == Address_Null)
+    if (pArea == Address_Null || pArea == view_as<Address>(-1))
     {
         return;
     }
@@ -585,7 +587,8 @@ public Action Timer_RenderVisualsSlow(Handle timer)
         int corridorCount = Module11_GetPressurizedCorridors(corridorAreas, corridorExpires);
 
         static const int colorPressurized[4] = {0, 220, 255, 220}; // 青色
-        for (int i = 0; i < corridorCount; i++)
+        // 名单只进容器校验过的真区域；数量按单帧 TempEnt 预算封顶。
+        for (int i = 0; i < corridorCount && i < SNIPER_MAX_DRAW_RINGS; i++)
         {
             float center[3];
             NavArea_GetCenter(corridorAreas[i], center);

@@ -631,13 +631,17 @@ static int Sniper_FindTargetSniper(int spotter, float sniperPos[3])
 /**
  * 事项 M11 corridor danger 的唯一写入口：为单个 NavArea 钉刺危险度
  *
- * 严格遵守 1.0/120.0s 沉降契约并封顶 2.5f；空指针/偏移不可用时返回 false。
+ * 严格遵守 1.0/120.0s 沉降契约并封顶 2.5f；空指针/偏移不可用/
+ * 未知区域（不在 TheNavAreas 内）时返回 false（宁可漏钉）。
  *
  * @return              true = 本次真实写入危险度与时间戳
  */
 static bool Sniper_NailDanger(Address pArea, int teamIdx, float curtime)
 {
-    if (pArea == Address_Null || g_iOffset_Danger <= 0 || g_iOffset_DangerTimestamp <= 0)
+    // 写前门禁：哨兵快拒 + 容器 exact-match，野指针到不了 StoreToAddress。
+    if (pArea == Address_Null || pArea == view_as<Address>(-1)
+        || g_iOffset_Danger <= 0 || g_iOffset_DangerTimestamp <= 0
+        || !Module3_IsKnownNavArea(pArea))
     {
         return false;
     }
@@ -726,7 +730,8 @@ static void RecordSniperPair(int spotter, int sniper, float expireTime)
  */
 static void RecordPressurizedCorridor(Address pArea, float expireTime)
 {
-    if (pArea == Address_Null)
+    // 调用方保证：入参刚过 Sniper_NailDanger 的容器校验；此处哨兵快拒即可。
+    if (pArea == Address_Null || pArea == view_as<Address>(-1))
     {
         return;
     }

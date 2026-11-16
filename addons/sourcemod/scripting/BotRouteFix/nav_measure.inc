@@ -226,8 +226,12 @@ static int NavMeasure_ProbePath(int client, const float target[3], int maxAreas,
 
                 if (writtenAreas < maxAreas && writtenAreas < NAV_MEASURE_MAX_PATH_NODES)
                 {
-                    g_NavProbeAreas[writtenAreas] = LoadAddressFromAddress(pConnectInfo);
-                    writtenAreas++;
+                    Address pNodeArea = LoadAddressFromAddress(pConnectInfo);
+                    if (pNodeArea != Address_Null && pNodeArea != view_as<Address>(-1))
+                    {
+                        g_NavProbeAreas[writtenAreas] = pNodeArea;
+                        writtenAreas++;
+                    }
                 }
 
                 float nodePos[3];

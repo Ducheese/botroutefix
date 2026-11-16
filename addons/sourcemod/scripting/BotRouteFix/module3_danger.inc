@@ -351,6 +351,44 @@ bool Module3_GetNavAreaDanger(Address pArea, float &dangerT, float &dangerCT)
 }
 
 /**
+ * 事项 M3 decay 容器后端的只读校验出口（M8 排队钉刺 / M11 走廊钉刺写前门禁共用）。
+ *
+ * 以 TheNavAreas 容器为真值逐一比对；探针尾槽的陈旧野值（非 NULL/-1，哨兵拦不住）
+ * 只有这里能认出来。容器未解析/数量非法时返回 false（宁可漏钉，不可错写）。
+ *
+ * @param pArea         待校验的 CNavArea 指针
+ * @return              true = 容器内已知区域，可安全读写 danger
+ */
+bool Module3_IsKnownNavArea(Address pArea)
+{
+    if (pArea == Address_Null || g_pTheNavAreasCount == Address_Null || g_pTheNavAreasBase == Address_Null)
+    {
+        return false;
+    }
+
+    int count = LoadFromAddress(g_pTheNavAreasCount, NumberType_Int32);
+    if (count <= 0 || count > NAV_AREA_MAX_SANITY)
+    {
+        return false;
+    }
+
+    Address pArray = LoadAddressFromAddress(g_pTheNavAreasBase);
+    if (pArray == Address_Null)
+    {
+        return false;
+    }
+
+    for (int i = 0; i < count; i++)
+    {
+        if (LoadAddressFromAddress(pArray + view_as<Address>(i * g_iPtrSize)) == pArea)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
  * 遍历 TheNavAreas，逐 area 读沉降后双阵营 danger，写 CSV；摘要同时进
  * 服务端日志（LogMessage）与调用者回显（ReplyToCommand）。
  *
