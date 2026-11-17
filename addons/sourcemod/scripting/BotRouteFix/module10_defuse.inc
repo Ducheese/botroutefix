@@ -293,6 +293,9 @@ void Module10_OnMapStart()
  *
  * ITEM_M10_DEFUSE 武装、包已下、首席在位且来者非首席时才掐成 false
  * （掩护组掉进 Hide 分支自建掩护）；其余一律 MRES_Ignored 直通原生。
+ *
+ * 契约注记：底层 DHooks 在 0 参数 non-void 钩子下槽 2 实推 rHndl（DHookSetReturn 内部双认
+ * g_HookReturnHandle 与 g_HookParamsHandle），此处保留 hParams 惯用标签防误调 DHookGetReturn，勿再改名。
  */
 public MRESReturn Hook_IsDoingScenario_Pre(int client, DHookParam hParams)
 {

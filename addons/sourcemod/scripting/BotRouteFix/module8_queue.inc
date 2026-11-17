@@ -24,6 +24,7 @@
 #define QUEUE_SHATTER_LIMIT     5       // 连续打碎达到 5 次（约等待 10 秒），判定为顽固死锁
 #define QUEUE_NAIL_DANGER       0.8
 #define QUEUE_NAIL_MAX          2.5
+#define QUEUE_MAX_PATH_NODES    256     // 引擎 MAX_PATH_LENGTH 同值；pathLength 异常大值时防节点地址算飞
 // 沉降速率 DANGER_DECAY_RATE_SEC 统一定义于 global.inc
 
 // 本模块私有状态（static，句柄与本模块专有偏移不出本文件；Timer/Danger/PtrSize 为 nav_measure 共享）
@@ -350,7 +351,7 @@ public void Module8_FrameHunt(any data)
  * ITEM_M8_QUEUE 武装才介入：等待超 2 秒即打碎排队（清等待旗、钉 danger、碎路径），
  * 累计打碎 5 次且 ITEM_M8_DEADLOCK 武装则递延切 Hunt。条件不符一律 MRES_Ignored 放行。
  */
-public MRESReturn Hook_UpdatePathMovement_Post(int client, DHookParam hParams)
+public MRESReturn Hook_UpdatePathMovement_Post(int client, DHookReturn hReturn, DHookParam hParams)
 {
     if (!Item_IsArmed(ITEM_M8_QUEUE))
     {
@@ -378,6 +379,12 @@ public MRESReturn Hook_UpdatePathMovement_Post(int client, DHookParam hParams)
     if (pathLength <= 0)
     {
         return MRES_Ignored;
+    }
+    // 上界 clamp：偏移漂移/内存异常时 pathLength 可能是垃圾大值；不封顶会把 pathIndex
+    // 撑到 pathLength-1，后续 pBot + Path + pathIndex*Stride 算出的节点地址飞出 bot 对象
+    if (pathLength > QUEUE_MAX_PATH_NODES)
+    {
+        pathLength = QUEUE_MAX_PATH_NODES;
     }
 
     float duration = view_as<float>(LoadFromAddress(pBot + view_as<Address>(g_iOffset_PoliteTimer + g_iOffset_TimerDuration), NumberType_Int32));
@@ -533,7 +540,7 @@ static void RestoreModule8_DeadlockBackend()
 static void RecordBlockedArea(Address pArea, float expireTime)
 {
     // 调用方保证：入参刚过 Queue_NailDanger 的容器校验；此处哨兵快拒即可。
-    if (pArea == Address_Null || pArea == view_as<Address>(-1))
+    if (!IsValidAddress(pArea))
     {
         return;
     }
@@ -580,8 +587,7 @@ static void RecordBlockedArea(Address pArea, float expireTime)
 static void Queue_NailDanger(Address pArea, int teamIdx, float curtime)
 {
     // 写前门禁：哨兵快拒 + 容器 exact-match，活路径槽位不可信。
-    if (pArea == Address_Null || pArea == view_as<Address>(-1)
-        || !Module3_IsKnownNavArea(pArea))
+    if (!IsValidAddress(pArea) || !Module3_IsKnownNavArea(pArea))
     {
         return;
     }

@@ -366,7 +366,7 @@ void Module11_OnMapStart()
  * @param hParams       DHook 参数
  * @return              MRES_Ignored
  */
-public MRESReturn Hook_SpottedSniper_Post(Address pThis, DHookParam hParams)
+public MRESReturn Hook_SpottedSniper_Post(Address pThis)
 {
     if (pThis == Address_Null || g_iOffset_ChatterMe <= 0)
     {
@@ -639,7 +639,7 @@ static int Sniper_FindTargetSniper(int spotter, float sniperPos[3])
 static bool Sniper_NailDanger(Address pArea, int teamIdx, float curtime)
 {
     // 写前门禁：哨兵快拒 + 容器 exact-match，野指针到不了 StoreToAddress。
-    if (pArea == Address_Null || pArea == view_as<Address>(-1)
+    if (!IsValidAddress(pArea)
         || g_iOffset_Danger <= 0 || g_iOffset_DangerTimestamp <= 0
         || !Module3_IsKnownNavArea(pArea))
     {
@@ -731,7 +731,7 @@ static void RecordSniperPair(int spotter, int sniper, float expireTime)
 static void RecordPressurizedCorridor(Address pArea, float expireTime)
 {
     // 调用方保证：入参刚过 Sniper_NailDanger 的容器校验；此处哨兵快拒即可。
-    if (pArea == Address_Null || pArea == view_as<Address>(-1))
+    if (!IsValidAddress(pArea))
     {
         return;
     }

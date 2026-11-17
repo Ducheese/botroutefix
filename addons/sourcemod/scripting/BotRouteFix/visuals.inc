@@ -85,23 +85,24 @@ static void GetBotChestPosition(int client, float chest[3])
     chest[2] -= 12.0;
 }
 
-static void NavArea_GetCenter(Address pArea, float center[3])
+static bool NavArea_GetCenter(Address pArea, float center[3])
 {
-    if (pArea == Address_Null || pArea == view_as<Address>(-1))
+    if (!IsValidAddress(pArea))
     {
-        return;
+        return false;
     }
     int offsetCenter = g_bIsWin64 ? 48 : 44;
     center[0] = view_as<float>(LoadFromAddress(pArea + view_as<Address>(offsetCenter),     NumberType_Int32));
     center[1] = view_as<float>(LoadFromAddress(pArea + view_as<Address>(offsetCenter + 4), NumberType_Int32));
     center[2] = view_as<float>(LoadFromAddress(pArea + view_as<Address>(offsetCenter + 8), NumberType_Int32));
+    return true;
 }
 
-stock void NavArea_GetCorners(Address pArea, float c0[3], float c1[3], float c2[3], float c3[3])
+stock bool NavArea_GetCorners(Address pArea, float c0[3], float c1[3], float c2[3], float c3[3])
 {
-    if (pArea == Address_Null || pArea == view_as<Address>(-1))
+    if (!IsValidAddress(pArea))
     {
-        return;
+        return false;
     }
     int offsetNw  = g_bIsWin64 ? 8  : 4;
     int offsetSe  = g_bIsWin64 ? 20 : 16;
@@ -123,12 +124,16 @@ stock void NavArea_GetCorners(Address pArea, float c0[3], float c1[3], float c2[
     c1[0] = seX; c1[1] = nwY; c1[2] = neZ;
     c2[0] = seX; c2[1] = seY; c2[2] = seZ;
     c3[0] = nwX; c3[1] = seY; c3[2] = swZ;
+    return true;
 }
 
 stock void DrawNavAreaBox(Address pArea, const int color[4], float height = 36.0, float life = 1.05)
 {
     float c0[3], c1[3], c2[3], c3[3];
-    NavArea_GetCorners(pArea, c0, c1, c2, c3);
+    if (!NavArea_GetCorners(pArea, c0, c1, c2, c3))
+    {
+        return;
+    }
 
     float t0[3], t1[3], t2[3], t3[3];
     t0[0] = c0[0]; t0[1] = c0[1]; t0[2] = c0[2] + height;
@@ -150,8 +155,10 @@ stock void DrawNavAreaBox(Address pArea, const int color[4], float height = 36.0
 
     // 地面中心脉冲光环
     float center[3];
-    NavArea_GetCenter(pArea, center);
-    DrawRing(center, 20.0, 80.0, color, 3.0, life, 15);
+    if (NavArea_GetCenter(pArea, center))
+    {
+        DrawRing(center, 20.0, 80.0, color, 3.0, life, 15);
+    }
 }
 
 /**
@@ -308,10 +315,11 @@ public Action Timer_RenderVisualsFast(Handle timer)
             if (pArea != Address_Null)
             {
                 float areaCenter[3], botChest[3];
-                NavArea_GetCenter(pArea, areaCenter);
-                GetBotChestPosition(i, botChest);
-
-                DrawBeam(botChest, areaCenter, colorM4_Red, 3.0, 0.0, 0.25);
+                if (NavArea_GetCenter(pArea, areaCenter))
+                {
+                    GetBotChestPosition(i, botChest);
+                    DrawBeam(botChest, areaCenter, colorM4_Red, 3.0, 0.0, 0.25);
+                }
             }
         }
     }
@@ -407,28 +415,57 @@ public Action Timer_RenderVisualsFast(Handle timer)
     }
 
     //------------------------------------------------------------------------------------
-    // [M7] 保镖连包匪的绿色光索
+    // [M7] 保镖护航绿色光索（体现跟随关系：跟随者连线至被跟随者）
     //------------------------------------------------------------------------------------
     if (Item_IsArmed(ITEM_M7_ESCORT))
     {
         int carrier = Module7_GetCarrier();
+        int pointman = Module7_GetPointman();
         if (IsValidClient(carrier, true))
         {
             int bodyguards[MAXPLAYERS + 1];
             int count = Module7_GetBodyguards(bodyguards, sizeof(bodyguards));
 
-            if (count > 0)
+            static const int colorM7[4] = {60, 255, 80, 220}; // 原版绿色光索
+
+            if (IsValidClient(pointman, true))
             {
+                // 先锋领队模式：包匪与其余保镖均跟随先锋
+                float pointmanChest[3];
+                GetBotChestPosition(pointman, pointmanChest);
+
+                // 包匪 -> 先锋
                 float carrierChest[3];
                 GetBotChestPosition(carrier, carrierChest);
+                DrawBeam(carrierChest, pointmanChest, colorM7, 3.0, 0.0, 0.25);
 
-                static const int colorM7[4] = {60, 255, 80, 220}; // 绿色光索
+                // 其余保镖 -> 先锋
                 for (int j = 0; j < count; j++)
                 {
                     int guard = bodyguards[j];
-                    float guardChest[3];
-                    GetBotChestPosition(guard, guardChest);
-                    DrawBeam(guardChest, carrierChest, colorM7, 3.0, 0.0, 0.25);
+                    if (guard != pointman && IsValidClient(guard, true))
+                    {
+                        float guardChest[3];
+                        GetBotChestPosition(guard, guardChest);
+                        DrawBeam(guardChest, pointmanChest, colorM7, 3.0, 0.0, 0.25);
+                    }
+                }
+            }
+            else if (count > 0)
+            {
+                // 无先锋 / 先锋到场交接模式：全部保镖跟随包匪
+                float carrierChest[3];
+                GetBotChestPosition(carrier, carrierChest);
+
+                for (int j = 0; j < count; j++)
+                {
+                    int guard = bodyguards[j];
+                    if (IsValidClient(guard, true))
+                    {
+                        float guardChest[3];
+                        GetBotChestPosition(guard, guardChest);
+                        DrawBeam(guardChest, carrierChest, colorM7, 3.0, 0.0, 0.25);
+                    }
                 }
             }
         }
@@ -559,8 +596,10 @@ public Action Timer_RenderVisualsSlow(Handle timer)
         for (int i = 0; i < count; i++)
         {
             float center[3];
-            NavArea_GetCenter(areas[i], center);
-            DrawRing(center, 20.0, 80.0, colorBlockedArea, 3.0, 1.05, 15);
+            if (NavArea_GetCenter(areas[i], center))
+            {
+                DrawRing(center, 20.0, 80.0, colorBlockedArea, 3.0, 1.05, 15);
+            }
         }
     }
 
@@ -591,8 +630,10 @@ public Action Timer_RenderVisualsSlow(Handle timer)
         for (int i = 0; i < corridorCount && i < SNIPER_MAX_DRAW_RINGS; i++)
         {
             float center[3];
-            NavArea_GetCenter(corridorAreas[i], center);
-            DrawRing(center, 20.0, 100.0, colorPressurized, 3.0, 1.05, 12);
+            if (NavArea_GetCenter(corridorAreas[i], center))
+            {
+                DrawRing(center, 20.0, 100.0, colorPressurized, 3.0, 1.05, 12);
+            }
         }
     }
 

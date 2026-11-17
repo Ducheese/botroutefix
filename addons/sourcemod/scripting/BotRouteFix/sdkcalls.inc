@@ -13,6 +13,8 @@
 // SDKCall 句柄容器
 Handle g_hSDKCall_Follow           = null;
 Handle g_hSDKCall_StopFollowing    = null;
+Handle g_hSDKCall_MoveTo           = null;
+Handle g_hSDKCall_Idle             = null;
 Handle g_hSDKCall_ComputePath      = null;
 Handle g_hSDKCall_IsOutnumbered    = null;
 Handle g_hSDKCall_Hunt             = null;
@@ -54,6 +56,43 @@ static bool PrepSDKCall_StopFollowing()
     if (g_hSDKCall_StopFollowing == null)
     {
         LogError("[BotRouteFix] [SDKCalls] CCSBot_StopFollowing unavailable (M7 will FAIL).");
+        return false;
+    }
+    return true;
+}
+
+/**
+ * 事项 M7 开路先锋寻路的 MoveTo 后端准备；缺失则 M7 事项 FAILED。
+ */
+static bool PrepSDKCall_MoveTo()
+{
+    StartPrepSDKCall(SDKCall_Entity);
+    PrepSDKCall_SetFromConf(g_hGameConf, SDKConf_Signature, "CCSBot_MoveTo");
+    PrepSDKCall_AddParameter(SDKType_Vector, SDKPass_ByRef);
+    PrepSDKCall_AddParameter(SDKType_PlainOldData, SDKPass_Plain);
+    g_hSDKCall_MoveTo = EndPrepSDKCall();
+    if (g_hSDKCall_MoveTo == null)
+    {
+        LogError("[BotRouteFix] [SDKCalls] CCSBot_MoveTo unavailable (M7 will FAIL).");
+        return false;
+    }
+    return true;
+}
+
+/**
+ * 事项 M7 先锋复位 / 状态监督的 Idle 后端准备；缺失则 M7 事项 FAILED。
+ *
+ * Idle 是引擎里所有状态收束的回口：MoveTo 完成/放弃、Hide 结束、Hunt 结束都会走 Idle()。
+ * M7 用它取消先锋残留的 MoveToState，并用同一签名挂 Detour 感知先锋转入 Idle。
+ */
+static bool PrepSDKCall_Idle()
+{
+    StartPrepSDKCall(SDKCall_Entity);
+    PrepSDKCall_SetFromConf(g_hGameConf, SDKConf_Signature, "CCSBot_Idle");
+    g_hSDKCall_Idle = EndPrepSDKCall();
+    if (g_hSDKCall_Idle == null)
+    {
+        LogError("[BotRouteFix] [SDKCalls] CCSBot_Idle unavailable (M7 will FAIL).");
         return false;
     }
     return true;
@@ -175,6 +214,8 @@ bool InitSDKCalls()
     bool allReady = true;
     if (!PrepSDKCall_Follow())         allReady = false;
     if (!PrepSDKCall_StopFollowing())  allReady = false;
+    if (!PrepSDKCall_MoveTo())         allReady = false;
+    if (!PrepSDKCall_Idle())           allReady = false;
     if (!PrepSDKCall_ComputePath())    allReady = false;
     if (!PrepSDKCall_IsOutnumbered())  allReady = false;
     if (!PrepSDKCall_Hunt())           allReady = false;
@@ -184,7 +225,7 @@ bool InitSDKCalls()
 
     if (allReady)
     {
-        LogMessage("[BotRouteFix] [SDKCalls] All SDKCall backends ready (Follow, StopFollowing, ComputePath, IsOutnumbered, Hunt, ResetStuckMonitor, SetDisposition, IsSniper)");
+        LogMessage("[BotRouteFix] [SDKCalls] All SDKCall backends ready (Follow, StopFollowing, MoveTo, Idle, ComputePath, IsOutnumbered, Hunt, ResetStuckMonitor, SetDisposition, IsSniper)");
     }
 
     return allReady;
@@ -205,6 +246,18 @@ void CleanupSDKCalls()
     {
         delete g_hSDKCall_StopFollowing;
         g_hSDKCall_StopFollowing = null;
+    }
+
+    if (g_hSDKCall_MoveTo != null)
+    {
+        delete g_hSDKCall_MoveTo;
+        g_hSDKCall_MoveTo = null;
+    }
+
+    if (g_hSDKCall_Idle != null)
+    {
+        delete g_hSDKCall_Idle;
+        g_hSDKCall_Idle = null;
     }
 
     if (g_hSDKCall_ComputePath != null)
@@ -280,6 +333,45 @@ stock bool BotStopFollowing(int bot)
     }
 
     SDKCall(g_hSDKCall_StopFollowing, bot);
+    return true;
+}
+
+/**
+ * 命令指定 Bot 向目标三维坐标行进（进入 MoveToState）
+ *
+ * @param bot           Bot 客户端索引 (必须为存活有效 Bot)
+ * @param pos           目标三维坐标
+ * @param routeType     路线类型 (0 = DEFAULT, 1 = FASTEST, 2 = SAFEST, 3 = RETREAT)
+ * @return              是否成功发起 SDKCall
+ */
+stock bool BotMoveTo(int bot, const float pos[3], int routeType = 2)
+{
+    if (g_hSDKCall_MoveTo == null || !IsBot(bot, true))
+    {
+        return false;
+    }
+
+    SDKCall(g_hSDKCall_MoveTo, bot, pos, routeType);
+    return true;
+}
+
+/**
+ * 把指定 Bot 拉回原生 Idle（SetTask(SEEK_AND_DESTROY) + SetState(IdleState)）。
+ *
+ * 与 StopFollowing 的区别：StopFollowing 只清 m_isFollowing/m_leader，不会结束
+ * MoveToState；先锋被划走/释放时只有 Idle 才能让残留 MoveTo 真正停下。
+ *
+ * @param bot       Bot 客户端索引 (必须为存活有效 Bot)
+ * @return          是否成功发起 SDKCall
+ */
+stock bool BotIdle(int bot)
+{
+    if (g_hSDKCall_Idle == null || !IsBot(bot, true))
+    {
+        return false;
+    }
+
+    SDKCall(g_hSDKCall_Idle, bot);
     return true;
 }
 

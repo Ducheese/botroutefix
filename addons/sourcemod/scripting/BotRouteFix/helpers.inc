@@ -4,8 +4,21 @@
 #define _botroutefix_helpers_included
 
 //========================================================================================
-// BOT & ENTITY HELPER FUNCTIONS
+// BOT, ENTITY & MEMORY HELPER FUNCTIONS
 //========================================================================================
+
+/**
+ * 物理级指针合法性门禁（纳秒级 O(1) 快速哨兵过滤）
+ *
+ * 统一拦截标准空指针 0x0 与 -1 错误哨兵，杜绝整数溢出回绕至 Page 0。
+ *
+ * @param addr          待判定的内存地址
+ * @return              true = 非空且非 -1 的物理候选地址
+ */
+stock bool IsValidAddress(Address addr)
+{
+    return addr != Address_Null && addr != view_as<Address>(-1);
+}
 
 /**
  * 校验实体是否为有效在线玩家
@@ -83,7 +96,7 @@ stock int GetBotMorale(int client)
     }
 
     Address pBot = GetEntityAddress(client);
-    if (pBot == Address_Null)
+    if (!IsValidAddress(pBot))
     {
         return 1;
     }

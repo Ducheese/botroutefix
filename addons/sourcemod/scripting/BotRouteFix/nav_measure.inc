@@ -227,7 +227,7 @@ static int NavMeasure_ProbePath(int client, const float target[3], int maxAreas,
                 if (writtenAreas < maxAreas && writtenAreas < NAV_MEASURE_MAX_PATH_NODES)
                 {
                     Address pNodeArea = LoadAddressFromAddress(pConnectInfo);
-                    if (pNodeArea != Address_Null && pNodeArea != view_as<Address>(-1))
+                    if (IsValidAddress(pNodeArea))
                     {
                         g_NavProbeAreas[writtenAreas] = pNodeArea;
                         writtenAreas++;

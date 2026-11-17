@@ -354,7 +354,7 @@ int Module6_GetBotDisposition(int client)
  * @param hParams       DHook 参数
  * @return              MRES_Supercede = 拦截出击；MRES_Ignored = 放行
  */
-public MRESReturn Hook_InvestigateNoise_Pre(int client, DHookParam hParams)
+public MRESReturn Hook_InvestigateNoise_Pre(int client)
 {
     if (!Item_IsArmed(ITEM_M6_NOISE))
     {

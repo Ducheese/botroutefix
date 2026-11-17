@@ -323,7 +323,7 @@ bool Module3_GetNavAreaDanger(Address pArea, float &dangerT, float &dangerCT)
     dangerT = 0.0;
     dangerCT = 0.0;
 
-    if (pArea == Address_Null || g_iOffset_Danger <= 0 || g_iOffset_DangerTimestamp <= 0)
+    if (!IsValidAddress(pArea) || g_iOffset_Danger <= 0 || g_iOffset_DangerTimestamp <= 0)
     {
         return false;
     }
@@ -361,7 +361,7 @@ bool Module3_GetNavAreaDanger(Address pArea, float &dangerT, float &dangerCT)
  */
 bool Module3_IsKnownNavArea(Address pArea)
 {
-    if (pArea == Address_Null || g_pTheNavAreasCount == Address_Null || g_pTheNavAreasBase == Address_Null)
+    if (!IsValidAddress(pArea) || g_pTheNavAreasCount == Address_Null || g_pTheNavAreasBase == Address_Null)
     {
         return false;
     }
@@ -438,7 +438,7 @@ void Module3_DumpDangerDist(const char[] tag, int client = 0)
     for (int i = 0; i < count; i++)
     {
         Address pArea = LoadAddressFromAddress(pArray + view_as<Address>(i * g_iPtrSize));
-        if (pArea == Address_Null)
+        if (!IsValidAddress(pArea))
         {
             continue;
         }
@@ -545,7 +545,7 @@ static void DecayAllNavAreaDanger()
     for (int i = 0; i < count; i++)
     {
         Address pArea = LoadAddressFromAddress(pArray + view_as<Address>(i * g_iPtrSize));
-        if (pArea == Address_Null)
+        if (!IsValidAddress(pArea))
         {
             continue;
         }

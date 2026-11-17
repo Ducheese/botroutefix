@@ -428,6 +428,9 @@ void Module9_OnMapStart()
  *
  * ITEM_M9_LOOT 武装且名册有效时才掐非名册者；只会把 true 掐成 false，
  * 且 CT 一律 Supercede（阵营门补漏）。名册空即全体放行回原生。
+ *
+ * 契约注记：底层 DHooks 在 0 参数 non-void 钩子下槽 2 实推 rHndl（DHookSetReturn 内部双认
+ * g_HookReturnHandle 与 g_HookParamsHandle），此处保留 hParams 惯用标签防误调 DHookGetReturn，勿再改名。
  */
 public MRESReturn Hook_NoticeLooseBomb_Pre(int client, DHookParam hParams)
 {
@@ -672,13 +675,13 @@ static bool Loot_IsHiding(int bot)
     }
 
     Address pBot = GetEntityAddress(bot);
-    if (pBot == Address_Null)
+    if (!IsValidAddress(pBot))
     {
         return false;
     }
 
     Address state = LoadAddressFromAddress(pBot + view_as<Address>(g_iOffset_State));
-    if (state == Address_Null || state == view_as<Address>(-1))
+    if (!IsValidAddress(state))
     {
         return false;
     }

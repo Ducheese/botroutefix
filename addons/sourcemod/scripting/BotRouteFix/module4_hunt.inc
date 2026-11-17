@@ -461,7 +461,7 @@ public MRESReturn Hook_HuntState_OnUpdate_Post(Address pThis, DHookParam hParams
     int teamIdx = (team - 1) % 2;
     // 读取 HuntState 当前所选定的 m_huntArea
     Address pArea = LoadAddressFromAddress(pThis + view_as<Address>(g_iOffset_HuntArea));
-    if (pArea == Address_Null)
+    if (!IsValidAddress(pArea))
     {
         g_pVisualHuntArea[client] = Address_Null;
         return MRES_Ignored;

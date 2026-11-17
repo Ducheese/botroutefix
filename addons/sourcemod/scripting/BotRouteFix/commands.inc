@@ -446,15 +446,24 @@ public Action Command_Status(int client, int args)
         ReplyToCommand(client, "[BotRouteFix] [Live] M06 | %s", live);
     }
 
-    // M07：当前名册快照（持包人 + 保镖数）。单事项模块，ModuleHasLive 已足够；
+    // M07：当前名册快照（持包人 + 保镖数 + 先锋）。单事项模块，ModuleHasLive 已足够；
     // 护送事项坏了即模块 FAILED，本来就不出行。
     if (ModuleHasLive(7))
     {
         int carrier = Module7_GetCarrier();
+        int pointman = Module7_GetPointman();
         if (IsValidClient(carrier, true))
         {
-            Format(live, sizeof(live), "%d/%d guards, carrier %N",
-                Module7_GetBodyguardCount(), Module7_GetTargetCount(), carrier);
+            if (IsValidClient(pointman, true))
+            {
+                Format(live, sizeof(live), "%d/%d guards, pointman %N, carrier %N",
+                    Module7_GetBodyguardCount(), Module7_GetTargetCount(), pointman, carrier);
+            }
+            else
+            {
+                Format(live, sizeof(live), "%d/%d guards, carrier %N",
+                    Module7_GetBodyguardCount(), Module7_GetTargetCount(), carrier);
+            }
         }
         else
         {
