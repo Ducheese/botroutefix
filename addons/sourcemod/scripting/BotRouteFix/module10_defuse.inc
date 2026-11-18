@@ -41,7 +41,7 @@ static int g_iChief = -1;
 static float g_fBombPos[3];
 
 // 持钳加成距离
-#define DEFUSE_KIT_BONUS 500.0
+#define DEFUSE_KIT_BONUS 300.0
 
 // 遥测统计计数器
 static int g_iTotalChiefs = 0;

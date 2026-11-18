@@ -304,15 +304,15 @@ static bool PrepModule5_RetreatBackend()
         return false;
     }
 
-    if (!MountAttackRetreatDetour())
-    {
-        LogError("[BotRouteFix] [Module 5] AttackState::OnUpdate hook unavailable; retreat item FAILED.");
-        return false;
-    }
-
     if (g_hSDKCall_IsOutnumbered == null)
     {
         LogError("[BotRouteFix] [Module 5] IsOutnumbered SDKCall missing; retreat item FAILED.");
+        return false;
+    }
+
+    if (!MountAttackRetreatDetour())
+    {
+        LogError("[BotRouteFix] [Module 5] AttackState::OnUpdate hook unavailable; retreat item FAILED.");
         return false;
     }
 

@@ -25,11 +25,11 @@
 //      MRES_Supercede 拦截，阻断战火黑洞效应；命中则放行。
 // 噪声路径零内存篡改（纯入口拦截）；拦截/放行均计入遥测。
 //
-// 事项 ITEM_M6_NOISE（M6 noise + OPPO guard）：噪声拦截 + 下包 OPPO 守卫同属一件事
+// 事项 ITEM_M6_NOISE（M6 noise + OPPO guard）：噪声拦截 + 下包与先锋 OPPO 守卫同属一件事
 // （归属原则：谁执行最终改写，谁拥有事项；两个写点都在 M6）。
-// 下包守卫（CCSBot::SetState Post）：仅对 task == TASK_PLANT_BOMB（即持包人，
-// 下包任务只会派给持包者）且当前 disposition 仍为 ENGAGE 的补写 OPPORTUNITY_FIRE，
-// 对标 CT 方 DEFUSE_BOMB 的原生 OPPO；SELF_DEFENSE / IGNORE 原样保留。
+// 下包与先锋守卫（CCBot::SetState Post）：对 task == TASK_PLANT_BOMB（持包者）
+// 及 M7 开路先锋（Module7_GetPointman()，如果有）且当前 disposition 仍为 ENGAGE 的补写
+// OPPORTUNITY_FIRE，对标 CT 方 DEFUSE_BOMB 的原生 OPPO；SELF_DEFENSE / IGNORE 原样保留。
 // GUARD_TICKING_BOMB 不强制：T 方守包听到枪声必须能出击，一刀切不合理。
 // 补写计入遥测（Module6_GetTotalOppoGuarded）。
 //========================================================================================
@@ -441,12 +441,15 @@ public MRESReturn Hook_InvestigateNoise_Pre(int client)
 }
 
 /**
- * 事项 ITEM_M6_NOISE（M6 noise + OPPO guard）的下包 Disposition 守卫原语
+ * 事项 ITEM_M6_NOISE（M6 noise + OPPO guard）的下包与先锋 Disposition 守卫原语
  *
- * 只给 task == TASK_PLANT_BOMB（下包任务只会派给持包者，即持包人）且当前
- * disposition 仍为 ENGAGE 的补写 OPPORTUNITY_FIRE，对标 CT 方 DEFUSE_BOMB 的原生 OPPO；
+ * 保护对象：
+ *   1. task == TASK_PLANT_BOMB（持包者下包任务）
+ *   2. M7 开路先锋（Module7_GetPointman()，如果有）
+ * 对上述两者当前 disposition 仍为 ENGAGE 的补写 OPPORTUNITY_FIRE；
+ * 对标 CT 方 DEFUSE_BOMB 的原生 OPPO，使先锋专心开路推点、包匪专心下包，
+ * 绝不脱离路线探查声音，遭遇战脱视后杜绝 33.3% 伏击长蹲。
  * 真正下包的 SELF_DEFENSE / IGNORE 原样保留。
- * GUARD_TICKING_BOMB 不强制（T 方守包听到枪声必须能出击），这里不碰。
  *
  * 失败语义：本函数只做守卫补写、不判定事项成败；输入无效或偏移缺失时直接返回。
  */
@@ -468,8 +471,25 @@ static void Module6_EnforcePlantDisposition(int client)
         return;
     }
 
-    int task = LoadFromAddress(pBot + view_as<Address>(g_iOffset_Task), NumberType_Int32);
-    if (task != TASK_PLANT_BOMB)
+    bool isTarget = false;
+    bool isPointman = false;
+
+    int pointman = Module7_GetPointman();
+    if (pointman > 0 && client == pointman)
+    {
+        isTarget = true;
+        isPointman = true;
+    }
+    else
+    {
+        int task = LoadFromAddress(pBot + view_as<Address>(g_iOffset_Task), NumberType_Int32);
+        if (task == TASK_PLANT_BOMB)
+        {
+            isTarget = true;
+        }
+    }
+
+    if (!isTarget)
     {
         return;
     }
@@ -483,7 +503,8 @@ static void Module6_EnforcePlantDisposition(int client)
     if (BotSetDisposition(client, DISP_OPPORTUNITY))
     {
         g_iTotalOppoGuarded++;
-        DebugLog("[BotRouteFix] [Module 6] Bot %N plant disposition -> OPPORTUNITY_FIRE", client);
+        DebugLog("[BotRouteFix] [Module 6] Bot %N %s disposition -> OPPORTUNITY_FIRE",
+            client, isPointman ? "pointman" : "plant");
     }
 }
 
