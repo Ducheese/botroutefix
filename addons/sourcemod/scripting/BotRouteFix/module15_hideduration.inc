@@ -71,7 +71,7 @@ static int g_iTotalShortHides = 0;
 static bool g_bModule15_Active = false;
 // 规则意图（区分"规则关闭"与"武装失败"，关闭路径必须执行）
 static bool g_bModule15_RuleOn = false;
-static bool g_bHideDurationDetourEnabled = false;
+static bool g_bHideDurationHooked = false;
 
 //========================================================================================
 // MODULE 15 ITEM BACKENDS (called by Init)
@@ -204,7 +204,7 @@ void RestoreModule15_HideDuration()
     if (g_hHideDurationDetour != null)
     {
         // 卸载路径不看借钩方意愿，直接强制 Disable 后再释放句柄
-        SyncDetourEnabled(g_hHideDurationDetour, g_bHideDurationDetourEnabled,
+        SyncDetourEnabled(g_hHideDurationDetour, g_bHideDurationHooked,
             true, Hook_HideState_OnEnter_Post, false, "Module 15");
         delete g_hHideDurationDetour;
         g_hHideDurationDetour = null;
@@ -227,7 +227,7 @@ void RestoreModule15_HideDuration()
 bool SyncHideDurationDetourState()
 {
     bool want = (Item_IsArmed(ITEM_M15_HIDE) || Item_IsArmed(ITEM_M12_CAMP) || Item_IsArmed(ITEM_M9_LOOT));
-    return SyncDetourEnabled(g_hHideDurationDetour, g_bHideDurationDetourEnabled,
+    return SyncDetourEnabled(g_hHideDurationDetour, g_bHideDurationHooked,
         true, Hook_HideState_OnEnter_Post, want, "Module 15");
 }
 

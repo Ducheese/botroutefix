@@ -27,9 +27,14 @@
 //
 // 事项 ITEM_M6_NOISE（M6 noise + OPPO guard）：噪声拦截 + 下包与先锋 OPPO 守卫同属一件事
 // （归属原则：谁执行最终改写，谁拥有事项；两个写点都在 M6）。
-// 下包与先锋守卫（CCBot::SetState Post）：对 task == TASK_PLANT_BOMB（持包者）
-// 及 M7 开路先锋（Module7_GetPointman()，如果有）且当前 disposition 仍为 ENGAGE 的补写
-// OPPORTUNITY_FIRE，对标 CT 方 DEFUSE_BOMB 的原生 OPPO；SELF_DEFENSE / IGNORE 原样保留。
+// 下包与先锋守卫（SetState Post + AttackState OnUpdate 双面）：对 task == TASK_PLANT_BOMB
+// （持包者）及 M7 开路先锋（Module7_GetPointman()，如果有）且当前 disposition 仍为 ENGAGE
+// 的补写 OPPORTUNITY_FIRE，对标 CT 方 DEFUSE_BOMB 的原生 OPPO；SELF_DEFENSE / IGNORE 原样保留。
+// 战术缺口封堵：引擎 Attack() 并发直入 m_attackState.OnEnter（不经 SetState，cs_bot_statemachine.cpp），
+// 交火全程 SetState Post 面零执行；而出生直写 ENGAGE（cs_bot_init.cpp）与任务授予时机不保证
+// 伴随状态迁移，包匪/先锋可能带着 ENGAGE 入战，脱视 0.1s 即遭 33.3% Ambush Hide 拐进坑 3~15 秒。
+// 故守卫同时挂 AttackState::OnUpdate Pre：交火 tick 内发现被洗回的 ENGAGE 就地补写 OPPO，
+// 敌人缩掩体时引擎读到 OPPO 走原生 StopAttacking 顺畅脱战回路线。
 // GUARD_TICKING_BOMB 不强制：T 方守包听到枪声必须能出击，一刀切不合理。
 // 补写计入遥测（Module6_GetTotalOppoGuarded）。
 //========================================================================================
@@ -59,14 +64,16 @@
 // 注：本模块不读 g_bBombPlanted（g_bBombPlanted 仍由 events.inc 维护，供 M5/M7/M10 消费）。
 static Handle g_hInvestigateNoiseDetour = null;
 static Handle g_hSetStateDetour = null;
-static bool g_bSetStateDetourEnabled = false;   // per-hook 真实启用态（SetState Post）
+static Handle g_hAttackGuardDetour = null;      // AttackState::OnUpdate 交火期兜底载体
+static bool g_bNoiseHooked = false;             // per-hook 真实启用态（InvestigateNoise Pre）
+static bool g_bSetStateHooked = false;          // per-hook 真实启用态（SetState Post）
+static bool g_bAttackGuardHooked = false;       // per-hook 真实启用态（AttackState OnUpdate Pre）
 static int g_iTotalNoiseIntercepted = 0;
 static int g_iTotalNoiseAllowed = 0;
 static int g_iTotalOppoGuarded = 0;
 
 // 模块内部启用缓存（仅用于 Enable 幂等短路；业务判据统一用 Item_IsArmed(ITEM_M6_NOISE)）
 static bool g_bModule6_Active = false;
-static bool g_bNoiseDetourEnabled = false;
 
 // 模块内部专用偏移缓存（Task/Disposition 上收 global.inc，本文件只用不存）
 static int g_iOffset_NoisePosition = -1;
@@ -77,17 +84,17 @@ static int g_iOffset_NoiseTimestamp = -1;
 //========================================================================================
 
 /**
- * 事项后端：噪声控制 + 下包 OPPO 守卫（双 dhook 载体）
+ * 事项后端：噪声控制 + 下包 OPPO 守卫（三 dhook 载体）
  *
  * 条件 = morale/noise/task/disposition 偏移（上收 global.inc，OnPluginStart 一次解析，
- * 这里只做 > 0 门禁）+ SetDisposition 直调（InitSDKCalls 先行准备）+ 双 Detour 挂载。
+ * 这里只做 > 0 门禁）+ SetDisposition 直调（InitSDKCalls 先行准备）+ 三 Detour 挂载。
  * 噪声路径纯入口拦截；下包守卫只在 PLANT_BOMB + ENGAGE 时补写 OPPO
  * （可视化腰环仍经由 Module6_GetBotDisposition 只读引擎原生值，那是另一条只读链路）。
  *
  * 失败语义：任一条件（morale/noise/task/disposition 偏移、SetDisposition 直调、
- * 双 Detour）缺失返回 false，Init 置 Ready=false 即事项 FAILED。
+ * 三 Detour）缺失返回 false，Init 置 Ready=false 即事项 FAILED。
  *
- * @return              true = 双后端就绪
+ * @return              true = 三后端就绪
  */
 static bool PrepModule6_NoiseBackend()
 {
@@ -126,6 +133,22 @@ static bool PrepModule6_NoiseBackend()
         {
             delete g_hInvestigateNoiseDetour;
             g_hInvestigateNoiseDetour = null;
+        }
+        return false;
+    }
+
+    if (!MountAttackGuardDetour())
+    {
+        LogError("[BotRouteFix] [Module 6] AttackState hook unavailable; M6 noise + OPPO guard item FAILED.");
+        if (g_hInvestigateNoiseDetour != null)
+        {
+            delete g_hInvestigateNoiseDetour;
+            g_hInvestigateNoiseDetour = null;
+        }
+        if (g_hSetStateDetour != null)
+        {
+            delete g_hSetStateDetour;
+            g_hSetStateDetour = null;
         }
         return false;
     }
@@ -186,6 +209,41 @@ static bool MountSetStateDetour()
 
     // SetState(BotState*) 有一个指针参数；漏加参数会让 DHook trampoline 崩溃（c0000005）
     DHookAddParam(g_hSetStateDetour, HookParamType_Int);
+    return true;
+}
+
+/**
+ * 挂载 AttackState::OnUpdate Pre Detour（事项 ITEM_M6_NOISE（M6 noise + OPPO guard）的交火期兜底载体）
+ *
+ * 引擎 Attack() 并发直入 m_attackState.OnEnter（不走 SetState，cs_bot_statemachine.cpp），
+ * 守卫的 SetState Post 面在交火全程零执行；此钩子在攻击 tick 内补位，确保持包者/先锋
+ * 交火期被洗回的 ENGAGE 就地补写为 OPPORTUNITY_FIRE，掐死脱视 0.1s 的 33.3% Ambush Hide。
+ * 与 M5 后撤的 AttackState_OnUpdate 同目标同签名（gamedata 共条目，M9 亦同），
+ * detour 独立互不干扰（与 M6/M9 双 SetState 钩子同惯例）。
+ *
+ * 失败语义：句柄创建或签名绑定失败返回 false，M6 noise + OPPO guard 事项 FAILED。
+ *
+ * @return              true = Detour 句柄已创建并绑定签名
+ */
+static bool MountAttackGuardDetour()
+{
+    g_hAttackGuardDetour = DHookCreateDetour(Address_Null, CallConv_THISCALL, ReturnType_Void, ThisPointer_Address);
+    if (g_hAttackGuardDetour == null)
+    {
+        LogError("[BotRouteFix] [Module 6] Failed to create DHook detour instance for AttackState_OnUpdate!");
+        return false;
+    }
+
+    if (!DHookSetFromConf(g_hAttackGuardDetour, g_hGameConf, SDKConf_Signature, "AttackState_OnUpdate"))
+    {
+        LogError("[BotRouteFix] [Module 6] Failed to set AttackState_OnUpdate signature from gamedata!");
+        delete g_hAttackGuardDetour;
+        g_hAttackGuardDetour = null;
+        return false;
+    }
+
+    // AttackState::OnUpdate(CCSBot *me) 的 me 以 CBaseEntity 参数直取客户端索引
+    DHookAddParam(g_hAttackGuardDetour, HookParamType_CBaseEntity);
     return true;
 }
 
@@ -270,6 +328,12 @@ void RestoreModule6_Noise()
         g_hSetStateDetour = null;
     }
 
+    if (g_hAttackGuardDetour != null)
+    {
+        delete g_hAttackGuardDetour;
+        g_hAttackGuardDetour = null;
+    }
+
     LogMessage("[BotRouteFix] [Module 6] Morale tactics hooks safely restored.");
 }
 
@@ -339,7 +403,7 @@ int Module6_GetBotDisposition(int client)
 }
 
 //========================================================================================
-// MODULE 6 DETOUR & HOOKS (CCSBOT::INVESTIGATENOISE / CCSBOT::SETSTATE)
+// MODULE 6 DETOUR & HOOKS (CCSBOT::INVESTIGATENOISE / CCSBOT::SETSTATE / ATTACKSTATE::ONUPDATE)
 //========================================================================================
 
 /**
@@ -544,6 +608,34 @@ public MRESReturn Hook_SetState_Post_Plant(Address pThis, DHookParam hParams)
 }
 
 /**
+ * 事项 ITEM_M6_NOISE（M6 noise + OPPO guard）的 AttackState::OnUpdate Pre 钩子
+ * （与 M5 后撤、M9 捡包守卫的同目标钩子以后缀区分，各自 detour 独立回调）。
+ *
+ * 引擎 Attack() 并发直入 m_attackState.OnEnter（不经 SetState），交火全程
+ * SetState Post 面零执行；此面在攻击 tick 内兜底，覆盖"身份已变而状态未迁"
+ * 带 ENGAGE 入战的窗口（出生直写/任务授予时机），就地补写 OPPO 掐死
+ * 脱视 0.1s 的 33.3% Ambush Hide。业务判定全部下沉 EnforcePlantDisposition。
+ *
+ * 失败语义：回调内不判定事项成败；未武装时首行自守，直接返回 MRES_Ignored。
+ */
+public MRESReturn Hook_AttackState_OnUpdate_Pre_Plant(Address pThis, DHookParam hParams)
+{
+    if (!Item_IsArmed(ITEM_M6_NOISE))
+    {
+        return MRES_Ignored;
+    }
+
+    int client = hParams.Get(1);
+    if (!IsBot(client, true))
+    {
+        return MRES_Ignored;
+    }
+
+    Module6_EnforcePlantDisposition(client);
+    return MRES_Ignored;
+}
+
+/**
  * 事项 ITEM_M6_NOISE（M6 noise + OPPO guard）启用时的一次性补写
  *
  * 纯事件驱动之外的唯一一次扫描，不建 timer；只在 Apply 武装成功后调用。
@@ -571,34 +663,39 @@ static void Module6_SweepPlantDisposition()
 //========================================================================================
 
 /**
- * 应用噪声事项：启用 InvestigateNoise Pre 钩子 + SetState Post 钩子
+ * 应用噪声事项：启用 InvestigateNoise Pre 钩子 + SetState Post 钩子 + AttackState OnUpdate Pre 钩子
  *
  * 事项 ITEM_M6_NOISE 的应用入口；不做 Detour 创建与签名绑定（那是 Prep 的职责）。
- * 两个钩子同属一个事项：任一失败都回滚，避免只开半边；失败只清 Armed 保留 Ready。
+ * 三个钩子同属一个事项：任一失败都回滚，避免只开半边；失败只清 Armed 保留 Ready。
  * 武装成功后单次扫盘（热重载时把已在下包任务的持包人一次性补齐）。
  *
- * @return              true = 双钩子已驻留
+ * @return              true = 三钩子已驻留
  */
 static bool ApplyModule6_NoiseBackend()
 {
     if (!Item_IsReady(ITEM_M6_NOISE)
-        || g_hInvestigateNoiseDetour == null || g_hSetStateDetour == null)
+        || g_hInvestigateNoiseDetour == null || g_hSetStateDetour == null
+        || g_hAttackGuardDetour == null)
     {
         Item_SetArmed(ITEM_M6_NOISE, false);
         return false;
     }
 
-    bool noiseOk = SyncDetourEnabled(g_hInvestigateNoiseDetour, g_bNoiseDetourEnabled,
+    bool noiseOk = SyncDetourEnabled(g_hInvestigateNoiseDetour, g_bNoiseHooked,
         false, Hook_InvestigateNoise_Pre, true, "Module 6");
-    bool stateOk = SyncDetourEnabled(g_hSetStateDetour, g_bSetStateDetourEnabled,
+    bool stateOk = SyncDetourEnabled(g_hSetStateDetour, g_bSetStateHooked,
         true, Hook_SetState_Post_Plant, true, "Module 6");
+    bool attackOk = SyncDetourEnabled(g_hAttackGuardDetour, g_bAttackGuardHooked,
+        false, Hook_AttackState_OnUpdate_Pre_Plant, true, "Module 6");
 
-    if (!noiseOk || !stateOk)
+    if (!noiseOk || !stateOk || !attackOk)
     {
-        SyncDetourEnabled(g_hInvestigateNoiseDetour, g_bNoiseDetourEnabled,
+        SyncDetourEnabled(g_hInvestigateNoiseDetour, g_bNoiseHooked,
             false, Hook_InvestigateNoise_Pre, false, "Module 6");
-        SyncDetourEnabled(g_hSetStateDetour, g_bSetStateDetourEnabled,
+        SyncDetourEnabled(g_hSetStateDetour, g_bSetStateHooked,
             true, Hook_SetState_Post_Plant, false, "Module 6");
+        SyncDetourEnabled(g_hAttackGuardDetour, g_bAttackGuardHooked,
+            false, Hook_AttackState_OnUpdate_Pre_Plant, false, "Module 6");
         Item_SetArmed(ITEM_M6_NOISE, false);
         LogError("[BotRouteFix] [Module 6] Detour enable failed; M6 noise + OPPO guard item unarmed.");
         return false;
@@ -610,11 +707,12 @@ static bool ApplyModule6_NoiseBackend()
 }
 
 /**
- * 还原噪声事项：摘双钩并解除武装
+ * 还原噪声事项：摘三钩并解除武装
  */
 static void RestoreModule6_NoiseBackend()
 {
-    SyncDetourEnabled(g_hInvestigateNoiseDetour, g_bNoiseDetourEnabled, false, Hook_InvestigateNoise_Pre, false, "Module 6");
-    SyncDetourEnabled(g_hSetStateDetour, g_bSetStateDetourEnabled, true, Hook_SetState_Post_Plant, false, "Module 6");
+    SyncDetourEnabled(g_hInvestigateNoiseDetour, g_bNoiseHooked, false, Hook_InvestigateNoise_Pre, false, "Module 6");
+    SyncDetourEnabled(g_hSetStateDetour, g_bSetStateHooked, true, Hook_SetState_Post_Plant, false, "Module 6");
+    SyncDetourEnabled(g_hAttackGuardDetour, g_bAttackGuardHooked, false, Hook_AttackState_OnUpdate_Pre_Plant, false, "Module 6");
     Item_SetArmed(ITEM_M6_NOISE, false);
 }

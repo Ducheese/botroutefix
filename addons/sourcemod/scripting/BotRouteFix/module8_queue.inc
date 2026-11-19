@@ -20,8 +20,8 @@
 // MODULE 8 DEFINES & GLOBALS
 //========================================================================================
 
-#define QUEUE_BREAKER_TIMEOUT   2.0
-#define QUEUE_SHATTER_LIMIT     5       // 连续打碎达到 5 次（约等待 10 秒），判定为顽固死锁
+#define QUEUE_BREAKER_TIMEOUT   3.0
+#define QUEUE_SHATTER_LIMIT     3       // 连续打碎达到 5 次（约等待 10 秒），判定为顽固死锁
 #define QUEUE_NAIL_DANGER       0.8
 #define QUEUE_NAIL_MAX          2.5
 #define QUEUE_MAX_PATH_NODES    256     // 引擎 MAX_PATH_LENGTH 同值；pathLength 异常大值时防节点地址算飞

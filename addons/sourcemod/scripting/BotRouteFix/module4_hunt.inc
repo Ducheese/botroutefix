@@ -70,8 +70,8 @@ static Handle g_hHuntStateDetour = null;
 
 // 模块内部启用缓存（仅用于 Enable 幂等短路；逐事项判据统一用 Item_IsArmed(ITEM_M4_NOP/HUNT)）
 static bool g_bModule4_Active = false;
-static bool g_bHuntPreEnabled = false;
-static bool g_bHuntPostEnabled = false;
+static bool g_bHuntPreHooked = false;
+static bool g_bHuntPostHooked = false;
 
 static int g_iOffset_HuntArea = -1;
 static int g_iOffset_ClearedTimestamp = -1;
@@ -299,7 +299,7 @@ void EnableModule4_Hunt(bool enable)
         // 观察模式：后端就绪但规则关闭时，仅保持 Post 钩子挂载记录原生选区（Pre 无需启用）
         if (Item_IsReady(ITEM_M4_HUNT) && g_hHuntStateDetour != null)
         {
-            SyncDetourEnabled(g_hHuntStateDetour, g_bHuntPostEnabled, true,
+            SyncDetourEnabled(g_hHuntStateDetour, g_bHuntPostHooked, true,
                 Hook_HuntState_OnUpdate_Post, true, "Module 4");
         }
         return;
@@ -459,9 +459,9 @@ public MRESReturn Hook_HuntState_OnUpdate_Post(Address pThis, DHookParam hParams
 
     // 引擎原生下标契约: (GetTeamNumber() - 1) % 2 -> T=1, CT=0
     int teamIdx = (team - 1) % 2;
-    // 读取 HuntState 当前所选定的 m_huntArea
+    // 读取 HuntState 当前所选定的 m_huntArea（初次读取处收紧真实容器白名单门禁）
     Address pArea = LoadAddressFromAddress(pThis + view_as<Address>(g_iOffset_HuntArea));
-    if (!IsValidAddress(pArea))
+    if (!IsValidAddress(pArea) || !Module3_IsKnownNavArea(pArea))
     {
         g_pVisualHuntArea[client] = Address_Null;
         return MRES_Ignored;
@@ -534,17 +534,17 @@ static bool ApplyModule4_HuntBackend()
         return false;
     }
 
-    bool preOk = SyncDetourEnabled(g_hHuntStateDetour, g_bHuntPreEnabled, false,
+    bool preOk = SyncDetourEnabled(g_hHuntStateDetour, g_bHuntPreHooked, false,
         Hook_HuntState_OnUpdate_Pre, true, "Module 4");
-    bool postOk = SyncDetourEnabled(g_hHuntStateDetour, g_bHuntPostEnabled, true,
+    bool postOk = SyncDetourEnabled(g_hHuntStateDetour, g_bHuntPostHooked, true,
         Hook_HuntState_OnUpdate_Post, true, "Module 4");
 
     // 全成或全败：任一钩子失败立即回滚，绝不留半挂载态
     if (!preOk || !postOk)
     {
-        SyncDetourEnabled(g_hHuntStateDetour, g_bHuntPreEnabled, false,
+        SyncDetourEnabled(g_hHuntStateDetour, g_bHuntPreHooked, false,
             Hook_HuntState_OnUpdate_Pre, false, "Module 4");
-        SyncDetourEnabled(g_hHuntStateDetour, g_bHuntPostEnabled, true,
+        SyncDetourEnabled(g_hHuntStateDetour, g_bHuntPostHooked, true,
             Hook_HuntState_OnUpdate_Post, false, "Module 4");
         Item_SetArmed(ITEM_M4_HUNT, false);
         LogError("[BotRouteFix] [Module 4] HuntState hook item FAILED (pre=%d, post=%d).", preOk, postOk);
@@ -569,9 +569,9 @@ static void RestoreModule4_NopBackend()
  */
 static void RestoreModule4_HuntBackend()
 {
-    SyncDetourEnabled(g_hHuntStateDetour, g_bHuntPreEnabled, false,
+    SyncDetourEnabled(g_hHuntStateDetour, g_bHuntPreHooked, false,
         Hook_HuntState_OnUpdate_Pre, false, "Module 4");
-    SyncDetourEnabled(g_hHuntStateDetour, g_bHuntPostEnabled, true,
+    SyncDetourEnabled(g_hHuntStateDetour, g_bHuntPostHooked, true,
         Hook_HuntState_OnUpdate_Post, false, "Module 4");
     Item_SetArmed(ITEM_M4_HUNT, false);
 }
