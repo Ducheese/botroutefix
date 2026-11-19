@@ -12,7 +12,8 @@
 //     * 若保镖队伍中存在比包匪更靠近目标包点的人，选最近者为先锋（POINTMAN 模式），
 //       先锋直奔包点，包匪与其余保镖 Follow 先锋；
 //     * 若包匪自己才是最近的，不存在先锋，全体保镖 Follow 包匪（CARRIER 模式）。
-//   - 先锋代表包匪意志：只去目标包点（M2 lock 优先，否则原生最近），不等待下包时机。
+//   - 先锋代表包匪意志：只去目标包点（M2 lock 优先，否则原生最近）；Bot 整队等包匪能进下包任务才组织
+//     （读引擎实际 plant 时间戳，不看 M2 武装态），开局不再固定配队；人类包匪不受时钟限制，开局即配。
 //   - 先锋到场交接：先锋到达包点（<= 400.0 码）完成领跑使命，平滑转入 CARRIER 模式，
 //     包匪回原生下包，全体保镖（含前先锋）改为跟随并保护包匪。
 //   - 动态补员：保镖阵亡补保镖；先锋阵亡从剩余保镖中择优替补先锋，无更近者则包匪领跑；
@@ -46,7 +47,6 @@ enum EscortMode
 enum struct PointmanObjective
 {
     bool  active;        // 目标是否已下发
-    float goal[3];       // 目标包点中心
     float lastIssue;     // 最近一次下发 MoveTo 的时刻（秒）
 }
 
@@ -62,6 +62,7 @@ static bool g_bPointmanArrived = false;   // 先锋到场交接锁（到场后�
 static PointmanObjective g_PointmanObjective;
 static int g_iEscortGeneration = 0;      // 延迟帧代际，任何迁移/释放 +1
 static bool g_bSuperviseScheduled = false;
+static bool g_bOrganizeScheduled = false;   // plant 放行递延组建已排期（一次性定时器在途，去重用）
 
 // 先锋监督：CCSBot::Idle 入口 Detour（感知 MoveTo 完成/放弃、Hide/Hunt 结束）
 static Handle g_hIdleDetour = null;
@@ -394,7 +395,9 @@ void Module7_OnMapStart()
 }
 
 /**
- * 冻结时间结束 (round_freeze_end)：开局配一次保镖（时钟归 module2，本模块不碰）
+ * 冻结时间结束 (round_freeze_end)：按实际 plant delay 组织保镖（时钟只读归 module2，本模块不写）
+ *
+ * 不再开局固定配队；Bot 包匪下包任务未放行时只递延，到点才组建（人类包匪不受时钟限制，开局即配）。
  */
 void Module7_OnRoundFreezeEnd()
 {
@@ -596,7 +599,7 @@ public Action Escort_TimerSupervise(Handle timer, any data)
 }
 
 /**
- * 先锋监督延后帧：到场交接，或未到场重发 MoveTo（属于事项 ITEM_M7_ESCORT）
+ * 先锋监督延后帧：现解目标，到场交接，未到场重发 MoveTo（属于事项 ITEM_M7_ESCORT）
  *
  * 门禁：代际失配或 !Item_IsArmed(ITEM_M7_ESCORT) 直接放弃。
  *
@@ -633,11 +636,14 @@ public void Escort_FrameSupervise(any data)
     }
 
     float pos[3];
-    float goal[3];
     GetClientAbsOrigin(pointman, pos);
-    for (int i = 0; i < 3; i++)
+
+    // 单一真相来源：每次下发都现解，不读组织时刻的快照（包匪原生 closet 行走中会翻转）
+    float goal[3];
+    bool locked = false;
+    if (!Escort_ResolveGoal(carrier, goal, locked))
     {
-        goal[i] = g_PointmanObjective.goal[i];
+        return;
     }
 
     float distSq = Escort_DistSq(pos, goal);
@@ -982,7 +988,7 @@ static void Escort_FillToTarget(int carrier, float anchor[3], int desired)
  * 解析先锋目标包点（代表包匪意志：优先 M2 锁定包点，未锁时原生就近）
  *
  * 属于事项 ITEM_M7_ESCORT。
- * 先锋只继承包匪去哪个包点的意志，不继承何时去（开局第 0 秒即出发，不等待运包时钟）。
+ * 先锋只继承包匪去哪个包点的意志；何时出发由建队门控决定（Bot 包匪等能进下包任务才组织）。
  *
  * @param carrier       包匪索引（用于计算原生就近起点）
  * @param goal          输出目标包点世界坐标 (3D)
@@ -1206,10 +1212,7 @@ static bool Escort_SwitchToPointman(int carrier)
     g_iEscortMode = Escort_Pointman;
     g_iEscortPointman = pointman;
     g_PointmanObjective.active = true;
-    for (int i = 0; i < 3; i++)
-    {
-        g_PointmanObjective.goal[i] = goal[i];
-    }
+    // 目标不存此处：后续每次下发由 FrameSupervise 现解
     g_PointmanObjective.lastIssue = GetGameTime();
     g_bSuperviseScheduled = false;
     g_iEscortGeneration++;
@@ -1305,9 +1308,100 @@ static void Escort_Rebalance(int carrier, float anchor[3], int desired)
 }
 
 /**
- * 事项 M7 护送花名册的全量重算：开局 / 换包匪 / 中途捡包 / 热重载 / 重启用
+ * 下包任务是否已放行：包匪此刻能否进入下包任务（属于事项 ITEM_M7_ESCORT）
+ *
+ * 只读引擎 m_earliestBombPlantTimestamp 实际值，不看 M2 事项武装态——M2 未启用时
+ * 引擎原生掷骰值仍在，照常生效；读不到（0.0）按放行处理，不阻断组建（fail-open）。
+ *
+ * 失败语义：时间戳缺失（<= 0.0）时 fail-open 放行；纯读内存，无其他失败分支，不拓宽事项 FAILED 面。
+ *
+ * @return              true = 已到下包时间或时间戳不可读；false = 运包时钟未到
+ */
+static bool Escort_IsPlantTaskOpen()
+{
+    float earliest = Module2_GetEarliestPlantTime();
+    if (earliest <= 0.0)
+    {
+        return true;
+    }
+    return GetGameTime() >= earliest;
+}
+
+/**
+ * 按实际 plant delay 递延组建：下包任务未开时排一个一次性定时器，到点再组织
+ * （属于事项 ITEM_M7_ESCORT）
+ *
+ * 单次触发非轮询；排期成功打标去重，回合/名单变化导致过期由代际自动作废。
+ *
+ * 失败语义：CreateTimer 建柄失败仅丢失本次递延（打 DebugLog，不清排期标），
+ * 下次 Escort_Refresh 重入时重排；不标记事项 FAILED。
+ */
+static void Escort_ScheduleOrganize()
+{
+    if (g_bOrganizeScheduled)
+    {
+        return;
+    }
+
+    float earliest = Module2_GetEarliestPlantTime();
+    float wait = earliest - GetGameTime();
+    if (wait < 0.1)
+    {
+        wait = 0.1;
+    }
+
+    Handle timer = CreateTimer(wait, Escort_TimerOrganize, g_iEscortGeneration, TIMER_FLAG_NO_MAPCHANGE);
+    if (timer == null)
+    {
+        DebugLog("[BotRouteFix] [Module 7] Organize timer creation failed; will retry on next Refresh");
+        return;
+    }
+
+    g_bOrganizeScheduled = true;
+    DebugLog("[BotRouteFix] [Module 7] Plant task locked for %.1fs; bodyguard roster deferred", wait);
+}
+
+/**
+ * plant 放行递延组建一次性定时器回调（属于事项 ITEM_M7_ESCORT）
+ *
+ * 门禁：代际失配或事项已解除武装或已下包直接作废；真正组织走 Escort_Refresh（门控重验，
+ * 若时间戳被改写仍未放行会再次顺延）。
+ * 失败语义：作废路径无副作用；组织失败语义由 Escort_Refresh 承担，本回调不拓宽 FAILED 面。
+ * 执行后返回 Plugin_Stop 自动自毁。
+ */
+public Action Escort_TimerOrganize(Handle timer, any data)
+{
+    // 代际失配 = 名单已换代（回合/换包/解散），旧定时器直接作废，不碰排期标记
+    // （标记属于新排期，旧定时器无权清理，否则会灭掉新排期导致递延丢失）
+    if (view_as<int>(data) != g_iEscortGeneration)
+    {
+        return Plugin_Stop;
+    }
+
+    // 排期兑现：只有本代定时器才清标记
+    g_bOrganizeScheduled = false;
+
+    // 事项已解除武装：关了功能就不再组建（异步入口同样自守）
+    if (!Item_IsArmed(ITEM_M7_ESCORT))
+    {
+        return Plugin_Stop;
+    }
+
+    // 已下包：护送对象不存在，直接作废（正常流程走不到，纯防御）
+    if (g_bBombPlanted)
+    {
+        return Plugin_Stop;
+    }
+
+    Escort_Refresh();
+    return Plugin_Stop;
+}
+
+/**
+ * 事项 M7 护送花名册的全量重算：plant 放行后组织 / 换包匪 / 中途捡包 / 热重载 / 重启用
  *
  * 只做 diff，不扫全队；换包匪先解散旧名单；死/飞/转队/变成包匪本人的一律除名。
+ * 名单为空且下包任务未放行时只递延不组建（按实际 plant delay，不看 M2 武装态；仅约束 Bot 包匪）。
  * 永不写运包时钟（那是模块 2 的事项）。
  */
 static void Escort_Refresh()
@@ -1324,6 +1418,17 @@ static void Escort_Refresh()
     if (g_iEscortCarrier != carrier)
         Escort_ReleaseAll();
     g_iEscortCarrier = carrier;
+
+    // 建队门控：只约束 Bot 包匪——人类不受运包时钟限制，开局即配；
+    // Bot 名单为空且下包任务未放行，只递延定时、不组织（已有名单的维持走 Reconcile 不经此处）
+    if (IsBot(carrier, true) && g_iEscortMode == Escort_None && !Escort_IsPlantTaskOpen())
+    {
+        Escort_ScheduleOrganize();
+        return;
+    }
+
+    // 走到这里即行组织：清掉可能残留的排期标记（排期与直接组织互斥，同一时刻只走一边）
+    g_bOrganizeScheduled = false;
 
     int morale = GetEffectiveCarrierMorale(carrier);
     int desired = Escort_DesiredCount(morale);
@@ -1395,6 +1500,7 @@ static void Escort_ReleaseAll()
     g_PointmanObjective.active = false;
     g_PointmanObjective.lastIssue = 0.0;
     g_bSuperviseScheduled = false;
+    g_bOrganizeScheduled = false;
     g_iEscortGeneration++;
 
     if (count <= 0 && carrier == 0 && pointman == 0)
@@ -1444,6 +1550,7 @@ static void Escort_ClearSilent()
     g_PointmanObjective.active = false;
     g_PointmanObjective.lastIssue = 0.0;
     g_bSuperviseScheduled = false;
+    g_bOrganizeScheduled = false;
     g_iEscortGeneration++;
 }
 
