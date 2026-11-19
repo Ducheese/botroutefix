@@ -70,9 +70,11 @@ static float g_flSniperPairExpire[MAX_SNIPER_PAIRS];
 static int g_iSniperPairCount = 0;
 
 // 走廊高亮追踪：被加压过的走廊 NavArea（钉刺后高亮 60 秒，只画圈）
+// 【编译器缺陷补偿】spcomp64 把全局 Address 数组按 4B/元分配、读写却按 8B 步进
+//（实证 F:\Git\scratch\stride_test\），故声明双倍长度，实际只用前 N 槽。
 #define SNIPER_CORRIDOR_HIGHLIGHT_SEC   60.0
 #define MAX_PRESSURIZED_AREAS           64
-static Address g_PressurizedAreas[MAX_PRESSURIZED_AREAS];
+static Address g_PressurizedAreas[MAX_PRESSURIZED_AREAS * 2];
 static float g_flPressurizedExpire[MAX_PRESSURIZED_AREAS];
 static int g_iPressurizedAreaCount = 0;
 

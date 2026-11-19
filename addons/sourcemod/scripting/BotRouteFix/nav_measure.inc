@@ -30,7 +30,8 @@
 #define NAV_MEASURE_MAX_PATH_NODES  256     // 与 cs_bot.h 的 MAX_PATH_LENGTH 对齐
 
 // 探针输出 scratch（单线程使用，调用后立即消费；避免 Address[] 动态数组参数的写回语义问题）
-static Address g_NavProbeAreas[NAV_MEASURE_MAX_PATH_NODES];
+// 【编译器缺陷补偿】同 M11：全局 Address 数组 4B/元分配、8B 步进，故声明双倍长度。
+static Address g_NavProbeAreas[NAV_MEASURE_MAX_PATH_NODES * 2];
 static int g_iNavProbeCount = 0;
 
 //========================================================================================

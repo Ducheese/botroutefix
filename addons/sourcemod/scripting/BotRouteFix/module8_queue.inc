@@ -47,8 +47,9 @@ static int g_iTotalQueueShattered = 0;
 static int g_iTotalDeadlockHunt = 0;
 
 // 可视化追踪：因堵路加过 danger 的 NavArea (持续至少 60 秒) 与死锁解脱 Bot
+// 【编译器缺陷补偿】同 M11：全局 Address 数组 4B/元分配、8B 步进，故声明双倍长度。
 #define MAX_BLOCKED_AREAS 64
-static Address g_BlockedAreas[MAX_BLOCKED_AREAS];
+static Address g_BlockedAreas[MAX_BLOCKED_AREAS * 2];
 static float g_flBlockedAreaExpire[MAX_BLOCKED_AREAS];
 static int g_iBlockedAreaCount = 0;
 static float g_flDeadlockBrokenUntil[MAXPLAYERS + 1];

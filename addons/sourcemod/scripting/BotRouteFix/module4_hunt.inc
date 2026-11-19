@@ -78,7 +78,8 @@ static int g_iOffset_ClearedTimestamp = -1;
 static int g_iOffset_HasVisitedEnemySpawn = -1;
 
 static int g_iTotalHuntClaims = 0;
-static Address g_pVisualHuntArea[MAXPLAYERS + 1];
+// 【编译器缺陷补偿】同 M11：全局 Address 数组 4B/元分配、8B 步进，故声明双倍长度。
+static Address g_pVisualHuntArea[(MAXPLAYERS + 1) * 2];
 static float g_flVisualHuntTimestamp[MAXPLAYERS + 1];
 
 //========================================================================================
