@@ -13,14 +13,15 @@
 //    直到第一个人读上条（m_bombDefuser 置位）其余才翻成 GUARD_BOMB_DEFUSER。撞墙窗口 = 全员旅行时间。
 // 2. 卡门：IsDoingScenario() 本体就是"defer 检查 + return true"（cs_bot.cpp:411-421，
 //    64 位 sub_18032B290：convar 内联读 + GetTeamNumber + UTIL_HumansOnTeam，n=1 验证）。
-//    非首席掐成 false 即掉进 276 行 else——"不让拆就守包点"（Hide 包点 + OPPORTUNITY_FIRE），
-//    掩护组引擎自建。首席读上条后 257 行原生把众人翻成 GUARD_BOMB_DEFUSER。
+//    - 远端 CT（距雷包 > 750 码）放行直通原生（true），以 DEFUSE_BOMB 全速向包点回防推进，并激活 Hide:147 自动起步；
+//    - 近端非首席（距雷包 <= 750 码）掐成 false 掉进 276 行 else——"不让拆就守包点"（Hide 包点 + OPPORTUNITY_FIRE），
+//      并在包点 750 码物理半径内搜到真掩体就地架枪。首席读上条后 257 行原生把众人翻成 GUARD_BOMB_DEFUSER。
 // 3. 字面"提前转 GUARD_BOMB_DEFUSER"不可行：HideState:125 在 defuser==NULL 时每拍 Idle() 弹回，
 //    自旋抖动。故掩护组拿 ZONE task（行为等价），名字晚到几秒。
 // 4. 调用点审计（掐 false 无行为副作用）：
 //    - Hide:337 → 纯 Encourage 喊话（3-15 秒节流），进就进了；
 //    - Idle:775 → 人质图分支，de_ 图 planted 为真时到不了；
-//    - 其余（Hunt:102/MoveTo:170/Hide:147）只读 true 分支做退出，false 即"继续蹲"，正是要的。
+//    - Hide:147 → 远端放行 true 激活破冰起步；近端掐 false 保持真掩体蹲守，分流严密。
 // 5. 首席选举（全事件，无 timer）：bomb_planted 选距包最近存活 CT bot（行走距离 − 持钳）；
 //    player_death / client_disconnect 首席倒地或掉线立即按缓存包坐标重选（planted_c4 实体下包后一直在）；
 //    defused / exploded / round_start / OnMapStart 清。
@@ -42,6 +43,9 @@ static float g_fBombPos[3];
 
 // 持钳加成距离
 #define DEFUSE_KIT_BONUS 300.0
+
+// 包点掩护与警戒判决半径（物理对齐引擎 cs_bot.h:462 / bot_hide.cpp:89 的 750.0 码掩体搜索阈值）
+#define DEFUSE_GUARD_DISTANCE 750.0
 
 // 遥测统计计数器
 static int g_iTotalChiefs = 0;
@@ -322,6 +326,16 @@ public MRESReturn Hook_IsDoingScenario_Pre(int client, DHookParam hParams)
         return MRES_Ignored;
     }
 
+    // 远端 CT（距雷包 > 750 码）放行直通原生：组织回防冲向包点，
+    // 激活 cs_bot_hide.cpp:147 自动起步进点，打破警家原地蹲坑自旋僵局
+    float botPos[3];
+    GetClientAbsOrigin(client, botPos);
+    if (GetVectorDistance(botPos, g_fBombPos) > DEFUSE_GUARD_DISTANCE)
+    {
+        return MRES_Ignored;
+    }
+
+    // 近端（<= 750 码）掩护组拦截：就地转入包点真掩体警戒掩护
     DHookSetReturn(hParams, false);
     g_iTotalScenarioGated++;
     // DebugLog("[BotRouteFix] [Module 10] Bot %N held at GUARD_BOMB_ZONE (chief %N goes)", client, g_iChief);

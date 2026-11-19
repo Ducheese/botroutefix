@@ -253,10 +253,11 @@ public Action Timer_RenderVisualsFast(Handle timer)
     // [M2] 包匪下包指引线与就绪光环
     //   数据源分离：光圈读引擎原生 earliest timestamp，M2 关闭也应显示；
     //   指引线：锁事项武装时连锁定包点，未锁定时连原生最近包点（M2 关闭也能看原生选点）。
+    //   仅针对 Bot 包匪渲染，真人玩家不受 BotRouteFix 下包引导约束，不画指引线与光环。
     //------------------------------------------------------------------------------------
     {
         int carrier = GetC4Carrier();
-        if (IsValidClient(carrier, true))
+        if (IsBot(carrier, true))
         {
             float carrierChest[3];
             GetBotChestPosition(carrier, carrierChest);
