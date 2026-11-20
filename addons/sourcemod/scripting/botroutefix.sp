@@ -21,7 +21,7 @@
 //   - BotRouteFix/module9_loosefetch.inc : [模块 9] 掉包 Top3 抢包花名册 (Loose Fetch Roster, NoticeLooseBomb Pre)
 //   - BotRouteFix/module10_defuse.inc : [模块 10] CT 首席拆包员 (Chief Defuser, IsDoingScenario Pre)
 //   - BotRouteFix/module11_sniper.inc : [模块 11] 狙击手威慑与走廊加压 (Sniper Deterrence & Corridor Danger)
-//   - BotRouteFix/module12_campgate.inc : [模块 12] 狙击 camp 概率重构 (60-10*M, NOP+DHook重骰)
+//   - BotRouteFix/module12_snipercamp.inc : [模块 12] 狙击 camp 概率重构 (60-10*M, NOP+DHook重骰)
 //   - BotRouteFix/module13_sniperbuy.inc : [模块 13] 随机买狙概率重构 (50-10*M, sniperRifleChance)
 //   - BotRouteFix/module14_defendrush.inc : [模块 14] 开局前沿架枪概率重构 (40-10*M, defendRushChance)
 //   - BotRouteFix/module15_hideduration.inc : [模块 15] Hide 蹲守时长士气缩放 (m_duration *= 1-0.15*M)
@@ -53,7 +53,7 @@
 #include "BotRouteFix/module9_loosefetch"
 #include "BotRouteFix/module10_defuse"
 #include "BotRouteFix/module11_sniper"
-#include "BotRouteFix/module12_campgate"
+#include "BotRouteFix/module12_snipercamp"
 #include "BotRouteFix/module13_sniperbuy"
 #include "BotRouteFix/module14_defendrush"
 #include "BotRouteFix/module15_hideduration"
@@ -138,7 +138,7 @@ public void OnPluginStart()
     // 借钩宿主先于借用方：M12 的 camp 门禁复用 M15 的 OnEnter Detour，
     // 宿主先挂载可避免启动期一次"宿主不可用"的回滚误报。
     InitModule15_HideDuration();
-    InitModule12_CampGate();
+    InitModule12_SniperCamp();
     InitModule13_SniperBuy();
     InitModule14_DefendRush();
 
@@ -168,7 +168,7 @@ public void OnPluginEnd()
 {
     // Safely restore business modules in reverse order
     // 借钩宿主原则：M12 借用 M15 的 OnEnter 钩子，必须借用方 M12 先还（还原内存补丁与借用态），宿主 M15 后退（销毁 Detour 句柄）
-    RestoreModule12_CampGate();
+    RestoreModule12_SniperCamp();
     RestoreModule15_HideDuration();
     RestoreModule14_DefendRush();
     RestoreModule13_SniperBuy();

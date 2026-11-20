@@ -153,7 +153,7 @@ static void PrintChanceRoster(int client, int module, const char[] tag, bool ctO
             }
             else if (module == 12)
             {
-                chance = Module12_CalculateCampChance(GetBotMorale(i));
+                chance = Module12_CalculateSniperCampChance(GetBotMorale(i));
             }
             else if (module == 13)
             {
@@ -247,7 +247,7 @@ public Action Command_Status(int client, int args)
     PrintModuleState(client, 9, "T Loose-Bomb Fetch Roster & OPPO Guard");
     PrintModuleState(client, 10, "CT Chief Defuser");
     PrintModuleState(client, 11, "Sniper Corridor Deterrence");
-    PrintModuleState(client, 12, "Sniper Camp Gate (60-10*M)");
+    PrintModuleState(client, 12, "Sniper Camp (60-10*M)");
     PrintModuleState(client, 13, "Sniper Buy Chance (50-10*M)");
     PrintModuleState(client, 14, "Defend Rush Chance (40-10*M)");
     PrintModuleState(client, 15, "Hide Duration Scaling x(1-0.15*M)");
@@ -532,12 +532,12 @@ public Action Command_Status(int client, int args)
     // M12：重定向计数器 + 两队逐 bot 留守理论骰子（per-bot 重骰本身是逐行日志的事）。
     if (ModuleHasLive(12))
     {
-        Format(live, sizeof(live), "total %d redirected", Module12_GetTotalCampRedirected());
+        Format(live, sizeof(live), "total %d redirected", Module12_GetTotalSniperCampRedirected());
         ReplyToCommand(client, "[BotRouteFix] [Live] M12 | %s", live);
     }
     if (ModuleHasLive(12))
     {
-        PrintChanceRoster(client, 12, "Camp", false);
+        PrintChanceRoster(client, 12, "SniperCamp", false);
     }
 
     // M13：两队逐 bot 买狙理论骰子（引擎内掷骰，名单是整队分布快照）。

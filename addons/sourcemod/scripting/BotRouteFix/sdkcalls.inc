@@ -144,7 +144,7 @@ static bool PrepSDKCall_Hunt()
     g_hSDKCall_Hunt = EndPrepSDKCall();
     if (g_hSDKCall_Hunt == null)
     {
-        LogError("[BotRouteFix] [SDKCalls] CCSBot_Hunt unavailable (M8 deadlock/M12 camp items will FAIL).");
+        LogError("[BotRouteFix] [SDKCalls] CCSBot_Hunt unavailable (M8 deadlock/M12 sniper camp items will FAIL).");
         return false;
     }
     return true;

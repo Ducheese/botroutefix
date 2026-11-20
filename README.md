@@ -171,14 +171,14 @@
   - 真正撤退时 `Hide` 内部会自行 `DestroyPath` / `ComputePath`；硬豁免目标（包匪下包临界、CT 首席）不会被本模块打断使命动作，是否真撤与撤多久由模块 5 统一裁决。
   - **归属**：撤退事项归 M5；M11 只统计已发出的 `requests`。走廊事项因 nav 缺失 FAILED 时，只要 Detour 仍在，请求照发，M5 自己决定退不退。
 
-### 模块 12：狙击手 Camp 门禁与高士气前压 (Sniper Camp Gate & Morale Rush)
+### 模块 12：狙击手 Camp 门禁与高士气前压 (Sniper Camp & Morale Rush)
 - **原生狙击蹲点缺陷 (Static Sniper Camp Dice)**：
   - 原生引擎在 `cs_bot_idle.cpp` 中散落 6 处狙击手蹲守决策分支（进攻端固定 10.0% 概率，防守端固定 75.0% 概率）。
   - 无论战局顺逆、士气高低，概率恒定写死，且原生分支在未通过掷骰时，往往会落入消极防守分支（如原地踱步守点），无法实现高士气狙击手的主动前压搜敌。
 - **旁路补丁 + DHook 借钩重骰 (Bypass Patches & OnEnter Gate)**：
   - **前端 6 处指令旁路**：原生 6 处分支中，4 处为跳过 Hide 的条件分支（O1, D1, D2, D3），打入 4 组 NOP 穿透；2 处为跳向非 Hide 备用逻辑的分支（O2, O3），打入 2 组 `E9` JMP 强制跳转，确保全员狙击手必进 `Hide()` 并带上专属任务 `MOVE_TO_SNIPER_SPOT (Task 19)`。
   - **后端借钩重骰与短路契约**：借用模块 15 挂载的 `HideState::OnEnter` Post Detour 归口拦截所有 `Task == 19` 的 Bot，按全新士气公式实时掷骰：
-    $$\text{CampChance} = 60.0\% - 10.0\% \times \text{Morale}$$
+    $$\text{SniperCampChance} = 60.0\% - 10.0\% \times \text{Morale}$$
     - 士气 -3（大劣势）：90% 留守掩体架枪蹲点
     - 士气 0（均势）：60% 留守蹲点
     - 士气 +3（大胜）：30% 留守蹲点（其余 70% 判定为前压）
@@ -233,7 +233,7 @@
   - **短蹲与缩放同属 M15 一件事**：M15 亲手写 `m_duration`，所以 M15 规则关闭或事项 FAILED（含 morale 偏移缺失）时，短蹲与缩放一起停，M5 的软豁免退化为普通后撤。M12 借钩只让宿主 Detour 保持挂载，不恢复 M15 的短蹲/缩放代码路径。
   - 无待消费请求时，换弹掩体的 `Hide(*spot, 0.0f)` 保持原生 0 秒；若 2 秒窗口内存在请求，换弹/守包等任意 Hide 会被压成 1 秒（已知的弱身份绑定）。士气缩放对 0.0 亦为 no-op。
 - **承载模块 12 宿主钩与短路保护 (Host Detour for Module 12 & Short-Circuit)**：
-  - 模块 15 的 `HideState_OnEnter_Post` 钩子作为单一归口，在缩放时长前首先调用 `Module12_CampGate(client)`；
+  - 模块 15 的 `HideState_OnEnter_Post` 钩子作为单一归口，在缩放时长前首先调用 `Module12_SniperCamp(client)`；
   - 若模块 12 判定狙击手高士气前压重定向至 `Hunt`，则立即短路返回 `MRES_Ignored`，跳过无意义的时长缩放计算与内存覆写。
 
 ---
@@ -259,7 +259,7 @@
 | M9 | 1 | `M9 loose-bomb fetch gate & OPPO dhook` |
 | M10 | 1 | `M10 defuse dhook gate` |
 | M11 | 1 | `M11 corridor danger writes` |
-| M12 | 1 | `M12 camp bypass patch & gate` |
+| M12 | 1 | `M12 sniper camp bypass patch & gate` |
 | M13 | 1 | `M13 sniper buy formula patch` |
 | M14 | 1 | `M14 defend-rush formula patch` |
 | M15 | 1 | `M15 hide duration dhook writes` |
@@ -427,7 +427,7 @@ addons\sourcemod\
         ├── module9_loosefetch.inc    [模块 9] 掉包 Top3 抢包花名册 + 抢包 OPPO 守卫 (Loose-Bomb Fetch Roster + Fetch OPPO Guard)
         ├── module10_defuse.inc       [模块 10] CT 首席拆包员 (Chief Defuser)
         ├── module11_sniper.inc       [模块 11] 狙击手威慑与走廊加压 (Sniper Deterrence & Corridor Danger)
-        ├── module12_campgate.inc     [模块 12] 狙击 camp 概率重构 (60-10*M, OnEnter 重骰门)
+        ├── module12_snipercamp.inc     [模块 12] 狙击 camp 概率重构 (60-10*M, OnEnter 重骰门)
         ├── module13_sniperbuy.inc    [模块 13] 随机买狙概率重构 (50-10*M, 汇编补丁)
         ├── module14_defendrush.inc   [模块 14] 开局前沿架枪概率重构 (40-10*M, defendRushChance)
         └── module15_hideduration.inc [模块 15] Hide 蹲守时长士气缩放 + 紧急短蹲入口 (m_duration *= 1-0.15*M / RequestShort=1s)
@@ -473,7 +473,7 @@ addons\sourcemod\
   - 只读解析点：`Resolved ... @ ...`；偏移/SDKCall 点：`... verified (...)`（无地址可打，如 detour 句柄）；
   - 纯 hook/名册：无检查点行（挂钩失败走事项 FAILED 错误行）；
   - **武装确认统一走 `LogModuleArmed`**：`[Module N] <label> items armed (<detail>) [<arch>]`。
-  - `<label>` 必须为 1~2 个英文单词的标准纯短名（首字母大写，严禁带模块编号前缀、公式或长变量，全库标准：`Defense`, `Bombsite`, `Danger decay`, `HuntState`, `Combat`, `Noise`, `Escort`, `Queue`, `Fetch`, `Defuse`, `Corridor`, `Camp gate`, `Sniper buy`, `Defend rush`, `Hide duration`）；
+  - `<label>` 必须为 1~2 个英文单词的标准纯短名（首字母大写，严禁带模块编号前缀、公式或长变量，全库标准：`Defense`, `Bombsite`, `Danger decay`, `HuntState`, `Combat`, `Noise`, `Escort`, `Queue`, `Fetch`, `Defuse`, `Corridor`, `Sniper camp`, `Sniper buy`, `Defend rush`, `Hide duration`）；
   - `<detail>`：多事项列名（如 `guard=1, anti-rush=1`），单事项成功时严格传纯数字 `"1"`（全败走 LogModuleAllFailed 拦截，永不传 `"0"` 或三元表达式）。
 - **卸载日志统一口径 (Restore 契约)**：各模块 `RestoreModule*()` 在还原完成后必须统一输出 `[BotRouteFix] [Module N] <ShortName> <设施> safely restored.`（纯补丁为 `patches safely restored to original bytes.`，纯钩子为 `hooks safely restored.`，混合为 `hooks and memory patches safely restored.`，纯数据重置为 `state reset (no persistent patch).`），禁止遗漏。
 - **变体**：部分武装 → `LogModulePartial`（`Partial activation (...)`）；事项全灭 → `LogModuleAllFailed`（`All items failed; module will report FAILED.`）；失败原因各事项就地 `LogError`。
@@ -522,8 +522,8 @@ addons\sourcemod\
 
 ### 模块 12 借用模块 15 单 Detour 协作契约 (Module 12 Detour Borrowing Contract)
 - 模块 12（狙击 Camp 门禁）与模块 15（Hide 蹲守时长缩放）在底层均需要拦截 `HideState::OnEnter`。为杜绝在同一虚函数/函数签名上挂载双重 Detour 导致的钩子递归重入、执行顺序不确定及调用栈消耗，模块 12 不单独注册 Detour，而是直接借用模块 15 的 Post Detour 作为执行宿主。
-- 协作契约：在模块 15 Detour 入口首先调用 `Module12_CampGate(client)`；若模块 12 判定为高士气前压并递延重定向至 `Hunt`，则返回 `true`，模块 15 随即短路返回，跳过无意义的时长缩放计算，各模块职责清晰解耦。
-- **底层启用态协同（`SyncHideDurationDetourState`）**：底层钩子只要任一借钩方（M12 / M15）规则开启就必须保持启用，只有双方全部关闭才真正 Disable。模块 12 的 `EnableModule12_CampGate()` 与模块 15 的业务态变更都会调用该同步函数，并在宿主状态变化后回调 `Module12_OnHostStateChanged()` 重算 M12 事项。
+- 协作契约：在模块 15 Detour 入口首先调用 `Module12_SniperCamp(client)`；若模块 12 判定为高士气前压并递延重定向至 `Hunt`，则返回 `true`，模块 15 随即短路返回，跳过无意义的时长缩放计算，各模块职责清晰解耦。
+- **底层启用态协同（`SyncHideDurationDetourState`）**：底层钩子只要任一借钩方（M12 / M15）规则开启就必须保持启用，只有双方全部关闭才真正 Disable。模块 12 的 `EnableModule12_SniperCamp()` 与模块 15 的业务态变更都会调用该同步函数，并在宿主状态变化后回调 `Module12_OnHostStateChanged()` 重算 M12 事项。
 - **全成或全败**：M12 唯一事项 = 6 处补丁 + 宿主钩子 + Hunt SDK + morale。宿主不可用时不武装 6 处补丁；补丁任一站点失败立即全部回滚 → M12 FAILED，绝不出现“补丁驻留但门禁不工作”的半态。
 
 ### 后撤三档制跨模块契约 (Retreat Tier Contract: M5 × M11 × M15)

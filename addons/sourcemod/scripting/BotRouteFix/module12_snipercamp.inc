@@ -1,7 +1,7 @@
-#if defined _botroutefix_module12_campgate_included
+#if defined _botroutefix_module12_snipercamp_included
     #endinput
 #endif
-#define _botroutefix_module12_campgate_included
+#define _botroutefix_module12_snipercamp_included
 
 //========================================================================================
 // [模块 12] 狙击 camp 概率重构 (60-10*Morale)：原生骰子 NOP 全进 + OnEnter 重骰门
@@ -47,7 +47,7 @@
 //    （32 位 fld30 = D9 05，64 位 task19 = C7 87…13），防跳反。
 //
 // 事项契约:
-//   - 唯一事项 = camp 门禁（ITEM_M12_CAMP）；六处骰子旁路是该事项的后端链，全成或全败。
+//   - 唯一事项 = camp 门禁（ITEM_M12_SNIPERCAMP）；六处骰子旁路是该事项的后端链，全成或全败。
 //   - 事实上的 Hook 宿主归 M15；本模块借用其 OnEnter Post，不单独注册 Detour。
 //   - 本模块不写代码段以外的对局状态；重定向计数只在事项武装时累加。
 //   - 名册优先（与 M9 两手抓）：task 19 的 Hide 若命中 M9 抢包名册，跳过士气重骰，
@@ -60,28 +60,28 @@
 //========================================================================================
 
 // 狙击手留守蹲点概率公式宏定义 (Chance = BASE - STEP * Morale)
-#define CAMP_CHANCE_BASE        60.0    // 基础留守概率 (士气 0 时 60%)
-#define CAMP_CHANCE_STEP        10.0    // 每级士气增减步长 (百分比)
-#define CAMP_CHANCE_MIN         0.0     // 留守概率下限
-#define CAMP_CHANCE_MAX         100.0   // 留守概率上限
+#define SNIPERCAMP_CHANCE_BASE        60.0    // 基础留守概率 (士气 0 时 60%)
+#define SNIPERCAMP_CHANCE_STEP        10.0    // 每级士气增减步长 (百分比)
+#define SNIPERCAMP_CHANCE_MIN         0.0     // 留守概率下限
+#define SNIPERCAMP_CHANCE_MAX         100.0   // 留守概率上限
 #define BOT_TASK_MOVE_TO_SNIPER_SPOT 19 // 引擎原生任务枚举：MOVE_TO_SNIPER_SPOT (狙击手前往架枪点)
 
-static MemoryPatch g_PatchCampSites[6];
-static int g_CampPatchBytes[6][6];    // 预先构造的旁路字节（Prep 构造 / Apply 原样写入）
+static MemoryPatch g_PatchSniperCampSites[6];
+static int g_SniperCampPatchBytes[6][6];    // 预先构造的旁路字节（Prep 构造 / Apply 原样写入）
 // Task/Disposition 上收 global.inc 共享（OnPluginStart 一次解析），本文件只用不存
 static bool g_bModule12_Active = false; // 模块规则开启态（Enable 幂等缓存）
-static int g_iTotalCampRedirected = 0;
+static int g_iTotalSniperCampRedirected = 0;
 
 // 站点表：0=O1 1=O2 2=O3 3=D1 4=D2 5=D3；O2/O3 为 ja/jb-to-camp，需 E9 转换，其余 NOP
-static const char g_sCamp12_SigNames[6][32] =
+static const char g_sSniperCamp12_SigNames[6][32] =
 {
-    "Camp12_O1", "Camp12_O2", "Camp12_O3",
-    "Camp12_D1", "Camp12_D2", "Camp12_D3"
+    "SniperCamp12_O1", "SniperCamp12_O2", "SniperCamp12_O3",
+    "SniperCamp12_D1", "SniperCamp12_D2", "SniperCamp12_D3"
 };
-static const char g_sCamp12_OffNames[6][32] =
+static const char g_sSniperCamp12_OffNames[6][32] =
 {
-    "Camp12_O1_Jcc", "Camp12_O2_Jcc", "Camp12_O3_Jcc",
-    "Camp12_D1_Jcc", "Camp12_D2_Jcc", "Camp12_D3_Jcc"
+    "SniperCamp12_O1_Jcc", "SniperCamp12_O2_Jcc", "SniperCamp12_O3_Jcc",
+    "SniperCamp12_D1_Jcc", "SniperCamp12_D2_Jcc", "SniperCamp12_D3_Jcc"
 };
 
 //========================================================================================
@@ -89,14 +89,14 @@ static const char g_sCamp12_OffNames[6][32] =
 //========================================================================================
 
 /**
- * 事项后端：camp 门禁（ITEM_M12_CAMP）
+ * 事项后端：camp 门禁（ITEM_M12_SNIPERCAMP）
  *
  * 校验 Hunt SDKCall、task/disposition 偏移，并逐站点定位/校验/备份/构造旁路字节；
  * 不写入任何代码段（写入由 Apply 执行）。任一后端失败返回 false，Init 标记事项 FAILED。
  *
  * @return              true = 六站点与门禁偏移全部就绪
  */
-static bool PrepModule12_CampBackend()
+static bool PrepModule12_SniperCampBackend()
 {
     if (g_hGameConf == null)
     {
@@ -123,7 +123,7 @@ static bool PrepModule12_CampBackend()
         return false;
     }
 
-    LogMessage("[BotRouteFix] [Module 12] Camp offsets verified (task=%d, disp=%d, hunt SDKCall).",
+    LogMessage("[BotRouteFix] [Module 12] Sniper camp offsets verified (task=%d, disp=%d, hunt SDKCall).",
         g_iOffset_Task, g_iOffset_Disposition);
 
     for (int i = 0; i < 6; i++)
@@ -141,7 +141,7 @@ static bool PrepModule12_CampBackend()
  * 事项 M12 camp 门禁的单站点后端准备
  *
  * O1/D1/D2/D3 = NOP（指向 skip）；O2/O3 = E9 转换（指向 camp）。
- * 只定位/校验/备份并把构造好的字节写入 g_CampPatchBytes，不写代码段。
+ * 只定位/校验/备份并把构造好的字节写入 g_SniperCampPatchBytes，不写代码段。
  * 失败语义：任一步失败返回 false，整个 camp 事项 FAILED（六站点全成或全败）。
  *
  * @param siteIndex     0..5
@@ -149,17 +149,17 @@ static bool PrepModule12_CampBackend()
  */
 static bool PrepModule12_Site(int siteIndex)
 {
-    Address sigAddr = GameConfGetAddress(g_hGameConf, g_sCamp12_SigNames[siteIndex]);
+    Address sigAddr = GameConfGetAddress(g_hGameConf, g_sSniperCamp12_SigNames[siteIndex]);
     if (sigAddr == Address_Null)
     {
-        LogError("[BotRouteFix] [Module 12] Failed to locate signature for %s!", g_sCamp12_SigNames[siteIndex]);
+        LogError("[BotRouteFix] [Module 12] Failed to locate signature for %s!", g_sSniperCamp12_SigNames[siteIndex]);
         return false;
     }
 
-    int jccOffset = GameConfGetOffset(g_hGameConf, g_sCamp12_OffNames[siteIndex]);
+    int jccOffset = GameConfGetOffset(g_hGameConf, g_sSniperCamp12_OffNames[siteIndex]);
     if (jccOffset == -1)
     {
-        LogError("[BotRouteFix] [Module 12] Failed to read %s!", g_sCamp12_OffNames[siteIndex]);
+        LogError("[BotRouteFix] [Module 12] Failed to read %s!", g_sSniperCamp12_OffNames[siteIndex]);
         return false;
     }
 
@@ -167,7 +167,7 @@ static bool PrepModule12_Site(int siteIndex)
     bool isConvert = (siteIndex == 1 || siteIndex == 2); // O2/O3：ja/jb-to-camp 改 E9
 
     char patchName[32];
-    Format(patchName, sizeof(patchName), "Camp_S%d", siteIndex);
+    Format(patchName, sizeof(patchName), "SniperCamp_S%d", siteIndex);
 
     // 站点固定宽度：O1/D2/D3 = 6 字节远跳；D1 = 2 字节短跳（两种架构一致）
     int patchSize = (siteIndex == 3) ? 2 : 6;
@@ -176,16 +176,16 @@ static bool PrepModule12_Site(int siteIndex)
     int b1 = LoadFromAddress(jccAddr + view_as<Address>(1), NumberType_Int8);
 
     // Init 必须在幂等检测之前：同目标重入时它保留原始基线备份
-    g_PatchCampSites[siteIndex].Init(patchName, jccAddr, patchSize);
+    g_PatchSniperCampSites[siteIndex].Init(patchName, jccAddr, patchSize);
 
     // 幂等性检测必须先于 opcode 断言（已旁路的字节不再是原助记符）；
     // 有备份=自家补丁，保持基线；无备份=外来已旁路，记 false（无基线可还原）
     bool alreadyBypassed = (!isConvert && b0 == 0x90) || (isConvert && b0 == 0xE9);
     if (alreadyBypassed)
     {
-        if (!g_PatchCampSites[siteIndex].hasBackup)
+        if (!g_PatchSniperCampSites[siteIndex].hasBackup)
         {
-            g_PatchCampSites[siteIndex].isPatched = false;
+            g_PatchSniperCampSites[siteIndex].isPatched = false;
             LogError("[BotRouteFix] [Module 12] Site %d already bypassed without baseline @ %X; camp item FAILED.",
                 siteIndex, jccAddr);
             return false;
@@ -199,7 +199,7 @@ static bool PrepModule12_Site(int siteIndex)
             return false;
         }
 
-        if (!g_PatchCampSites[siteIndex].BackupOriginal())
+        if (!g_PatchSniperCampSites[siteIndex].BackupOriginal())
         {
             LogError("[BotRouteFix] [Module 12] Site %d baseline backup failed; camp item FAILED.", siteIndex);
             return false;
@@ -211,23 +211,23 @@ static bool PrepModule12_Site(int siteIndex)
     {
         for (int i = 0; i < patchSize; i++)
         {
-            g_CampPatchBytes[siteIndex][i] = 0x90;
+            g_SniperCampPatchBytes[siteIndex][i] = 0x90;
         }
     }
     else
     {
-        int origRel = g_PatchCampSites[siteIndex].originalBytes[2]
-            | (g_PatchCampSites[siteIndex].originalBytes[3] << 8)
-            | (g_PatchCampSites[siteIndex].originalBytes[4] << 16)
-            | (g_PatchCampSites[siteIndex].originalBytes[5] << 24);
+        int origRel = g_PatchSniperCampSites[siteIndex].originalBytes[2]
+            | (g_PatchSniperCampSites[siteIndex].originalBytes[3] << 8)
+            | (g_PatchSniperCampSites[siteIndex].originalBytes[4] << 16)
+            | (g_PatchSniperCampSites[siteIndex].originalBytes[5] << 24);
         int newRel = origRel + 1;
 
-        g_CampPatchBytes[siteIndex][0] = 0xE9;
+        g_SniperCampPatchBytes[siteIndex][0] = 0xE9;
         for (int b = 0; b < 4; b++)
         {
-            g_CampPatchBytes[siteIndex][1 + b] = (newRel >> (b * 8)) & 0xFF;
+            g_SniperCampPatchBytes[siteIndex][1 + b] = (newRel >> (b * 8)) & 0xFF;
         }
-        g_CampPatchBytes[siteIndex][5] = 0x90;
+        g_SniperCampPatchBytes[siteIndex][5] = 0x90;
     }
     LogMessage("[BotRouteFix] [Module 12] Site %d dice bypass verified @ %X", siteIndex, jccAddr);
     return true;
@@ -325,13 +325,13 @@ static bool PrepModule12_ValidateSite(int siteIndex, bool isConvert, Address jcc
     }
 
     int origRel = LoadFromAddress(jccAddr + view_as<Address>(2), NumberType_Int32);
-    Address campTail = jccAddr + view_as<Address>(6 + origRel);
+    Address sniperCampTail = jccAddr + view_as<Address>(6 + origRel);
 
     // 语义锚点：camp tail 首指令（32: fld30=D9 05；64: task19=C7 87…13）
     if (g_bIsWin64)
     {
-        if (LoadFromAddress(campTail, NumberType_Int8) != 0xC7
-            || LoadFromAddress(campTail + view_as<Address>(1), NumberType_Int8) != 0x87)
+        if (LoadFromAddress(sniperCampTail, NumberType_Int8) != 0xC7
+            || LoadFromAddress(sniperCampTail + view_as<Address>(1), NumberType_Int8) != 0x87)
         {
             LogError("[BotRouteFix] [Module 12] Site %d camp-tail anchor mismatch, aborted (not inverting blind)!", siteIndex);
             return false;
@@ -339,8 +339,8 @@ static bool PrepModule12_ValidateSite(int siteIndex, bool isConvert, Address jcc
     }
     else
     {
-        if (LoadFromAddress(campTail, NumberType_Int8) != 0xD9
-            || LoadFromAddress(campTail + view_as<Address>(1), NumberType_Int8) != 0x05)
+        if (LoadFromAddress(sniperCampTail, NumberType_Int8) != 0xD9
+            || LoadFromAddress(sniperCampTail + view_as<Address>(1), NumberType_Int8) != 0x05)
         {
             LogError("[BotRouteFix] [Module 12] Site %d camp-tail anchor mismatch, aborted (not inverting blind)!", siteIndex);
             return false;
@@ -359,11 +359,11 @@ static bool PrepModule12_ValidateSite(int siteIndex, bool isConvert, Address jcc
  *
  * @return              true = 事项已武装
  */
-bool InitModule12_CampGate()
+bool InitModule12_SniperCamp()
 {
     if (g_hGameConf == null)
     {
-        Item_SetReady(ITEM_M12_CAMP, false);
+        Item_SetReady(ITEM_M12_SNIPERCAMP, false);
         LogError("[BotRouteFix] [Module 12] Gamedata missing; camp item FAILED.");
         return false;
     }
@@ -373,20 +373,20 @@ bool InitModule12_CampGate()
     // 宿主柄是 M15 私有 static，经 Module15_IsHideHostReady 探针查询，不直读。
     if (!Module15_IsHideHostReady())
     {
-        Item_SetReady(ITEM_M12_CAMP, false);
+        Item_SetReady(ITEM_M12_SNIPERCAMP, false);
         LogError("[BotRouteFix] [Module 12] Hide host detour missing; camp item FAILED.");
         return false;
     }
 
-    Item_SetReady(ITEM_M12_CAMP, PrepModule12_CampBackend());
-    EnableModule12_CampGate(true);
-    if (!Item_IsArmed(ITEM_M12_CAMP))
+    Item_SetReady(ITEM_M12_SNIPERCAMP, PrepModule12_SniperCampBackend());
+    EnableModule12_SniperCamp(true);
+    if (!Item_IsArmed(ITEM_M12_SNIPERCAMP))
     {
         LogModuleAllFailed(12);
         return false;
     }
 
-    LogModuleArmed(12, "Camp gate", "1");
+    LogModuleArmed(12, "Sniper camp", "1");
     return true;
 }
 
@@ -395,7 +395,7 @@ bool InitModule12_CampGate()
  *
  * @param enable        true = 按事项后端就绪情况武装；false = 还原并解除武装
  */
-void EnableModule12_CampGate(bool enable)
+void EnableModule12_SniperCamp(bool enable)
 {
     if (enable == g_bModule12_Active)
     {
@@ -404,14 +404,14 @@ void EnableModule12_CampGate(bool enable)
 
     if (!enable)
     {
-        RestoreModule12_CampBackend();
+        RestoreModule12_SniperCampBackend();
         g_bModule12_Active = false;
         // 借钩宿主：模块 15 若仍在工作，钩子必须保持启用
         SyncHideDurationDetourState();
         return;
     }
 
-    bool armed = ApplyModule12_CampBackend();
+    bool armed = ApplyModule12_SniperCampBackend();
     g_bModule12_Active = armed;
     // 借钩宿主：本模块自身无 Detour，须确保模块 15 的 OnEnter 钩子处于启用态
     SyncHideDurationDetourState();
@@ -420,10 +420,10 @@ void EnableModule12_CampGate(bool enable)
 /**
  * 还原模块 12（插件卸载：写回六处 jcc 并解除武装；钩子本身归模块 15 管）
  */
-void RestoreModule12_CampGate()
+void RestoreModule12_SniperCamp()
 {
-    EnableModule12_CampGate(false);
-    LogMessage("[BotRouteFix] [Module 12] Camp gate patches safely restored to original bytes.");
+    EnableModule12_SniperCamp(false);
+    LogMessage("[BotRouteFix] [Module 12] Sniper camp patches safely restored to original bytes.");
 }
 
 //========================================================================================
@@ -433,9 +433,9 @@ void RestoreModule12_CampGate()
 /**
  * 累积重定向次数（骰子未过转 Hunt；只在事项武装时累加，自加载起单调递增）
  */
-int Module12_GetTotalCampRedirected()
+int Module12_GetTotalSniperCampRedirected()
 {
-    return g_iTotalCampRedirected;
+    return g_iTotalSniperCampRedirected;
 }
 
 /**
@@ -446,16 +446,16 @@ int Module12_GetTotalCampRedirected()
  * @param morale        Bot 士气数值 (-3 ~ +3)
  * @return              留守概率 (0.0 ~ 100.0)
  */
-float Module12_CalculateCampChance(int morale)
+float Module12_CalculateSniperCampChance(int morale)
 {
-    float chance = CAMP_CHANCE_BASE - CAMP_CHANCE_STEP * float(morale);
-    if (chance > CAMP_CHANCE_MAX)
+    float chance = SNIPERCAMP_CHANCE_BASE - SNIPERCAMP_CHANCE_STEP * float(morale);
+    if (chance > SNIPERCAMP_CHANCE_MAX)
     {
-        chance = CAMP_CHANCE_MAX;
+        chance = SNIPERCAMP_CHANCE_MAX;
     }
-    if (chance < CAMP_CHANCE_MIN)
+    if (chance < SNIPERCAMP_CHANCE_MIN)
     {
-        chance = CAMP_CHANCE_MIN;
+        chance = SNIPERCAMP_CHANCE_MIN;
     }
     return chance;
 }
@@ -471,9 +471,9 @@ float Module12_CalculateCampChance(int morale)
  *
  * @return              true = 已重定向去 Hunt（调用方跳过 M15 缩放）；false = 放行
  */
-bool Module12_CampGate(int client)
+bool Module12_SniperCamp(int client)
 {
-    if (!Item_IsArmed(ITEM_M12_CAMP))
+    if (!Item_IsArmed(ITEM_M12_SNIPERCAMP))
     {
         return false;
     }
@@ -506,7 +506,7 @@ bool Module12_CampGate(int client)
     }
 
     int morale = GetBotMorale(client);
-    float chance = Module12_CalculateCampChance(morale);
+    float chance = Module12_CalculateSniperCampChance(morale);
     if (GetRandomFloat(0.0, 100.0) < chance)
     {
         return false; // 留守：Hide 照常进行
@@ -524,7 +524,7 @@ bool Module12_CampGate(int client)
 public void Module12_FrameHunt(any data)
 {
     // 递延帧可能在停用之后才到，必须二次校验事项武装态
-    if (!Item_IsArmed(ITEM_M12_CAMP))
+    if (!Item_IsArmed(ITEM_M12_SNIPERCAMP))
     {
         return;
     }
@@ -541,7 +541,7 @@ public void Module12_FrameHunt(any data)
         SetEntData(client, g_iOffset_Disposition, 0, 4, true); // ENGAGE_AND_INVESTIGATE
     }
     DebugLog("[BotRouteFix] [Module 12] Bot %N camp redirect executed (deferred Hunt now)", client);
-    g_iTotalCampRedirected++;
+    g_iTotalSniperCampRedirected++;
 }
 
 //========================================================================================
@@ -555,24 +555,24 @@ public void Module12_FrameHunt(any data)
  *
  * @return              true = 六处旁路全部驻留
  */
-static bool ApplyModule12_CampBackend()
+static bool ApplyModule12_SniperCampBackend()
 {
-    if (!Item_IsReady(ITEM_M12_CAMP))
+    if (!Item_IsReady(ITEM_M12_SNIPERCAMP))
     {
-        Item_SetArmed(ITEM_M12_CAMP, false);
+        Item_SetArmed(ITEM_M12_SNIPERCAMP, false);
         return false;
     }
 
     for (int i = 0; i < 6; i++)
     {
-        if (!g_PatchCampSites[i].Apply(g_CampPatchBytes[i]))
+        if (!g_PatchSniperCampSites[i].Apply(g_SniperCampPatchBytes[i]))
         {
             for (int j = 0; j < 6; j++)
             {
-                g_PatchCampSites[j].Restore();
+                g_PatchSniperCampSites[j].Restore();
             }
-            Item_SetReady(ITEM_M12_CAMP, false);
-            Item_SetArmed(ITEM_M12_CAMP, false);
+            Item_SetReady(ITEM_M12_SNIPERCAMP, false);
+            Item_SetArmed(ITEM_M12_SNIPERCAMP, false);
             LogError("[BotRouteFix] [Module 12] Site %d write failed; all bypasses rolled back, camp item FAILED.", i);
             return false;
         }
@@ -581,15 +581,15 @@ static bool ApplyModule12_CampBackend()
     // 借钩宿主必须在线：没有 OnEnter 钩子，六处骰子已旁路却无人重骰，
     // 会退化成"狙击手必 camp"的错误行为，必须回滚。
     // 先临时置位再同步：宿主开关按 M12 Armed 判定借钩需求，不置位会形成循环依赖。
-    Item_SetArmed(ITEM_M12_CAMP, true);
+    Item_SetArmed(ITEM_M12_SNIPERCAMP, true);
     if (!SyncHideDurationDetourState())
     {
         for (int j = 0; j < 6; j++)
         {
-            g_PatchCampSites[j].Restore();
+            g_PatchSniperCampSites[j].Restore();
         }
         // 宿主缺失属挂钩类失败：只清 Armed，保留 Ready 供下次 Enable 重试
-        Item_SetArmed(ITEM_M12_CAMP, false);
+        Item_SetArmed(ITEM_M12_SNIPERCAMP, false);
         LogError("[BotRouteFix] [Module 12] Hook host unavailable; dice bypasses rolled back, camp item unarmed.");
         return false;
     }
@@ -600,13 +600,13 @@ static bool ApplyModule12_CampBackend()
 /**
  * 还原 camp 门禁事项：写回六处原始 jcc 并解除武装
  */
-static void RestoreModule12_CampBackend()
+static void RestoreModule12_SniperCampBackend()
 {
     for (int i = 0; i < 6; i++)
     {
-        g_PatchCampSites[i].Restore();
+        g_PatchSniperCampSites[i].Restore();
     }
-    Item_SetArmed(ITEM_M12_CAMP, false);
+    Item_SetArmed(ITEM_M12_SNIPERCAMP, false);
 }
 
 

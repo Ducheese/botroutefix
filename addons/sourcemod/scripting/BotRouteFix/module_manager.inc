@@ -482,7 +482,7 @@ void ApplyModulesConfig()
     EnableModule9_Fetch(active[9]);
     EnableModule10_Defuse(active[10]);
     EnableModule11_Sniper(active[11]);
-    EnableModule12_CampGate(active[12]);
+    EnableModule12_SniperCamp(active[12]);
     EnableModule13_SniperBuy(active[13]);
     EnableModule14_DefendRush(active[14]);
     EnableModule15_HideDuration(active[15]);

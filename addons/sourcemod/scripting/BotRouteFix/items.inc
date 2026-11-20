@@ -43,7 +43,7 @@
 #define ITEM_M9_FETCH           15
 #define ITEM_M10_DEFUSE         16
 #define ITEM_M11_CORRIDOR       17
-#define ITEM_M12_CAMP           18
+#define ITEM_M12_SNIPERCAMP     18
 #define ITEM_M13_BUY            19
 #define ITEM_M14_DEFEND         20
 #define ITEM_M15_HIDE           21
@@ -114,8 +114,8 @@ void InitItems()
     g_iItemModule[ITEM_M11_CORRIDOR] = 11;
     strcopy(g_sItemName[ITEM_M11_CORRIDOR], 48, "M11 corridor danger writes");
 
-    g_iItemModule[ITEM_M12_CAMP] = 12;
-    strcopy(g_sItemName[ITEM_M12_CAMP], 48, "M12 camp bypass patch & gate");
+    g_iItemModule[ITEM_M12_SNIPERCAMP] = 12;
+    strcopy(g_sItemName[ITEM_M12_SNIPERCAMP], 48, "M12 sniper camp bypass patch & gate");
 
     g_iItemModule[ITEM_M13_BUY] = 13;
     strcopy(g_sItemName[ITEM_M13_BUY], 48, "M13 sniper buy formula patch");

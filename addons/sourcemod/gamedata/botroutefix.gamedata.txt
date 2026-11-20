@@ -196,37 +196,37 @@
 				"windows"	"\x55\x8B\xEC\x53\x56\x8B\xF1\x57\x8B\x8E\x2A\x2A\x2A\x2A\x85\xC9"
 				"windows64"	"\x48\x89\x5C\x24\x2A\x48\x89\x74\x24\x2A\x57\x48\x83\xEC\x30\x48\x8B\xD9\x48\x8B\xFA"
 			}
-			"Camp12_O1"
+			"SniperCamp12_O1"
 			{
 				"library"	"server"
 				"windows"	"\xD9\x05\x2A\x2A\x2A\x2A\x83\xC4\x08\xDB\xF1\xDD\xD9\x0F\x86"
 				"windows64"	"\xF3\x0F\x10\x15\x2A\x2A\x2A\x2A\x0F\x2F\xC2\x0F\x83\x2A\x2A\x2A\x2A\xC7\x87\xD0\x20\x00\x00\x13"
 			}
-			"Camp12_O2"
+			"SniperCamp12_O2"
 			{
 				"library"	"server"
 				"windows"	"\xDB\xF1\xDD\xD9\x0F\x87\x2A\x2A\x2A\x2A\xDD\xD8\x8B\xCF\xE8\x2A\x2A\x2A\x2A\x85\xC0\x74"
 				"windows64"	"\xF3\x0F\x10\x15\x2A\x2A\x2A\x2A\x0F\x2F\xC2\x0F\x82\x2A\x2A\x2A\x2A\x48\x8B\xCF\xE8\x2A\x2A\x2A\x2A\x85\xC0\x74"
 			}
-			"Camp12_O3"
+			"SniperCamp12_O3"
 			{
 				"library"	"server"
 				"windows"	"\xDB\xF1\xDD\xD9\x0F\x87\x2A\x2A\x2A\x2A\xDD\xD8\x8B\xCF\xE8\x2A\x2A\x2A\x2A\x8B\xCF\x84\xC0\x74"
 				"windows64"	"\xF3\x0F\x10\x15\x2A\x2A\x2A\x2A\x0F\x2F\xC2\x0F\x82\x2A\x2A\x2A\x2A\x48\x8B\xCF\xE8\x2A\x2A\x2A\x2A\x48\x8B\xCF\x84\xC0"
 			}
-			"Camp12_D1"
+			"SniperCamp12_D1"
 			{
 				"library"	"server"
 				"windows"	"\xD9\x05\x2A\x2A\x2A\x2A\x83\xC4\x08\xDF\xF1\xDD\xD8\x72\x2A\x8B\x0D\x2A\x2A\x2A\x2A\xE8\x2A\x2A\x2A\x2A\x85\xC0\x74"
 				"windows64"	"\x0F\x2F\x05\x2A\x2A\x2A\x2A\x77\x2A\x48\x8B\x0D"
 			}
-			"Camp12_D2"
+			"SniperCamp12_D2"
 			{
 				"library"	"server"
 				"windows"	"\xD9\x05\x2A\x2A\x2A\x2A\x83\xC4\x08\xDF\xF1\xDD\xD8\x0F\x82\x2A\x2A\x2A\x2A\x8B\xCB\xE8\x2A\x2A\x2A\x2A\x8B\xF0\x85\xF6\x74"
 				"windows64"	"\x0F\x2F\x05\x2A\x2A\x2A\x2A\x0F\x87\x2A\x2A\x2A\x2A\x48\x8B\xCE\xE8\x2A\x2A\x2A\x2A\x48\x8B\xE8"
 			}
-			"Camp12_D3"
+			"SniperCamp12_D3"
 			{
 				"library"	"server"
 				"windows"	"\xD9\x05\x2A\x2A\x2A\x2A\x83\xC4\x08\xDF\xF1\xDD\xD8\x0F\x82\x2A\x2A\x2A\x2A\x8B\xCB\xE8\x2A\x2A\x2A\x2A\x8B\xCB\x8B\xF0\xE8"
@@ -263,29 +263,29 @@
 			{
 				"signature"	"ReloadCheck_HideChance"
 			}
-			"Camp12_O1"
+			"SniperCamp12_O1"
 			{
-				"signature"	"Camp12_O1"
+				"signature"	"SniperCamp12_O1"
 			}
-			"Camp12_O2"
+			"SniperCamp12_O2"
 			{
-				"signature"	"Camp12_O2"
+				"signature"	"SniperCamp12_O2"
 			}
-			"Camp12_O3"
+			"SniperCamp12_O3"
 			{
-				"signature"	"Camp12_O3"
+				"signature"	"SniperCamp12_O3"
 			}
-			"Camp12_D1"
+			"SniperCamp12_D1"
 			{
-				"signature"	"Camp12_D1"
+				"signature"	"SniperCamp12_D1"
 			}
-			"Camp12_D2"
+			"SniperCamp12_D2"
 			{
-				"signature"	"Camp12_D2"
+				"signature"	"SniperCamp12_D2"
 			}
-			"Camp12_D3"
+			"SniperCamp12_D3"
 			{
-				"signature"	"Camp12_D3"
+				"signature"	"SniperCamp12_D3"
 			}
 			"SniperBuy13_Dice"
 			{
@@ -549,32 +549,32 @@
 				"windows"	"28"
 				"windows64"	"36"
 			}
-			"Camp12_O1_Jcc"
+			"SniperCamp12_O1_Jcc"
 			{
 				"windows"	"13"
 				"windows64"	"11"
 			}
-			"Camp12_O2_Jcc"
+			"SniperCamp12_O2_Jcc"
 			{
 				"windows"	"4"
 				"windows64"	"11"
 			}
-			"Camp12_O3_Jcc"
+			"SniperCamp12_O3_Jcc"
 			{
 				"windows"	"4"
 				"windows64"	"11"
 			}
-			"Camp12_D1_Jcc"
+			"SniperCamp12_D1_Jcc"
 			{
 				"windows"	"13"
 				"windows64"	"7"
 			}
-			"Camp12_D2_Jcc"
+			"SniperCamp12_D2_Jcc"
 			{
 				"windows"	"13"
 				"windows64"	"7"
 			}
-			"Camp12_D3_Jcc"
+			"SniperCamp12_D3_Jcc"
 			{
 				"windows"	"13"
 				"windows64"	"7"
