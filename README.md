@@ -137,7 +137,7 @@
   - 本模块 Pre 钩上述查询函数：CT 一律回 false 实施纵深防御兜底（视力 `CanSeeLooseBomb` 与捡包听觉不受影响）；T 非名册成员直接回 false 并计入拦截（遥测 `gated`）；运行时无候选（全员不可达/无人存活）则放行，这是运行时无对象，不是后端 fail-open。
   - 掉包事件递延一帧（等 C4 归属落定，当场查恒为"人手里"）后，以无主 `weapon_c4` 坐标为圆心、无损实测（`BotNavWalkDistance`：备份移动状态→解 repath 节流→`ComputePath` 实测→逐段累加→全量还原，调用方零副作用）真实地面行走距离取最近 3 存活 T，不可达跳过；测距未就绪时 M9 事项 FAILED，钩子不挂载，行为回原生。成员阵亡/掉线按掉包点真实距离回补，全灭则解散回原生（防"包烂地上没人捡"死锁）；有人捡包/回合开始/换图即清。
   - **蹲守者解蹲 (Camp Unstick)**：当选/回补时 task==19（`MOVE_TO_SNIPER_SPOT`，蹲守承诺态）的强制 `Hunt()` 一次——蹲坑 Hide 里到不了 `NoticeLooseBomb`（Idle 的 loose 检查排在狙击手守点/架枪掷骰之后，M12 再把 task-19 的 Hide 留守），不踢名册就是摆设；Hunt 落 `SEEK_AND_DESTROY`，M12 不认，交接干净。`Hunt` SDKCall 缺失则跳过（名册照转被动门禁）。残血等其他 task 的长蹲 task 看不出来（Hide 不改 task），靠 Hide 到期自愈， observed 了再补 M15 蹲守时长表。
-  - **名册捡包手 OPPO 守卫（Fetch Bomb OPPO Guard）**：M9 限制了捡包人手，必须保证人手质量；在 `CCSBot::SetState` Post 钩子处通过指针地址比对确认处于 `FetchBombState`，补写 `DISP_OPPORTUNITY`，杜绝选出的抢包手跟丢敌人后蹲死；遥测更新为 `%d/%d roster | total %d elected, %d gated, %d oppo-guarded` 进 status M09 行。
+  - **名册抢包手 OPPO 守卫（Fetch OPPO Guard）**：M9 限制了抢包人手，必须保证人手质量；在 `CCSBot::SetState` Post 钩子处通过指针地址比对确认处于 `FetchBombState`，补写 `DISP_OPPORTUNITY`，杜绝选出的抢包手跟丢敌人后蹲死；遥测更新为 `%d/%d roster | total %d elected, %d gated, %d oppo-guarded` 进 status M09 行。
 
 ### 模块 10：CT 首席拆包员 (Chief Defuser)
 - **原生全员撞包 (Swarm on Planted Bomb)**：
@@ -256,7 +256,7 @@
 | M6 | 1 | `M6 noise & OPPO dhook writes` |
 | M7 | 1 | `M7 escort meme ret & SDKCalls` |
 | M8 | 2 | `M8 queue breaker write` / `M8 deadlock Hunt SDKCall` |
-| M9 | 1 | `M9 loose-bomb gate & OPPO dhook` |
+| M9 | 1 | `M9 loose-bomb fetch gate & OPPO dhook` |
 | M10 | 1 | `M10 defuse dhook gate` |
 | M11 | 1 | `M11 corridor danger writes` |
 | M12 | 1 | `M12 camp bypass patch & gate` |
@@ -424,7 +424,7 @@ addons\sourcemod\
         ├── module6_noise.inc         [模块 6] 噪声出击统一梯度 + 下包 OPPO 守卫 (Noise Interception + Plant OPPO Guard)
         ├── module7_escort.inc        [模块 7] T 包匪贴身保镖花名册 (Carrier Escort Roster)
         ├── module8_queue.inc         [模块 8] 门口礼貌排队打碎与死锁强切 Hunt (Polite Queue Breaker & Deadlock Hunt Transition)
-        ├── module9_loot.inc          [模块 9] 掉包 Top3 抢包花名册 + 抢包 OPPO 守卫 (Loose-Bomb Fetch Roster + Fetch OPPO Guard)
+        ├── module9_loosefetch.inc    [模块 9] 掉包 Top3 抢包花名册 + 抢包 OPPO 守卫 (Loose-Bomb Fetch Roster + Fetch OPPO Guard)
         ├── module10_defuse.inc       [模块 10] CT 首席拆包员 (Chief Defuser)
         ├── module11_sniper.inc       [模块 11] 狙击手威慑与走廊加压 (Sniper Deterrence & Corridor Danger)
         ├── module12_campgate.inc     [模块 12] 狙击 camp 概率重构 (60-10*M, OnEnter 重骰门)
@@ -473,7 +473,7 @@ addons\sourcemod\
   - 只读解析点：`Resolved ... @ ...`；偏移/SDKCall 点：`... verified (...)`（无地址可打，如 detour 句柄）；
   - 纯 hook/名册：无检查点行（挂钩失败走事项 FAILED 错误行）；
   - **武装确认统一走 `LogModuleArmed`**：`[Module N] <label> items armed (<detail>) [<arch>]`。
-  - `<label>` 必须为 1~2 个英文单词的标准纯短名（首字母大写，严禁带模块编号前缀、公式或长变量，全库标准：`Defense`, `Bombsite`, `Danger decay`, `HuntState`, `Combat`, `Noise`, `Escort`, `Queue`, `Loot`, `Defuse`, `Corridor`, `Camp gate`, `Sniper buy`, `Defend rush`, `Hide duration`）；
+  - `<label>` 必须为 1~2 个英文单词的标准纯短名（首字母大写，严禁带模块编号前缀、公式或长变量，全库标准：`Defense`, `Bombsite`, `Danger decay`, `HuntState`, `Combat`, `Noise`, `Escort`, `Queue`, `Fetch`, `Defuse`, `Corridor`, `Camp gate`, `Sniper buy`, `Defend rush`, `Hide duration`）；
   - `<detail>`：多事项列名（如 `guard=1, anti-rush=1`），单事项成功时严格传纯数字 `"1"`（全败走 LogModuleAllFailed 拦截，永不传 `"0"` 或三元表达式）。
 - **卸载日志统一口径 (Restore 契约)**：各模块 `RestoreModule*()` 在还原完成后必须统一输出 `[BotRouteFix] [Module N] <ShortName> <设施> safely restored.`（纯补丁为 `patches safely restored to original bytes.`，纯钩子为 `hooks safely restored.`，混合为 `hooks and memory patches safely restored.`，纯数据重置为 `state reset (no persistent patch).`），禁止遗漏。
 - **变体**：部分武装 → `LogModulePartial`（`Partial activation (...)`）；事项全灭 → `LogModuleAllFailed`（`All items failed; module will report FAILED.`）；失败原因各事项就地 `LogError`。

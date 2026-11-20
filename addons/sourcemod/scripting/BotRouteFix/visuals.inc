@@ -26,7 +26,7 @@
 //   - M8 (Queue): 堵路 NavArea 红色地面脉冲环（只画圈不画框，钉 danger 后高亮 60 秒）；死锁打破时电光冲击波；
 //   - M11 (Sniper): 发现者连狙击手青色波浪线（M9/M10 同款，目击后高亮 10 秒）＋加压走廊青色脉冲环（只画圈不画框，钉刺后高亮 60 秒）；
 //   - 包点：全图 func_bomb_target 白色 3D 体积框（即 m_bInBombZone 判定边界），只受 debug 总控，不按事项门控。
-//   - M9 (Loot): 抢包花名册 T 胸膛连掉落 C4，黄色波浪光束（粗 3.0，振幅 12.0）；
+//   - M9 (Fetch): 抢包花名册 T 胸膛连掉落 C4，黄色波浪光束（粗 3.0，振幅 12.0）；
 //   - M10 (Defuse): 首席拆包 CT 胸膛连已安放 C4，蓝色波浪光束（粗 3.0，振幅 12.0）。
 //========================================================================================
 
@@ -504,9 +504,9 @@ public Action Timer_RenderVisualsFast(Handle timer)
     //------------------------------------------------------------------------------------
     // [M9] 捡包花名册 T 连掉落 C4
     //------------------------------------------------------------------------------------
-    if (Item_IsArmed(ITEM_M9_LOOT))
+    if (Item_IsArmed(ITEM_M9_FETCH))
     {
-        int roster[LOOT_ROSTER_SIZE];
+        int roster[FETCH_ROSTER_SIZE];
         float c4Pos[3];
         int count = Module9_GetFetchRoster(roster, c4Pos);
 

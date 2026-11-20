@@ -221,7 +221,7 @@ void RestoreModule15_HideDuration()
  */
 bool SyncHideDurationDetourState()
 {
-    bool want = (Item_IsArmed(ITEM_M15_HIDE) || Item_IsArmed(ITEM_M12_CAMP) || Item_IsArmed(ITEM_M9_LOOT));
+    bool want = (Item_IsArmed(ITEM_M15_HIDE) || Item_IsArmed(ITEM_M12_CAMP) || Item_IsArmed(ITEM_M9_FETCH));
     return SyncDetourEnabled(g_hHideDurationDetour, g_bHideDurationHooked,
         true, Hook_HideState_OnEnter_Post, want, "Module 15");
 }

@@ -479,7 +479,7 @@ void ApplyModulesConfig()
     EnableModule6_Noise(active[6]);
     EnableModule7_Escort(active[7]);
     EnableModule8_Queue(active[8]);
-    EnableModule9_Loot(active[9]);
+    EnableModule9_Fetch(active[9]);
     EnableModule10_Defuse(active[10]);
     EnableModule11_Sniper(active[11]);
     EnableModule12_CampGate(active[12]);

@@ -18,7 +18,7 @@
 //   - BotRouteFix/module6_noise.inc   : [模块 6] 噪声出击统一梯度 (Noise Interception)
 //   - BotRouteFix/module7_escort.inc  : [模块 7] T 包匪贴身保镖花名册 (Carrier Escort Roster)
 //   - BotRouteFix/module8_queue.inc   : [模块 8] 礼貌排队打碎与死锁强切 Hunt (Queue Breaker & Deadlock Hunt Transition)
-//   - BotRouteFix/module9_loot.inc    : [模块 9] 掉包 Top3 抢包花名册 (Loot Roster, NoticeLooseBomb Pre)
+//   - BotRouteFix/module9_loosefetch.inc : [模块 9] 掉包 Top3 抢包花名册 (Loose Fetch Roster, NoticeLooseBomb Pre)
 //   - BotRouteFix/module10_defuse.inc : [模块 10] CT 首席拆包员 (Chief Defuser, IsDoingScenario Pre)
 //   - BotRouteFix/module11_sniper.inc : [模块 11] 狙击手威慑与走廊加压 (Sniper Deterrence & Corridor Danger)
 //   - BotRouteFix/module12_campgate.inc : [模块 12] 狙击 camp 概率重构 (60-10*M, NOP+DHook重骰)
@@ -50,7 +50,7 @@
 #include "BotRouteFix/module6_noise"
 #include "BotRouteFix/module7_escort"
 #include "BotRouteFix/module8_queue"
-#include "BotRouteFix/module9_loot"
+#include "BotRouteFix/module9_loosefetch"
 #include "BotRouteFix/module10_defuse"
 #include "BotRouteFix/module11_sniper"
 #include "BotRouteFix/module12_campgate"
@@ -132,7 +132,7 @@ public void OnPluginStart()
     InitModule6_Noise();
     InitModule7_Escort();
     InitModule8_Queue();
-    InitModule9_Loot();
+    InitModule9_Fetch();
     InitModule10_Defuse();
     InitModule11_Sniper();
     // 借钩宿主先于借用方：M12 的 camp 门禁复用 M15 的 OnEnter Detour，
@@ -174,7 +174,7 @@ public void OnPluginEnd()
     RestoreModule13_SniperBuy();
     RestoreModule11_Sniper();
     RestoreModule10_Defuse();
-    RestoreModule9_Loot();
+    RestoreModule9_Fetch();
     RestoreModule8_Queue();
     RestoreModule7_Escort();
     RestoreModule6_Noise();

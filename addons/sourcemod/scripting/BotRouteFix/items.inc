@@ -40,7 +40,7 @@
 #define ITEM_M7_ESCORT          12
 #define ITEM_M8_QUEUE           13
 #define ITEM_M8_DEADLOCK        14
-#define ITEM_M9_LOOT            15
+#define ITEM_M9_FETCH           15
 #define ITEM_M10_DEFUSE         16
 #define ITEM_M11_CORRIDOR       17
 #define ITEM_M12_CAMP           18
@@ -105,8 +105,8 @@ void InitItems()
     g_iItemModule[ITEM_M8_DEADLOCK] = 8;
     strcopy(g_sItemName[ITEM_M8_DEADLOCK], 48, "M8 deadlock Hunt SDKCall");
 
-    g_iItemModule[ITEM_M9_LOOT] = 9;
-    strcopy(g_sItemName[ITEM_M9_LOOT], 48, "M9 loose-bomb gate & OPPO dhook");
+    g_iItemModule[ITEM_M9_FETCH] = 9;
+    strcopy(g_sItemName[ITEM_M9_FETCH], 48, "M9 loose-bomb fetch gate & OPPO dhook");
 
     g_iItemModule[ITEM_M10_DEFUSE] = 10;
     strcopy(g_sItemName[ITEM_M10_DEFUSE], 48, "M10 defuse dhook gate");
