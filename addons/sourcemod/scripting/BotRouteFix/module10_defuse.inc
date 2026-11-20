@@ -112,10 +112,14 @@ bool InitModule10_Defuse()
 
     Item_SetReady(ITEM_M10_DEFUSE, PrepModule10_DefuseBackend());
     EnableModule10_Defuse(true);
+    if (!Item_IsArmed(ITEM_M10_DEFUSE))
+    {
+        LogModuleAllFailed(10);
+        return false;
+    }
 
-    LogModuleArmed(10, "CT chief defuser (IsDoingScenario Pre hook + event election)",
-        Item_IsArmed(ITEM_M10_DEFUSE) ? "1" : "0");
-    return g_bModule10_Active;
+    LogModuleArmed(10, "Defuse", "1");
+    return true;
 }
 
 /**
@@ -150,6 +154,8 @@ void RestoreModule10_Defuse()
         delete g_hScenarioDetour;
         g_hScenarioDetour = null;
     }
+
+    LogMessage("[BotRouteFix] [Module 10] Defuse hooks safely restored.");
 }
 
 

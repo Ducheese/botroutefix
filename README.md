@@ -246,23 +246,23 @@
 
 ### 21 件事项
 
-| 模块 | 数量 | 事项 |
+| 模块 | 数量 | 事项（底层物理机制标签，对齐 `items.inc`） |
 | :--- | :---: | :--- |
-| M1 | 2 | 防前冲 NOP / 守点公式重写 |
-| M2 | 2 | 包点锁补丁 / 事件写运包时钟 |
-| M3 | 1 | 事件写 danger 衰减 |
-| M4 | 2 | 随机覆盖 NOP / dhook 写(45s bypass + 认领) |
-| M5 | 3 | 换弹掩体 NOP / 闪避 dhook 写 / 后撤（整体） |
-| M6 | 1 | M6 noise + OPPO guard（噪声拦截 + SetState Post 下包 OPPO 守卫） |
-| M7 | 1 | 保镖名册（事件 SDKCall + meme ret 补丁） |
-| M8 | 2 | 排队打碎 dhook 写 / 死锁 Hunt dhook SDKCall |
-| M9 | 1 | M9 fetch roster + OPPO guard（NoticeLooseBomb Pre + SetState Post 抢包 OPPO 守卫） |
-| M10 | 1 | 拆包门禁（dhook） |
-| M11 | 1 | 走廊 danger（dhook） |
-| M12 | 1 | camp 门禁（补丁 + 宿主钩子 + Hunt SDK） |
-| M13 | 1 | 买狙公式重写 |
-| M14 | 1 | 前沿架枪公式重写 |
-| M15 | 1 | Hide 时长修改（缩放 + 短蹲） |
+| M1 | 2 | `M1 anti-rush NOP` / `M1 guard chance formula patch` |
+| M2 | 2 | `M2 bombsite lock patch` / `M2 plant clock write` |
+| M3 | 1 | `M3 nav danger decay writes` |
+| M4 | 2 | `M4 random-overwrite NOP` / `M4 HuntState dhook writes` |
+| M5 | 3 | `M5 reload-hide NOP` / `M5 dodge dhook write` / `M5 retreat dhook writes` |
+| M6 | 1 | `M6 noise & OPPO dhook writes` |
+| M7 | 1 | `M7 escort meme ret & SDKCalls` |
+| M8 | 2 | `M8 queue breaker write` / `M8 deadlock Hunt SDKCall` |
+| M9 | 1 | `M9 loose-bomb gate & OPPO dhook` |
+| M10 | 1 | `M10 defuse dhook gate` |
+| M11 | 1 | `M11 corridor danger writes` |
+| M12 | 1 | `M12 camp bypass patch & gate` |
+| M13 | 1 | `M13 sniper buy formula patch` |
+| M14 | 1 | `M14 defend-rush formula patch` |
+| M15 | 1 | `M15 hide duration dhook writes` |
 
 ### 四态
 
@@ -348,14 +348,17 @@ Init:
   PrepModuleX_<A>Backend(); PrepModuleX_<B>Backend();
   Item_SetReady(ITEM_MX_A, aReady); Item_SetReady(ITEM_MX_B, bReady);
   EnableModuleX(true);
-  return (至少一件 Armed);
+  全灭断言: if (!g_bModuleX_Active) { LogModuleAllFailed(X); return false; }
+  武装闭环: LogModuleArmed(X, <label>, <detail>);
+  return true;
 
 Enable(true):
   只武装 Ready 的事项；失败只清对应事项的 Armed，不回滚另一件；
   g_bModuleX_Active = OR(Armed)；部分成功打 Partial activation 日志（全败不打）。
 
 Enable(false) / Restore:
-  逐事项 Restore 后端 + Item_SetArmed(false)。
+  逐事项 Restore 后端 + Item_SetArmed(false)；
+  Restore 卸载时销毁模块自有 Detour 句柄并输出标准确认日志。
 ```
 
 - `g_bModuleX_Active` 只是 `Enable` 幂等短路的内部缓存；业务判据一律 `Item_IsArmed`。
@@ -469,9 +472,15 @@ addons\sourcemod\
   - 补丁写入点：`... verified @ %X`；幂等命中：`... already present @ %X, skipping`；
   - 只读解析点：`Resolved ... @ ...`；偏移/SDKCall 点：`... verified (...)`（无地址可打，如 detour 句柄）；
   - 纯 hook/名册：无检查点行（挂钩失败走事项 FAILED 错误行）；
-  - 武装确认统一走 `LogModuleArmed`：`[Module N] <label> items armed (<detail>) [<arch>]`，多事项列名，单事项只放数字。
+  - **武装确认统一走 `LogModuleArmed`**：`[Module N] <label> items armed (<detail>) [<arch>]`。
+  - `<label>` 必须为 1~2 个英文单词的标准纯短名（首字母大写，严禁带模块编号前缀、公式或长变量，全库标准：`Defense`, `Bombsite`, `Danger decay`, `HuntState`, `Combat`, `Noise`, `Escort`, `Queue`, `Loot`, `Defuse`, `Corridor`, `Camp gate`, `Sniper buy`, `Defend rush`, `Hide duration`）；
+  - `<detail>`：多事项列名（如 `guard=1, anti-rush=1`），单事项成功时严格传纯数字 `"1"`（全败走 LogModuleAllFailed 拦截，永不传 `"0"` 或三元表达式）。
+- **卸载日志统一口径 (Restore 契约)**：各模块 `RestoreModule*()` 在还原完成后必须统一输出 `[BotRouteFix] [Module N] <ShortName> <设施> safely restored.`（纯补丁为 `patches safely restored to original bytes.`，纯钩子为 `hooks safely restored.`，混合为 `hooks and memory patches safely restored.`，纯数据重置为 `state reset (no persistent patch).`），禁止遗漏。
 - **变体**：部分武装 → `LogModulePartial`（`Partial activation (...)`）；事项全灭 → `LogModuleAllFailed`（`All items failed; module will report FAILED.`）；失败原因各事项就地 `LogError`。
-- **Hook 回调日志口径**：前缀统一 `[BotRouteFix] [Module N]`；`DebugLog` 只记离散事件/状态变化（选举/拾取/安放/重定向/放行/认领），不记每 tick 求值——M4 的 `HuntState::OnUpdate` pre/post 刻意零输出（高频 tick），它的可观测面是 status 的 `total claims` 计数器；`LogError` 只用于不变量破坏（如 M7 非法名册数），普通业务分支一律 `DebugLog`；新增 Hook 回调必须带一行说明决策的 `DebugLog`，不留注释掉的死代码。
+- **Hook 回调命名、门禁与日志口径**：
+  - 命名规范：统一为 `Hook_<目标>_<Pre/Post>[_<消歧后缀>]`，一律 `public MRESReturn`；跨模块多 Detour 冲突以业务后缀消歧（如 `_Plant`, `_Fetch`）；
+  - 门禁口径：业务写入必守卫（首行或分支入口均可）；纯观测（如 M4 visual 数组）或跨模块信号（如 M11 侦察向 M5 发撤退请求）走消费方门禁；多租户共享宿主钩子（如 M15 借钩宿主）按各租户业务分支分别守卫，杜绝为字面形式强加首行粗暴短路；
+  - 运行期日志：前缀统一 `[BotRouteFix] [Module N]`；`DebugLog` 只记离散事件/状态变化（选举/拾取/安放/重定向/放行/认领），不记每 tick 求值——M4 的 `HuntState::OnUpdate` pre/post 刻意零输出（高频 tick），它的可观测面是 status 的 `total claims` 计数器；`LogError` 只用于不变量破坏（如 M7 非法名册数），普通业务分支一律 `DebugLog`；新增 Hook 回调必须带一行说明决策的 `DebugLog`，不留注释掉的死代码。
 - **准备期与运行期的门禁分界**：准备期输出（Prep/Mount/Apply/Restore/Enable 内的句柄创建、签名绑定、基线备份、补丁落子、`verified`/`Resolved` 确认行）走 Init 口径，**无条件输出，不受 `sm_brf_debug` 约束**；运行期离散事件（Hook 回调/事件响应内的逐条决策，如持包人变更、锁落子/还原、士气处置切换）**必须走 `DebugLog`，受 debug 约束**。M2 锁落子/还原与 M6 逐条拦截/放行的 `DebugLog` 属后者（运行期逐 noise 事件），不是准备期，门控正确。
 - **各模块检查点清单**：M1 守点/反冲各 1 个写入点；M2 单例指针 + 时钟偏移 + 锁写入点；M3 危险度偏移 + nav 解析 + 状态重置；M4 随机旁路写入点 + 搜寻偏移；M5 reload 写入点 + 闪避偏移 + 后撤后端；M6 士气/噪声/Task/Disp 偏移 + SetDisposition SDKCall + 双 Detour；M7 Follow/StopFollowing SDKCalls + 士气偏移 + FollowMeme ret 补丁；M8 排队偏移 + 死锁 SDKCall；M9 State/Fetch/Disp 偏移 + SetDisposition SDKCall + NavMeasure + 双 Detour；M10 无（纯 hook/名册）；M11 走廊对抗偏移；M12 蹲守偏移 + 6 个 bypass 点；M13 rewrite/cave 二选一（按架构）；M14 4 站点 + 1 常量池；M15 隐藏时长偏移。
 

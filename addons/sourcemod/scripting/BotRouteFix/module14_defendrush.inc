@@ -49,12 +49,12 @@
 #define DEFEND_RUSH_CHANCE_MIN  0.0     // 前沿架枪概率下限
 #define DEFEND_RUSH_CHANCE_MAX  100.0   // 前沿架枪概率上限
 
-static MemoryPatch g_PatchDefendRush14_Lea[4];
-static MemoryPatch g_PatchDefendRush14_Float;
+static MemoryPatch g_PatchDefendRush_Lea[4];
+static MemoryPatch g_PatchDefendRush_Float;
 
 // Prep 构造、Apply 原样写入的补丁字节
-static int g_D14SiteByte[4];
-static int g_D14FloatBytes[4];
+static int g_DefendRushSiteByte[4];
+static int g_DefendRushFloatBytes[4];
 
 // 模块规则开启态（Enable 幂等缓存；业务判据统一用 Item_IsArmed）
 static bool g_bModule14_Active = false;
@@ -120,10 +120,10 @@ static bool PrepModule14_Site(int siteIndex)
 
     Address targetAddr = sigAddr + view_as<Address>(immOffset);
     char patchName[32];
-    Format(patchName, sizeof(patchName), "DefendRush14_Lea%d", siteIndex + 1);
+    Format(patchName, sizeof(patchName), "DefendRush_Lea%d", siteIndex + 1);
 
     // Init 必须在幂等检测之前：同目标重入时它保留原始基线备份
-    g_PatchDefendRush14_Lea[siteIndex].Init(patchName, targetAddr, 1);
+    g_PatchDefendRush_Lea[siteIndex].Init(patchName, targetAddr, 1);
 
     int b0 = LoadFromAddress(targetAddr - view_as<Address>(2), NumberType_Int8);
     int b1 = LoadFromAddress(targetAddr - view_as<Address>(1), NumberType_Int8);
@@ -158,9 +158,9 @@ static bool PrepModule14_Site(int siteIndex)
     if (b2 == newImm)
     {
         // 幂等：已驻留。有备份=自家补丁；无备份=外来改写，无基线可还原
-        if (!g_PatchDefendRush14_Lea[siteIndex].hasBackup)
+        if (!g_PatchDefendRush_Lea[siteIndex].hasBackup)
         {
-            g_PatchDefendRush14_Lea[siteIndex].isPatched = false;
+            g_PatchDefendRush_Lea[siteIndex].isPatched = false;
             LogError("[BotRouteFix] [Module 14] Site %d already patched without baseline @ %X; defend-rush item FAILED.",
                 siteIndex + 1, targetAddr);
             return false;
@@ -176,14 +176,14 @@ static bool PrepModule14_Site(int siteIndex)
             return false;
         }
 
-        if (!g_PatchDefendRush14_Lea[siteIndex].BackupOriginal())
+        if (!g_PatchDefendRush_Lea[siteIndex].BackupOriginal())
         {
             LogError("[BotRouteFix] [Module 14] Site %d baseline backup failed; defend-rush item FAILED.", siteIndex + 1);
             return false;
         }
     }
 
-    g_D14SiteByte[siteIndex] = newImm;
+    g_DefendRushSiteByte[siteIndex] = newImm;
     LogMessage("[BotRouteFix] [Module 14] Site %d defend-rush block verified @ %X", siteIndex + 1, targetAddr);
     return true;
 }
@@ -240,15 +240,15 @@ static bool PrepModule14_FloatBackend()
     }
 
     // Init 必须在幂等检测之前：同目标重入时它保留原始基线备份
-    g_PatchDefendRush14_Float.Init("DefendRush14_Float", floatAddr, 4);
+    g_PatchDefendRush_Float.Init("DefendRush_Float", floatAddr, 4);
 
     // 语义锚点验证：该常量必须是 -17.0f（原始）或 -10.0f（自家已改）
     float fval = view_as<float>(LoadFromAddress(floatAddr, NumberType_Int32));
     if (fval == -10.0)
     {
-        if (!g_PatchDefendRush14_Float.hasBackup)
+        if (!g_PatchDefendRush_Float.hasBackup)
         {
-            g_PatchDefendRush14_Float.isPatched = false;
+            g_PatchDefendRush_Float.isPatched = false;
             LogError("[BotRouteFix] [Module 14] Float already patched without baseline @ %X; defend-rush item FAILED.", floatAddr);
             return false;
         }
@@ -262,7 +262,7 @@ static bool PrepModule14_FloatBackend()
             return false;
         }
 
-        if (!g_PatchDefendRush14_Float.BackupOriginal())
+        if (!g_PatchDefendRush_Float.BackupOriginal())
         {
             LogError("[BotRouteFix] [Module 14] Float baseline backup failed; defend-rush item FAILED.");
             return false;
@@ -303,10 +303,10 @@ static bool PrepModule14_FloatBackend()
         }
     }
 
-    g_D14FloatBytes[0] = 0x00;
-    g_D14FloatBytes[1] = 0x00;
-    g_D14FloatBytes[2] = 0x20;  // -10.0f 小端
-    g_D14FloatBytes[3] = 0xC1;
+    g_DefendRushFloatBytes[0] = 0x00;
+    g_DefendRushFloatBytes[1] = 0x00;
+    g_DefendRushFloatBytes[2] = 0x20;  // -10.0f 小端
+    g_DefendRushFloatBytes[3] = 0xC1;
 
     LogMessage("[BotRouteFix] [Module 14] Shared float verified @ %X", floatAddr);
     return true;
@@ -332,10 +332,14 @@ bool InitModule14_DefendRush()
 
     Item_SetReady(ITEM_M14_DEFEND, PrepModule14_DefendBackend());
     EnableModule14_DefendRush(true);
+    if (!Item_IsArmed(ITEM_M14_DEFEND))
+    {
+        LogModuleAllFailed(14);
+        return false;
+    }
 
-    LogModuleArmed(14, "defendRushChance (40-10*M)",
-        Item_IsArmed(ITEM_M14_DEFEND) ? "1" : "0");
-    return Item_IsArmed(ITEM_M14_DEFEND);
+    LogModuleArmed(14, "Defend rush", "1");
+    return true;
 }
 
 /**
@@ -366,7 +370,7 @@ void EnableModule14_DefendRush(bool enable)
 void RestoreModule14_DefendRush()
 {
     EnableModule14_DefendRush(false);
-    LogMessage("[BotRouteFix] [Module 14] Patches safely restored to original bytes.");
+    LogMessage("[BotRouteFix] [Module 14] Defend rush patches safely restored to original bytes.");
 }
 
 //========================================================================================
@@ -415,15 +419,15 @@ static bool ApplyModule14_DefendBackend()
     for (int i = 0; i < 4; i++)
     {
         int oneByte[1];
-        oneByte[0] = g_D14SiteByte[i];
+        oneByte[0] = g_DefendRushSiteByte[i];
 
-        if (!g_PatchDefendRush14_Lea[i].Apply(oneByte))
+        if (!g_PatchDefendRush_Lea[i].Apply(oneByte))
         {
             for (int j = 0; j < 4; j++)
             {
-                g_PatchDefendRush14_Lea[j].Restore();
+                g_PatchDefendRush_Lea[j].Restore();
             }
-            g_PatchDefendRush14_Float.Restore();
+            g_PatchDefendRush_Float.Restore();
             Item_SetReady(ITEM_M14_DEFEND, false);
             Item_SetArmed(ITEM_M14_DEFEND, false);
             LogError("[BotRouteFix] [Module 14] Site %d write failed; all patches rolled back, defend-rush item FAILED.", i + 1);
@@ -431,14 +435,14 @@ static bool ApplyModule14_DefendBackend()
         }
     }
 
-    if (!g_PatchDefendRush14_Float.Apply(g_D14FloatBytes))
+    if (!g_PatchDefendRush_Float.Apply(g_DefendRushFloatBytes))
     {
         // 已驻留的 lea 必须回滚，否则与旧 float 组成 -17*(M-4) 错公式半态驻留
         for (int j = 0; j < 4; j++)
         {
-            g_PatchDefendRush14_Lea[j].Restore();
+            g_PatchDefendRush_Lea[j].Restore();
         }
-        g_PatchDefendRush14_Float.Restore();
+        g_PatchDefendRush_Float.Restore();
         Item_SetReady(ITEM_M14_DEFEND, false);
         Item_SetArmed(ITEM_M14_DEFEND, false);
         LogError("[BotRouteFix] [Module 14] Shared float write failed; all patches rolled back, defend-rush item FAILED.");
@@ -456,9 +460,9 @@ static void RestoreModule14_DefendBackend()
 {
     for (int i = 0; i < 4; i++)
     {
-        g_PatchDefendRush14_Lea[i].Restore();
+        g_PatchDefendRush_Lea[i].Restore();
     }
-    g_PatchDefendRush14_Float.Restore();
+    g_PatchDefendRush_Float.Restore();
     Item_SetArmed(ITEM_M14_DEFEND, false);
 }
 

@@ -72,7 +72,7 @@ void InitItems()
     g_iItemModule[ITEM_M1_ANTI_RUSH] = 1;
     strcopy(g_sItemName[ITEM_M1_ANTI_RUSH], 48, "M1 anti-rush NOP");
     g_iItemModule[ITEM_M1_GUARD] = 1;
-    strcopy(g_sItemName[ITEM_M1_GUARD], 48, "M1 guard chance formula");
+    strcopy(g_sItemName[ITEM_M1_GUARD], 48, "M1 guard chance formula patch");
 
     g_iItemModule[ITEM_M2_LOCK] = 2;
     strcopy(g_sItemName[ITEM_M2_LOCK], 48, "M2 bombsite lock patch");
@@ -80,7 +80,7 @@ void InitItems()
     strcopy(g_sItemName[ITEM_M2_CLOCK], 48, "M2 plant clock write");
 
     g_iItemModule[ITEM_M3_DECAY] = 3;
-    strcopy(g_sItemName[ITEM_M3_DECAY], 48, "M3 nav danger decay");
+    strcopy(g_sItemName[ITEM_M3_DECAY], 48, "M3 nav danger decay writes");
 
     g_iItemModule[ITEM_M4_NOP] = 4;
     strcopy(g_sItemName[ITEM_M4_NOP], 48, "M4 random-overwrite NOP");
@@ -92,13 +92,13 @@ void InitItems()
     g_iItemModule[ITEM_M5_DODGE] = 5;
     strcopy(g_sItemName[ITEM_M5_DODGE], 48, "M5 dodge dhook write");
     g_iItemModule[ITEM_M5_RETREAT] = 5;
-    strcopy(g_sItemName[ITEM_M5_RETREAT], 48, "M5 retreat");
+    strcopy(g_sItemName[ITEM_M5_RETREAT], 48, "M5 retreat dhook writes");
 
     g_iItemModule[ITEM_M6_NOISE] = 6;
-    strcopy(g_sItemName[ITEM_M6_NOISE], 48, "M6 noise + OPPO guard");
+    strcopy(g_sItemName[ITEM_M6_NOISE], 48, "M6 noise & OPPO dhook writes");
 
     g_iItemModule[ITEM_M7_ESCORT] = 7;
-    strcopy(g_sItemName[ITEM_M7_ESCORT], 48, "M7 carrier escort");
+    strcopy(g_sItemName[ITEM_M7_ESCORT], 48, "M7 escort meme ret & SDKCalls");
 
     g_iItemModule[ITEM_M8_QUEUE] = 8;
     strcopy(g_sItemName[ITEM_M8_QUEUE], 48, "M8 queue breaker write");
@@ -106,25 +106,25 @@ void InitItems()
     strcopy(g_sItemName[ITEM_M8_DEADLOCK], 48, "M8 deadlock Hunt SDKCall");
 
     g_iItemModule[ITEM_M9_LOOT] = 9;
-    strcopy(g_sItemName[ITEM_M9_LOOT], 48, "M9 fetch roster + OPPO guard");
+    strcopy(g_sItemName[ITEM_M9_LOOT], 48, "M9 loose-bomb gate & OPPO dhook");
 
     g_iItemModule[ITEM_M10_DEFUSE] = 10;
-    strcopy(g_sItemName[ITEM_M10_DEFUSE], 48, "M10 defuse gate");
+    strcopy(g_sItemName[ITEM_M10_DEFUSE], 48, "M10 defuse dhook gate");
 
     g_iItemModule[ITEM_M11_CORRIDOR] = 11;
-    strcopy(g_sItemName[ITEM_M11_CORRIDOR], 48, "M11 corridor danger");
+    strcopy(g_sItemName[ITEM_M11_CORRIDOR], 48, "M11 corridor danger writes");
 
     g_iItemModule[ITEM_M12_CAMP] = 12;
-    strcopy(g_sItemName[ITEM_M12_CAMP], 48, "M12 sniper camp gate");
+    strcopy(g_sItemName[ITEM_M12_CAMP], 48, "M12 camp bypass patch & gate");
 
     g_iItemModule[ITEM_M13_BUY] = 13;
-    strcopy(g_sItemName[ITEM_M13_BUY], 48, "M13 sniper buy formula");
+    strcopy(g_sItemName[ITEM_M13_BUY], 48, "M13 sniper buy formula patch");
 
     g_iItemModule[ITEM_M14_DEFEND] = 14;
-    strcopy(g_sItemName[ITEM_M14_DEFEND], 48, "M14 defend-rush formula");
+    strcopy(g_sItemName[ITEM_M14_DEFEND], 48, "M14 defend-rush formula patch");
 
     g_iItemModule[ITEM_M15_HIDE] = 15;
-    strcopy(g_sItemName[ITEM_M15_HIDE], 48, "M15 hide duration");
+    strcopy(g_sItemName[ITEM_M15_HIDE], 48, "M15 hide duration dhook writes");
 }
 
 /**

@@ -277,7 +277,7 @@ bool InitModule6_Noise()
         return false;
     }
 
-    LogModuleArmed(6, "M6 noise + OPPO guard", Item_IsArmed(ITEM_M6_NOISE) ? "1" : "0");
+    LogModuleArmed(6, "Noise", "1");
     return true;
 }
 
@@ -334,7 +334,7 @@ void RestoreModule6_Noise()
         g_hAttackGuardDetour = null;
     }
 
-    LogMessage("[BotRouteFix] [Module 6] Morale tactics hooks safely restored.");
+    LogMessage("[BotRouteFix] [Module 6] Noise hooks safely restored.");
 }
 
 //========================================================================================

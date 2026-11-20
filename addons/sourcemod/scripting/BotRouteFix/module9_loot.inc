@@ -26,7 +26,7 @@
 //    - player_death / client_disconnect：除名 + 按掉包点就近回补（共用同一函数；名单有效时 C4 必躺掉包点，
 //      按掉包点招人即按 C4 位置招人）——必选项，否则减员到全灭即全员 false，包烂地上没人捡（比原版更糟的死锁）；
 //    - item_pickup(c4) / round_start / OnMapStart：清（FetchBombState:58 有人捡包自己散伙；换图重置）。
-// 4. fail-open 原则：钩子只会把 true 掐成 false，且仅在名册有效时掐；名册空即原生。
+// 4. 空名册放行原则：钩子只会把 true 掐成 false，且仅在名册有效时掐；名册空即原生 no-op。
 // 全程事件驱动，无 timer 轮询。
 // 5. 名册抢包 OPPO 守卫（SetState Post + AttackState OnUpdate 双面，事项 ITEM_M9_LOOT 的第二钩子）：
 //    只给名册内 Bot、只在 m_state == FetchBombState 且当前非 OPPO 时补写
@@ -237,10 +237,14 @@ bool InitModule9_Loot()
 
     Item_SetReady(ITEM_M9_LOOT, PrepModule9_LootBackend());
     EnableModule9_Loot(true);
+    if (!Item_IsArmed(ITEM_M9_LOOT))
+    {
+        LogModuleAllFailed(9);
+        return false;
+    }
 
-    LogModuleArmed(9, "M9 fetch roster + OPPO guard",
-        Item_IsArmed(ITEM_M9_LOOT) ? "1" : "0");
-    return g_bModule9_Active;
+    LogModuleArmed(9, "Loot", "1");
+    return true;
 }
 
 /**
@@ -291,6 +295,8 @@ void RestoreModule9_Loot()
         delete g_hAttackFetchGuardDetour;
         g_hAttackFetchGuardDetour = null;
     }
+
+    LogMessage("[BotRouteFix] [Module 9] Loot hooks safely restored.");
 }
 
 //========================================================================================
@@ -431,6 +437,11 @@ public void Module9_FrameElect(any data)
  */
 void Module9_OnPlayerDeath(int victim)
 {
+    if (!Item_IsArmed(ITEM_M9_LOOT))
+    {
+        return;
+    }
+
     Loot_RemoveAndBackfill(victim, "fallen member");
 }
 
@@ -439,6 +450,11 @@ void Module9_OnPlayerDeath(int victim)
  */
 void Module9_OnClientDisconnect(int client)
 {
+    if (!Item_IsArmed(ITEM_M9_LOOT))
+    {
+        return;
+    }
+
     Loot_RemoveAndBackfill(client, "disconnect");
 }
 
@@ -447,6 +463,11 @@ void Module9_OnClientDisconnect(int client)
  */
 void Module9_OnItemPickup(int client, const char[] item)
 {
+    if (!Item_IsArmed(ITEM_M9_LOOT))
+    {
+        return;
+    }
+
     if (!g_bHasRoster)
     {
         return;
@@ -692,7 +713,7 @@ static void RestoreModule9_LootBackend()
 //========================================================================================
 
 /**
- * 事项 M9 抢包花名册的清空：fail-open（无名册 = 全体放行回原生）
+ * 事项 M9 抢包花名册的清空：no-op 放行（无名册 = 全体放行回原生）
  *
  * 停用 / 捡包 / 回合重置 / 换图共用；只清名单不动钩子。
  */
@@ -708,7 +729,7 @@ static void Loot_ClearRoster()
 /**
  * 事项 M9 抢包花名册的掉包定位：找无主掉包（m_hOwnerEntity == -1 的 weapon_c4）
  *
- * 找不到返回 false，调用方按 fail-open 回原生（不等、不猜）。
+ * 找不到返回 false，调用方按 no-op 回原生放行（不等、不猜）。
  */
 static bool Loot_FindDropPos(float dropPos[3])
 {
@@ -855,7 +876,7 @@ static void Loot_ElectRoster()
     float dropPos[3];
     if (!Loot_FindDropPos(dropPos))
     {
-        DebugLog("[BotRouteFix] [Module 9] Bomb dropped but loose C4 not found, fail-open to native");
+        DebugLog("[BotRouteFix] [Module 9] Bomb dropped but loose C4 not found, no-op to native");
         return;
     }
     g_fDropPos = dropPos;
@@ -864,7 +885,7 @@ static void Loot_ElectRoster()
     if (!BotNavReady())
     {
         Loot_ClearRoster();
-        DebugLog("[BotRouteFix] [Module 9] NavMeasure standby, fail-open to native");
+        DebugLog("[BotRouteFix] [Module 9] NavMeasure standby, no-op to native");
         return;
     }
 
@@ -906,7 +927,7 @@ static void Loot_ElectRoster()
 
     if (g_iLootRoster[0] == -1)
     {
-        DebugLog("[BotRouteFix] [Module 9] No alive T bots to elect, fail-open to native");
+        DebugLog("[BotRouteFix] [Module 9] No alive T bots to elect, no-op to native");
         return;
     }
 
@@ -931,7 +952,7 @@ static void Loot_ElectRoster()
 }
 
 /**
- * 除名 + 按掉包点就近回补 + 全灭 fail-open（死亡与掉线共用）
+ * 除名 + 按掉包点就近回补 + 全灭解散放行（死亡与掉线共用）
  * 名单有效时 C4 必躺在掉包点（谁捡起名单即散），按掉包点招人即按 C4 位置招人
  */
 static void Loot_RemoveAndBackfill(int client, const char[] reason)
@@ -989,10 +1010,10 @@ static void Loot_RemoveAndBackfill(int client, const char[] reason)
         }
     }
 
-    // 全灭则解散回原生（fail-open）
+    // 全灭则解散回原生（no-op 放行）
     if (Module9_GetRosterCount() == 0)
     {
         Loot_ClearRoster();
-        DebugLog("[BotRouteFix] [Module 9] Roster wiped, fail-open to native");
+        DebugLog("[BotRouteFix] [Module 9] Roster wiped, no-op to native");
     }
 }

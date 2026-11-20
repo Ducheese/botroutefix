@@ -55,8 +55,6 @@
 
 // 模块启用缓存（= Item_IsArmed(ITEM_M11_CORRIDOR)，Enable 幂等短路）
 static bool g_bModule11_Active = false;
-// 规则意图（载体开关与关闭路径的唯一判据；事项 FAILED 时 Active=false，不能拿它判规则）
-static bool g_bModule11_RuleOn = false;
 static bool g_bSpottedSniperHooked = false;
 static Handle g_hSpottedSniperDetour = null;
 static int g_iTotalSniperRequests = 0;
@@ -198,12 +196,14 @@ bool InitModule11_Sniper()
     Item_SetReady(ITEM_M11_CORRIDOR, PrepModule11_CorridorBackend());
 
     EnableModule11_Sniper(true);
+    if (!Item_IsArmed(ITEM_M11_CORRIDOR))
+    {
+        LogModuleAllFailed(11);
+        return false;
+    }
 
-    char armedDetail[64];
-    Format(armedDetail, sizeof(armedDetail), "corridor=%d, transport=%d",
-        Item_IsArmed(ITEM_M11_CORRIDOR), g_bSpottedSniperHooked);
-    LogModuleArmed(11, "Corridor", armedDetail);
-    return g_bModule11_Active;
+    LogModuleArmed(11, "Corridor", "1");
+    return true;
 }
 
 /**
@@ -215,31 +215,23 @@ bool InitModule11_Sniper()
  */
 void EnableModule11_Sniper(bool enable)
 {
-    if (enable)
-    {
-        if (g_bModule11_Active)
-        {
-            return;
-        }
-
-        g_bModule11_RuleOn = true;
-
-        // 载体是模块级资源：规则开启且签名可用即挂载，不依赖走廊事项 Ready
-        ApplyModule11_Transport();
-        ApplyModule11_CorridorBackend();
-
-        g_bModule11_Active = Item_IsArmed(ITEM_M11_CORRIDOR);
-        return;
-    }
-
-    if (!g_bModule11_RuleOn)
+    if (enable == g_bModule11_Active)
     {
         return;
     }
 
-    g_bModule11_RuleOn = false;
-    RestoreModule11_CorridorBackend();
-    g_bModule11_Active = false;
+    if (!enable)
+    {
+        RestoreModule11_CorridorBackend();
+        g_bModule11_Active = false;
+        return;
+    }
+
+    // 载体是模块级资源：规则开启且签名可用即挂载，不依赖走廊事项 Ready
+    ApplyModule11_Transport();
+    ApplyModule11_CorridorBackend();
+
+    g_bModule11_Active = Item_IsArmed(ITEM_M11_CORRIDOR);
 }
 
 /**
@@ -258,7 +250,7 @@ void RestoreModule11_Sniper()
         g_hSpottedSniperDetour = null;
     }
 
-    LogMessage("[BotRouteFix] [Module 11] Sniper deterrence hooks safely restored.");
+    LogMessage("[BotRouteFix] [Module 11] Corridor hooks safely restored.");
 }
 
 //========================================================================================

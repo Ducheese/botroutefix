@@ -69,8 +69,8 @@ static Handle g_hIdleDetour = null;
 static bool g_bIdleHooked = false;
 
 // Meme 灭活补丁：BotFollowMeme::Interpret 入口 ret（64 位 1 字节 C3 / 32 位 3 字节 C2 08 00）
-static MemoryPatch g_PatchFollowMeme7;
-static int g_FollowMeme7PatchBytes[3];
+static MemoryPatch g_PatchFollowMeme;
+static int g_FollowMemePatchBytes[3];
 
 enum struct EscortCandidate
 {
@@ -176,7 +176,7 @@ static bool PrepFollowMemeRetPatch()
     }
 
     int patchSize = g_bIsWin64 ? 1 : 3;
-    g_PatchFollowMeme7.Init("FollowMeme7_Ret", sigAddr, patchSize);
+    g_PatchFollowMeme.Init("FollowMeme_Ret", sigAddr, patchSize);
 
     int b0 = LoadFromAddress(sigAddr, NumberType_Int8);
     int b1 = LoadFromAddress(sigAddr + view_as<Address>(1), NumberType_Int8);
@@ -187,9 +187,9 @@ static bool PrepFollowMemeRetPatch()
             && LoadFromAddress(sigAddr + view_as<Address>(2), NumberType_Int8) == 0x00);
     if (alreadyRet)
     {
-        if (!g_PatchFollowMeme7.hasBackup)
+        if (!g_PatchFollowMeme.hasBackup)
         {
-            g_PatchFollowMeme7.isPatched = false;
+            g_PatchFollowMeme.isPatched = false;
             LogError("[BotRouteFix] [Module 7] FollowMeme already ret without baseline @ %X; escort item FAILED.", sigAddr);
             return false;
         }
@@ -208,7 +208,7 @@ static bool PrepFollowMemeRetPatch()
         return false;
     }
 
-    if (!g_PatchFollowMeme7.BackupOriginal())
+    if (!g_PatchFollowMeme.BackupOriginal())
     {
         LogError("[BotRouteFix] [Module 7] FollowMeme baseline backup failed; escort item FAILED.");
         return false;
@@ -217,13 +217,13 @@ static bool PrepFollowMemeRetPatch()
     // 构造 ret：64 = C3；32 = C2 08 00（清 8 字节栈参数）
     if (g_bIsWin64)
     {
-        g_FollowMeme7PatchBytes[0] = 0xC3;
+        g_FollowMemePatchBytes[0] = 0xC3;
     }
     else
     {
-        g_FollowMeme7PatchBytes[0] = 0xC2;
-        g_FollowMeme7PatchBytes[1] = 0x08;
-        g_FollowMeme7PatchBytes[2] = 0x00;
+        g_FollowMemePatchBytes[0] = 0xC2;
+        g_FollowMemePatchBytes[1] = 0x08;
+        g_FollowMemePatchBytes[2] = 0x00;
     }
 
     LogMessage("[BotRouteFix] [Module 7] FollowMeme ret verified @ %X [%s]",
@@ -261,7 +261,7 @@ bool InitModule7_Escort()
         return false;
     }
 
-    LogModuleArmed(7, "Carrier escort", "Euclidean bodyguards + pointman");
+    LogModuleArmed(7, "Escort", "1");
     return true;
 }
 
@@ -711,9 +711,9 @@ static bool ApplyModule7_EscortBackend()
     }
 
     // 先落 meme 灭活补丁：补丁不在位，Escort_Refresh 配出的名册会被原生开局 meme 瞬间冲垮
-    if (!g_PatchFollowMeme7.Apply(g_FollowMeme7PatchBytes))
+    if (!g_PatchFollowMeme.Apply(g_FollowMemePatchBytes))
     {
-        g_PatchFollowMeme7.Restore();
+        g_PatchFollowMeme.Restore();
         Item_SetReady(ITEM_M7_ESCORT, false);
         Item_SetArmed(ITEM_M7_ESCORT, false);
         LogError("[BotRouteFix] [Module 7] FollowMeme ret write failed; escort item FAILED.");
@@ -723,7 +723,7 @@ static bool ApplyModule7_EscortBackend()
     // 挂载先锋监督 Detour：挂载失败只清 Armed（句柄有效，待下次全关全开重试）
     if (!SyncDetourEnabled(g_hIdleDetour, g_bIdleHooked, false, Hook_CCSBotIdle_Pre, true, "Module 7"))
     {
-        g_PatchFollowMeme7.Restore();
+        g_PatchFollowMeme.Restore();
         Item_SetArmed(ITEM_M7_ESCORT, false);
         LogError("[BotRouteFix] [Module 7] CCSBot_Idle detour enable failed; escort item FAILED.");
         return false;
@@ -741,7 +741,7 @@ static void RestoreModule7_EscortBackend()
 {
     // 先摘监督钩子，再释放（释放里的 BotIdle 不再回调 M7）
     SyncDetourEnabled(g_hIdleDetour, g_bIdleHooked, false, Hook_CCSBotIdle_Pre, false, "Module 7");
-    g_PatchFollowMeme7.Restore();
+    g_PatchFollowMeme.Restore();
     Item_SetArmed(ITEM_M7_ESCORT, false);
     Escort_ReleaseAll();
 }

@@ -56,13 +56,13 @@
 #define SNIPER_BUY_CHANCE_MIN   0.0     // 买狙意愿概率下限
 #define SNIPER_BUY_CHANCE_MAX   100.0   // 买狙意愿概率上限
 
-static MemoryPatch g_PatchSniperBuy13_Main;
-static MemoryPatch g_PatchSniperBuy13_Cave;
+static MemoryPatch g_PatchSniperBuy_Main;
+static MemoryPatch g_PatchSniperBuy_Cave;
 
 // Prep 构造、Apply 原样写入的机器码缓冲
-static int g_Buy13MainBytes[66];
-static int g_Buy13CaveBytes[25];
-static bool g_bBuy13UseCave = false;    // true = 64 位 jmp-in + cave 双段
+static int g_BuyMainBytes[66];
+static int g_BuyCaveBytes[25];
+static bool g_bBuyUseCave = false;    // true = 64 位 jmp-in + cave 双段
 
 // 模块规则开启态（Enable 幂等缓存；业务判据统一用 Item_IsArmed）
 static bool g_bModule13_Active = false;
@@ -93,8 +93,8 @@ static bool PrepModule13_BuyBackend()
         return false;
     }
 
-    g_bBuy13UseCave = g_bIsWin64;
-    return g_bBuy13UseCave ? PrepModule13_CaveSite() : PrepModule13_RewriteSite();
+    g_bBuyUseCave = g_bIsWin64;
+    return g_bBuyUseCave ? PrepModule13_CaveSite() : PrepModule13_RewriteSite();
 }
 
 //----------------------------------------------------------------------------------------
@@ -128,14 +128,14 @@ static bool PrepModule13_RewriteSite()
         return false;
     }
 
-    g_PatchSniperBuy13_Main.Init("SniperBuy13_Rewrite", sigAddr, 66);
+    g_PatchSniperBuy_Main.Init("SniperBuy_Rewrite", sigAddr, 66);
 
     // 幂等性检测：+21 已是 push imm32（0x68）说明重写已驻留（原生此处是 0xCA/cmovnz 尾字节，sub esp 在 +22）；
     // 有备份=自家补丁；无备份=外来改写，记 false（无基线可还原）
     bool alreadyPatched = (LoadFromAddress(sigAddr + view_as<Address>(21), NumberType_Int8) == 0x68);
-    if (alreadyPatched && !g_PatchSniperBuy13_Main.hasBackup)
+    if (alreadyPatched && !g_PatchSniperBuy_Main.hasBackup)
     {
-        g_PatchSniperBuy13_Main.isPatched = false;
+        g_PatchSniperBuy_Main.isPatched = false;
         LogError("[BotRouteFix] [Module 13] Rewrite already present without baseline @ %X; sniper-buy item FAILED.", sigAddr);
         return false;
     }
@@ -161,7 +161,7 @@ static bool PrepModule13_RewriteSite()
         }
     }
 
-    if (!g_PatchSniperBuy13_Main.BackupOriginal())
+    if (!g_PatchSniperBuy_Main.BackupOriginal())
     {
         LogError("[BotRouteFix] [Module 13] Rewrite baseline backup failed; sniper-buy item FAILED.");
         return false;
@@ -169,23 +169,23 @@ static bool PrepModule13_RewriteSite()
 
     // 版本相关地址与槽位一律从原始基线读取：已驻留时当前字节已被本插件覆盖，
     // 只有备份里还留着真实操作数（addrT/addrCT/var10/addrRF）。
-    int addr100 = g_PatchSniperBuy13_Main.originalBytes[2]
-        | (g_PatchSniperBuy13_Main.originalBytes[3] << 8)
-        | (g_PatchSniperBuy13_Main.originalBytes[4] << 16)
-        | (g_PatchSniperBuy13_Main.originalBytes[5] << 24);
-    int addrT = g_PatchSniperBuy13_Main.originalBytes[10]
-        | (g_PatchSniperBuy13_Main.originalBytes[11] << 8)
-        | (g_PatchSniperBuy13_Main.originalBytes[12] << 16)
-        | (g_PatchSniperBuy13_Main.originalBytes[13] << 24);
-    int addrCT = g_PatchSniperBuy13_Main.originalBytes[15]
-        | (g_PatchSniperBuy13_Main.originalBytes[16] << 8)
-        | (g_PatchSniperBuy13_Main.originalBytes[17] << 16)
-        | (g_PatchSniperBuy13_Main.originalBytes[18] << 24);
-    int var10 = g_PatchSniperBuy13_Main.originalBytes[27];
-    int addrRF = g_PatchSniperBuy13_Main.originalBytes[41]
-        | (g_PatchSniperBuy13_Main.originalBytes[42] << 8)
-        | (g_PatchSniperBuy13_Main.originalBytes[43] << 16)
-        | (g_PatchSniperBuy13_Main.originalBytes[44] << 24);
+    int addr100 = g_PatchSniperBuy_Main.originalBytes[2]
+        | (g_PatchSniperBuy_Main.originalBytes[3] << 8)
+        | (g_PatchSniperBuy_Main.originalBytes[4] << 16)
+        | (g_PatchSniperBuy_Main.originalBytes[5] << 24);
+    int addrT = g_PatchSniperBuy_Main.originalBytes[10]
+        | (g_PatchSniperBuy_Main.originalBytes[11] << 8)
+        | (g_PatchSniperBuy_Main.originalBytes[12] << 16)
+        | (g_PatchSniperBuy_Main.originalBytes[13] << 24);
+    int addrCT = g_PatchSniperBuy_Main.originalBytes[15]
+        | (g_PatchSniperBuy_Main.originalBytes[16] << 8)
+        | (g_PatchSniperBuy_Main.originalBytes[17] << 16)
+        | (g_PatchSniperBuy_Main.originalBytes[18] << 24);
+    int var10 = g_PatchSniperBuy_Main.originalBytes[27];
+    int addrRF = g_PatchSniperBuy_Main.originalBytes[41]
+        | (g_PatchSniperBuy_Main.originalBytes[42] << 8)
+        | (g_PatchSniperBuy_Main.originalBytes[43] << 16)
+        | (g_PatchSniperBuy_Main.originalBytes[44] << 24);
 
     // 语义锚点：100.0 常量校验（50.0 不再被引用，无需校验）
     if (view_as<float>(LoadFromAddress(view_as<Address>(addr100), NumberType_Int32)) != 100.0)
@@ -230,7 +230,7 @@ static bool PrepModule13_RewriteSite()
 
     for (int i = 0; i < 66; i++)
     {
-        g_Buy13MainBytes[i] = p[i];
+        g_BuyMainBytes[i] = p[i];
     }
 
     LogMessage("[BotRouteFix] [Module 13] Rewrite block verified @ %X", sigAddr);
@@ -269,16 +269,16 @@ static bool PrepModule13_CaveSite()
     }
     Address caveAddr = comissAddr + view_as<Address>(caveOffset);
 
-    g_PatchSniperBuy13_Main.Init("SniperBuy13_JmpIn", comissAddr, 7);
-    g_PatchSniperBuy13_Cave.Init("SniperBuy13_Cave", caveAddr, 25);
+    g_PatchSniperBuy_Main.Init("SniperBuy_JmpIn", comissAddr, 7);
+    g_PatchSniperBuy_Cave.Init("SniperBuy_Cave", caveAddr, 25);
 
     // 幂等性检测：comiss 已被 E9 替换说明 cave 已挂（必须先查，否则 opcode 预检误报）；
     // 有备份=自家补丁；无备份=外来改写，记 false（无基线可还原）
     bool alreadyPatched = (LoadFromAddress(comissAddr, NumberType_Int8) == 0xE9);
-    if (alreadyPatched && (!g_PatchSniperBuy13_Main.hasBackup || !g_PatchSniperBuy13_Cave.hasBackup))
+    if (alreadyPatched && (!g_PatchSniperBuy_Main.hasBackup || !g_PatchSniperBuy_Cave.hasBackup))
     {
-        g_PatchSniperBuy13_Main.isPatched = false;
-        g_PatchSniperBuy13_Cave.isPatched = false;
+        g_PatchSniperBuy_Main.isPatched = false;
+        g_PatchSniperBuy_Cave.isPatched = false;
         LogError("[BotRouteFix] [Module 13] Cave hook already present without baseline @ %X; sniper-buy item FAILED.", comissAddr);
         return false;
     }
@@ -329,7 +329,7 @@ static bool PrepModule13_CaveSite()
         }
     }
 
-    if (!g_PatchSniperBuy13_Main.BackupOriginal() || !g_PatchSniperBuy13_Cave.BackupOriginal())
+    if (!g_PatchSniperBuy_Main.BackupOriginal() || !g_PatchSniperBuy_Cave.BackupOriginal())
     {
         LogError("[BotRouteFix] [Module 13] Cave/jmp-in baseline backup failed; sniper-buy item FAILED.");
         return false;
@@ -362,11 +362,11 @@ static bool PrepModule13_CaveSite()
 
     for (int i = 0; i < 25; i++)
     {
-        g_Buy13CaveBytes[i] = caveBytes[i];
+        g_BuyCaveBytes[i] = caveBytes[i];
     }
     for (int i = 0; i < 7; i++)
     {
-        g_Buy13MainBytes[i] = jmpBytes[i];
+        g_BuyMainBytes[i] = jmpBytes[i];
     }
 
     LogMessage("[BotRouteFix] [Module 13] Cave block verified @ %X (jmp-in @ %X)", caveAddr, comissAddr);
@@ -393,10 +393,14 @@ bool InitModule13_SniperBuy()
 
     Item_SetReady(ITEM_M13_BUY, PrepModule13_BuyBackend());
     EnableModule13_SniperBuy(true);
+    if (!Item_IsArmed(ITEM_M13_BUY))
+    {
+        LogModuleAllFailed(13);
+        return false;
+    }
 
-    LogModuleArmed(13, "sniperRifleChance (50-10*M)",
-        Item_IsArmed(ITEM_M13_BUY) ? "1" : "0");
-    return Item_IsArmed(ITEM_M13_BUY);
+    LogModuleArmed(13, "Sniper buy", "1");
+    return true;
 }
 
 /**
@@ -427,7 +431,7 @@ void EnableModule13_SniperBuy(bool enable)
 void RestoreModule13_SniperBuy()
 {
     EnableModule13_SniperBuy(false);
-    LogMessage("[BotRouteFix] [Module 13] Patch safely restored to original bytes.");
+    LogMessage("[BotRouteFix] [Module 13] Sniper buy patches safely restored to original bytes.");
 }
 
 //========================================================================================
@@ -473,10 +477,10 @@ static bool ApplyModule13_BuyBackend()
         return false;
     }
 
-    if (g_bBuy13UseCave)
+    if (g_bBuyUseCave)
     {
         // 先写 cave 再挂 jmp-in，避免 jmp 指向未初始化 cave 的窗口
-        if (!g_PatchSniperBuy13_Cave.Apply(g_Buy13CaveBytes))
+        if (!g_PatchSniperBuy_Cave.Apply(g_BuyCaveBytes))
         {
             Item_SetReady(ITEM_M13_BUY, false);
             Item_SetArmed(ITEM_M13_BUY, false);
@@ -484,9 +488,9 @@ static bool ApplyModule13_BuyBackend()
             return false;
         }
 
-        if (!g_PatchSniperBuy13_Main.Apply(g_Buy13MainBytes))
+        if (!g_PatchSniperBuy_Main.Apply(g_BuyMainBytes))
         {
-            g_PatchSniperBuy13_Cave.Restore();
+            g_PatchSniperBuy_Cave.Restore();
             Item_SetReady(ITEM_M13_BUY, false);
             Item_SetArmed(ITEM_M13_BUY, false);
             LogError("[BotRouteFix] [Module 13] Jmp-in write failed; cave rolled back, sniper-buy item FAILED.");
@@ -495,7 +499,7 @@ static bool ApplyModule13_BuyBackend()
     }
     else
     {
-        if (!g_PatchSniperBuy13_Main.Apply(g_Buy13MainBytes))
+        if (!g_PatchSniperBuy_Main.Apply(g_BuyMainBytes))
         {
             Item_SetReady(ITEM_M13_BUY, false);
             Item_SetArmed(ITEM_M13_BUY, false);
@@ -513,8 +517,8 @@ static bool ApplyModule13_BuyBackend()
  */
 static void RestoreModule13_BuyBackend()
 {
-    g_PatchSniperBuy13_Main.Restore();
-    g_PatchSniperBuy13_Cave.Restore();
+    g_PatchSniperBuy_Main.Restore();
+    g_PatchSniperBuy_Cave.Restore();
     Item_SetArmed(ITEM_M13_BUY, false);
 }
 

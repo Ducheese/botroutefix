@@ -222,6 +222,8 @@ void RestoreModule8_Queue()
         delete g_hUpdatePathDetour;
         g_hUpdatePathDetour = null;
     }
+
+    LogMessage("[BotRouteFix] [Module 8] Queue hooks safely restored.");
 }
 
 

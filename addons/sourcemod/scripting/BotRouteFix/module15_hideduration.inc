@@ -69,8 +69,6 @@ static int g_iTotalShortHides = 0;
 
 // 模块启用缓存（= Item_IsArmed(ITEM_M15_HIDE)，Enable 幂等短路）
 static bool g_bModule15_Active = false;
-// 规则意图（区分"规则关闭"与"武装失败"，关闭路径必须执行）
-static bool g_bModule15_RuleOn = false;
 static bool g_bHideDurationHooked = false;
 
 //========================================================================================
@@ -159,10 +157,14 @@ bool InitModule15_HideDuration()
 
     Item_SetReady(ITEM_M15_HIDE, PrepModule15_HideBackend());
     EnableModule15_HideDuration(true);
+    if (!Item_IsArmed(ITEM_M15_HIDE))
+    {
+        LogModuleAllFailed(15);
+        return false;
+    }
 
-    LogModuleArmed(15, "Hide duration scaling",
-        Item_IsArmed(ITEM_M15_HIDE) ? "1" : "0");
-    return Item_IsArmed(ITEM_M15_HIDE);
+    LogModuleArmed(15, "Hide duration", "1");
+    return true;
 }
 
 /**
@@ -172,26 +174,19 @@ bool InitModule15_HideDuration()
  */
 void EnableModule15_HideDuration(bool enable)
 {
-    if (enable)
-    {
-        if (g_bModule15_Active)
-        {
-            return;
-        }
-
-        g_bModule15_RuleOn = true;
-        g_bModule15_Active = ApplyModule15_HideBackend();
-        return;
-    }
-
-    if (!g_bModule15_RuleOn)
+    if (enable == g_bModule15_Active)
     {
         return;
     }
 
-    g_bModule15_RuleOn = false;
-    RestoreModule15_HideBackend();
-    g_bModule15_Active = false;
+    if (!enable)
+    {
+        RestoreModule15_HideBackend();
+        g_bModule15_Active = false;
+        return;
+    }
+
+    g_bModule15_Active = ApplyModule15_HideBackend();
 }
 
 /**
@@ -210,7 +205,7 @@ void RestoreModule15_HideDuration()
         g_hHideDurationDetour = null;
     }
 
-    LogMessage("[BotRouteFix] [Module 15] Hook safely removed.");
+    LogMessage("[BotRouteFix] [Module 15] Hide duration hooks safely restored.");
 }
 
 /**

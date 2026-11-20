@@ -236,21 +236,21 @@ public Action Command_Status(int client, int args)
     ReplyToCommand(client, "[BotRouteFix] ------------------------------------------------------------");
 
     // 前半：15 模块启停状态（只报 failed 事项名居中、counts 挂尾；静态士气公式在名字里）。
-    PrintModuleState(client, 1, "CT Guard Chance (70-10*M) & Anti-Rush");
-    PrintModuleState(client, 2, "T Plant Clock (30+10*M) & Site Lock");
+    PrintModuleState(client, 1, "CT Guard Chance (70-10*M) / Anti-Rush");
+    PrintModuleState(client, 2, "T Plant Clock (30+10*M) / Site Lock");
     PrintModuleState(client, 3, "NavArea Danger Soft-Decay");
-    PrintModuleState(client, 4, "Hunt Target Claim & 45s Bypass");
+    PrintModuleState(client, 4, "Hunt Target Claim / 45s Bypass");
     PrintModuleState(client, 5, "Combat Dodge / Reload Hide / Retreat");
-    PrintModuleState(client, 6, "Noise Interception & Plant OPPO Guard (M<0/500/1000/2000/3000)");
-    PrintModuleState(client, 7, "Carrier Escort Roster (3-M)");
-    PrintModuleState(client, 8, "Polite Queue Breaker");
+    PrintModuleState(client, 6, "Noise Interception & OPPO Guard (M<0/500/1000/2000/3000)");
+    PrintModuleState(client, 7, "Carrier Escort & Pointman (3-M)");
+    PrintModuleState(client, 8, "Polite Queue Breaker / Deadlock Hunt");
     PrintModuleState(client, 9, "T Loose-Bomb Fetch Roster & OPPO Guard");
     PrintModuleState(client, 10, "CT Chief Defuser");
     PrintModuleState(client, 11, "Sniper Corridor Deterrence");
     PrintModuleState(client, 12, "Sniper Camp Gate (60-10*M)");
     PrintModuleState(client, 13, "Sniper Buy Chance (50-10*M)");
     PrintModuleState(client, 14, "Defend Rush Chance (40-10*M)");
-    PrintModuleState(client, 15, "Hide Duration x(1-0.15*M)");
+    PrintModuleState(client, 15, "Hide Duration Scaling x(1-0.15*M)");
 
     // Live 分隔行与上分隔行等长（总长 74）：前缀 + 27×- + " Live " + 27×-。
     ReplyToCommand(client, "[BotRouteFix] --------------------------- Live ---------------------------");

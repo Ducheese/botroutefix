@@ -257,7 +257,7 @@ bool InitModule3_Danger()
         return false;
     }
 
-    LogModuleArmed(3, "Nav danger decay", Item_IsArmed(ITEM_M3_DECAY) ? "1" : "0");
+    LogModuleArmed(3, "Danger decay", "1");
     return true;
 }
 
@@ -583,7 +583,6 @@ static void DecayAllNavAreaDanger()
         }
     }
 
-    DebugLog("[BotRouteFix] ============== Round Start ==============");
     DebugLog("[BotRouteFix] [Module 3] Decayed danger (80%% reduction) across %d NavAreas (%d active) for round start.",
         count, decayCount);
 }

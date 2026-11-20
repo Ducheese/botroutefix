@@ -66,8 +66,8 @@
 #define CAMP_CHANCE_MAX         100.0   // 留守概率上限
 #define BOT_TASK_MOVE_TO_SNIPER_SPOT 19 // 引擎原生任务枚举：MOVE_TO_SNIPER_SPOT (狙击手前往架枪点)
 
-static MemoryPatch g_PatchCamp12_Sites[6];
-static int g_Camp12PatchBytes[6][6];    // 预先构造的旁路字节（Prep 构造 / Apply 原样写入）
+static MemoryPatch g_PatchCampSites[6];
+static int g_CampPatchBytes[6][6];    // 预先构造的旁路字节（Prep 构造 / Apply 原样写入）
 // Task/Disposition 上收 global.inc 共享（OnPluginStart 一次解析），本文件只用不存
 static bool g_bModule12_Active = false; // 模块规则开启态（Enable 幂等缓存）
 static int g_iTotalCampRedirected = 0;
@@ -141,7 +141,7 @@ static bool PrepModule12_CampBackend()
  * 事项 M12 camp 门禁的单站点后端准备
  *
  * O1/D1/D2/D3 = NOP（指向 skip）；O2/O3 = E9 转换（指向 camp）。
- * 只定位/校验/备份并把构造好的字节写入 g_Camp12PatchBytes，不写代码段。
+ * 只定位/校验/备份并把构造好的字节写入 g_CampPatchBytes，不写代码段。
  * 失败语义：任一步失败返回 false，整个 camp 事项 FAILED（六站点全成或全败）。
  *
  * @param siteIndex     0..5
@@ -167,7 +167,7 @@ static bool PrepModule12_Site(int siteIndex)
     bool isConvert = (siteIndex == 1 || siteIndex == 2); // O2/O3：ja/jb-to-camp 改 E9
 
     char patchName[32];
-    Format(patchName, sizeof(patchName), "Camp12_S%d", siteIndex);
+    Format(patchName, sizeof(patchName), "Camp_S%d", siteIndex);
 
     // 站点固定宽度：O1/D2/D3 = 6 字节远跳；D1 = 2 字节短跳（两种架构一致）
     int patchSize = (siteIndex == 3) ? 2 : 6;
@@ -176,16 +176,16 @@ static bool PrepModule12_Site(int siteIndex)
     int b1 = LoadFromAddress(jccAddr + view_as<Address>(1), NumberType_Int8);
 
     // Init 必须在幂等检测之前：同目标重入时它保留原始基线备份
-    g_PatchCamp12_Sites[siteIndex].Init(patchName, jccAddr, patchSize);
+    g_PatchCampSites[siteIndex].Init(patchName, jccAddr, patchSize);
 
     // 幂等性检测必须先于 opcode 断言（已旁路的字节不再是原助记符）；
     // 有备份=自家补丁，保持基线；无备份=外来已旁路，记 false（无基线可还原）
     bool alreadyBypassed = (!isConvert && b0 == 0x90) || (isConvert && b0 == 0xE9);
     if (alreadyBypassed)
     {
-        if (!g_PatchCamp12_Sites[siteIndex].hasBackup)
+        if (!g_PatchCampSites[siteIndex].hasBackup)
         {
-            g_PatchCamp12_Sites[siteIndex].isPatched = false;
+            g_PatchCampSites[siteIndex].isPatched = false;
             LogError("[BotRouteFix] [Module 12] Site %d already bypassed without baseline @ %X; camp item FAILED.",
                 siteIndex, jccAddr);
             return false;
@@ -199,7 +199,7 @@ static bool PrepModule12_Site(int siteIndex)
             return false;
         }
 
-        if (!g_PatchCamp12_Sites[siteIndex].BackupOriginal())
+        if (!g_PatchCampSites[siteIndex].BackupOriginal())
         {
             LogError("[BotRouteFix] [Module 12] Site %d baseline backup failed; camp item FAILED.", siteIndex);
             return false;
@@ -211,23 +211,23 @@ static bool PrepModule12_Site(int siteIndex)
     {
         for (int i = 0; i < patchSize; i++)
         {
-            g_Camp12PatchBytes[siteIndex][i] = 0x90;
+            g_CampPatchBytes[siteIndex][i] = 0x90;
         }
     }
     else
     {
-        int origRel = g_PatchCamp12_Sites[siteIndex].originalBytes[2]
-            | (g_PatchCamp12_Sites[siteIndex].originalBytes[3] << 8)
-            | (g_PatchCamp12_Sites[siteIndex].originalBytes[4] << 16)
-            | (g_PatchCamp12_Sites[siteIndex].originalBytes[5] << 24);
+        int origRel = g_PatchCampSites[siteIndex].originalBytes[2]
+            | (g_PatchCampSites[siteIndex].originalBytes[3] << 8)
+            | (g_PatchCampSites[siteIndex].originalBytes[4] << 16)
+            | (g_PatchCampSites[siteIndex].originalBytes[5] << 24);
         int newRel = origRel + 1;
 
-        g_Camp12PatchBytes[siteIndex][0] = 0xE9;
+        g_CampPatchBytes[siteIndex][0] = 0xE9;
         for (int b = 0; b < 4; b++)
         {
-            g_Camp12PatchBytes[siteIndex][1 + b] = (newRel >> (b * 8)) & 0xFF;
+            g_CampPatchBytes[siteIndex][1 + b] = (newRel >> (b * 8)) & 0xFF;
         }
-        g_Camp12PatchBytes[siteIndex][5] = 0x90;
+        g_CampPatchBytes[siteIndex][5] = 0x90;
     }
     LogMessage("[BotRouteFix] [Module 12] Site %d dice bypass verified @ %X", siteIndex, jccAddr);
     return true;
@@ -380,22 +380,14 @@ bool InitModule12_CampGate()
 
     Item_SetReady(ITEM_M12_CAMP, PrepModule12_CampBackend());
     EnableModule12_CampGate(true);
-
-    // 旁路数量按补丁真实驻留态统计，不允许用固定文案冒充物理事实
-    int bypassed = 0;
-    for (int i = 0; i < 6; i++)
+    if (!Item_IsArmed(ITEM_M12_CAMP))
     {
-        if (g_PatchCamp12_Sites[i].isPatched)
-        {
-            bypassed++;
-        }
+        LogModuleAllFailed(12);
+        return false;
     }
 
-    char armedDetail[64];
-    Format(armedDetail, sizeof(armedDetail), "camp=%d, %d/6 bypassed",
-        Item_IsArmed(ITEM_M12_CAMP), bypassed);
-    LogModuleArmed(12, "Camp gate", armedDetail);
-    return Item_IsArmed(ITEM_M12_CAMP);
+    LogModuleArmed(12, "Camp gate", "1");
+    return true;
 }
 
 /**
@@ -431,7 +423,7 @@ void EnableModule12_CampGate(bool enable)
 void RestoreModule12_CampGate()
 {
     EnableModule12_CampGate(false);
-    LogMessage("[BotRouteFix] [Module 12] Dice bypasses restored, gate disarmed.");
+    LogMessage("[BotRouteFix] [Module 12] Camp gate patches safely restored to original bytes.");
 }
 
 //========================================================================================
@@ -573,11 +565,11 @@ static bool ApplyModule12_CampBackend()
 
     for (int i = 0; i < 6; i++)
     {
-        if (!g_PatchCamp12_Sites[i].Apply(g_Camp12PatchBytes[i]))
+        if (!g_PatchCampSites[i].Apply(g_CampPatchBytes[i]))
         {
             for (int j = 0; j < 6; j++)
             {
-                g_PatchCamp12_Sites[j].Restore();
+                g_PatchCampSites[j].Restore();
             }
             Item_SetReady(ITEM_M12_CAMP, false);
             Item_SetArmed(ITEM_M12_CAMP, false);
@@ -594,7 +586,7 @@ static bool ApplyModule12_CampBackend()
     {
         for (int j = 0; j < 6; j++)
         {
-            g_PatchCamp12_Sites[j].Restore();
+            g_PatchCampSites[j].Restore();
         }
         // 宿主缺失属挂钩类失败：只清 Armed，保留 Ready 供下次 Enable 重试
         Item_SetArmed(ITEM_M12_CAMP, false);
@@ -612,7 +604,7 @@ static void RestoreModule12_CampBackend()
 {
     for (int i = 0; i < 6; i++)
     {
-        g_PatchCamp12_Sites[i].Restore();
+        g_PatchCampSites[i].Restore();
     }
     Item_SetArmed(ITEM_M12_CAMP, false);
 }

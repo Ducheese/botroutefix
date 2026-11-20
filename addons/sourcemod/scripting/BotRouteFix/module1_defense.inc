@@ -424,7 +424,7 @@ void EnableModule1_Defense(bool enable)
 void RestoreModule1_Defense()
 {
     EnableModule1_Defense(false);
-    LogMessage("[BotRouteFix] [Module 1] Patches safely restored to original bytes.");
+    LogMessage("[BotRouteFix] [Module 1] Defense patches safely restored to original bytes.");
 }
 
 //========================================================================================

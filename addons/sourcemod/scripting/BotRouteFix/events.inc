@@ -68,6 +68,8 @@ public void Event_RoundStart(Event event, const char[] name, bool dontBroadcast)
     // 新回合：炸弹状态复位（必须在分发前完成，模块读到的是本回合的确定事实）
     g_bBombPlanted = false;
 
+    DebugLog("[BotRouteFix] ============== Round Start ==============");
+
     // 回合重置，通知各模块执行新回合初始化
     Module2_OnRoundStart();
     Module3_OnRoundStart();

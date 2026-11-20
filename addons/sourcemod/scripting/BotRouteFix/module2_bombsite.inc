@@ -270,7 +270,7 @@ void EnableModule2_Bombsite(bool enable)
 void RestoreModule2_Bombsite()
 {
     EnableModule2_Bombsite(false);
-    LogMessage("[BotRouteFix] [Module 2] Patches safely restored to original bytes.");
+    LogMessage("[BotRouteFix] [Module 2] Bombsite patches safely restored to original bytes.");
 }
 
 //========================================================================================
