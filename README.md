@@ -318,7 +318,7 @@ MODULE X EVENT HANDLERS
 MODULE X ... PRIMITIVES / DETOUR & HOOKS / ITEM APPLY / RESTORE BACKENDS
 ```
 
-调用顺序从上往下可读：`Prep → Mount → Lifecycle → Public → Events → Hooks → Apply/Restore → Validation`。被调用者尽量出现在调用者附近（如 M4 的 `MountHuntStateDetour` 紧跟 `PrepModule4_HuntBackend`），而不是扔在文件尾。
+调用顺序从上往下可读：`Prep → Mount → Lifecycle → Public → Events → Hooks → Apply/Restore → Validation`。被调用者尽量出现在调用者附近（如 M4 的 `MountHuntStateDetour` 紧跟 `PrepModule4_HuntBackend`），而不是扔在文件尾。原语靠近其调用者即可，位置不限（新模块按模板放在钩子之前）。
 
 - **引擎级常量上收 `global.inc`**：任务枚举等引擎原值只在 `global.inc` 的 DEFINES 区定义一次并注明共用方（如任务常量唯一出处，M5/M6/M12/M16 共用）；模块只消费不定义，更不得直接复用他模块文件的 `#define`（include 顺序不可靠，换序即 `undefined symbol`）。模块私有阈值留在本文件。
 

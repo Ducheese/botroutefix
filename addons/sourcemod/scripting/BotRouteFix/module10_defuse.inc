@@ -60,6 +60,7 @@ static int g_iTotalScenarioGated = 0;
  *
  * 只创建 Detour、绑定签名、校验测距子系统，不启用钩子（启用由 Apply 执行）。
  * 任一后端失败返回 false，Init 会把拆包事项标记为 FAILED。
+ * 失败语义：任一依赖缺失返回 false，Init 将事项标记 FAILED。
  *
  * @return              true = 拆包事项后端就绪
  */
@@ -98,8 +99,10 @@ static bool PrepModule10_DefuseBackend()
 //========================================================================================
 
 /**
- * 初始化模块 10（挂 IsDoingScenario Pre）
- * 签名缺失时优雅待机（不阻断全库启动），与模块 8 同策略
+ * 初始化模块 10 的唯一事项：首席拆包（ITEM_M10_DEFUSE），挂 IsDoingScenario Pre。
+ * 签名缺失时优雅待机（不阻断全库启动），与模块 8 同策略。
+ *
+ * 失败语义：任一后端缺失 → LogModuleAllFailed + return false（事项 FAILED，不静默降级）。
  */
 bool InitModule10_Defuse()
 {
@@ -123,7 +126,10 @@ bool InitModule10_Defuse()
 }
 
 /**
- * 动态启用或停用模块 10（幂等；停用即清首席 = 全员放行回原生）
+ * 动态启用或停用模块 10（事项 ITEM_M10_DEFUSE 的调度入口；幂等；停用即清首席 = 全员放行回原生）。
+ *
+ * 只做调度：只武装 Ready 的事项；单事项故 Active == Armed。
+ * 失败语义：无返回值；Apply 内部失败只清 Armed 并就地 LogError。
  */
 void EnableModule10_Defuse(bool enable)
 {
@@ -143,7 +149,9 @@ void EnableModule10_Defuse(bool enable)
 }
 
 /**
- * 还原模块 10（插件卸载：摘钩并释放句柄）
+ * 还原模块 10（事项 ITEM_M10_DEFUSE；插件卸载：摘钩并释放句柄）。
+ *
+ * 失败语义：无（尽力还原；幂等）。
  */
 void RestoreModule10_Defuse()
 {
@@ -295,105 +303,6 @@ void Module10_OnMapStart()
 
 
 //========================================================================================
-// MODULE 10 DETOUR & HOOKS (ISDOINGSCENARIO::PRE)
-//========================================================================================
-
-/**
- * 事项 M10 首席拆包的唯一入口钩子（IsDoingScenario Pre）
- *
- * ITEM_M10_DEFUSE 武装、包已下、首席在位且来者非首席时才掐成 false
- * （掩护组掉进 Hide 分支自建掩护）；其余一律 MRES_Ignored 直通原生。
- *
- * 契约注记：底层 DHooks 在 0 参数 non-void 钩子下槽 2 实推 rHndl（DHookSetReturn 内部双认
- * g_HookReturnHandle 与 g_HookParamsHandle），此处保留 hParams 惯用标签防误调 DHookGetReturn，勿再改名。
- */
-public MRESReturn Hook_IsDoingScenario_Pre(int client, DHookParam hParams)
-{
-    if (!Item_IsArmed(ITEM_M10_DEFUSE))
-    {
-        return MRES_Ignored;
-    }
-
-    if (!IsTeamBot(client, 3, true))
-    {
-        return MRES_Ignored;
-    }
-
-    // 包没下/首席缺位（无候选）→ 直通原生
-    if (!g_bBombPlanted || g_iChief == -1)
-    {
-        return MRES_Ignored;
-    }
-
-    // 首席直通原生：defer 关照去；defer 开且有真人玩家，原生 false 按板凳；
-    // 真人玩家死光，原生翻 true，首席自动上——无需重选
-    if (client == g_iChief)
-    {
-        return MRES_Ignored;
-    }
-
-    // 远端 CT（距雷包 > 750 码）放行直通原生：组织回防冲向包点，
-    // 激活 cs_bot_hide.cpp:147 自动起步进点，打破警家原地蹲坑自旋僵局
-    float botPos[3];
-    GetClientAbsOrigin(client, botPos);
-    if (GetVectorDistance(botPos, g_fBombPos) > DEFUSE_GUARD_DISTANCE)
-    {
-        return MRES_Ignored;
-    }
-
-    // 近端（<= 750 码）掩护组拦截：就地转入包点真掩体警戒掩护
-    DHookSetReturn(hParams, false);
-    g_iTotalScenarioGated++;
-    // DebugLog("[BotRouteFix] [Module 10] Bot %N held at GUARD_BOMB_ZONE (chief %N goes)", client, g_iChief);
-    return MRES_Supercede;
-}
-
-
-//========================================================================================
-// MODULE 10 ITEM APPLY / RESTORE BACKENDS
-//========================================================================================
-
-/**
- * 应用拆包事项：只有 Prep 已就绪才启用 Pre 钩子
- *
- * 事项 ITEM_M10_DEFUSE 的应用入口；不做 Detour 创建与签名绑定（那是 Prep 的职责）。
- * 失败时该事项 FAILED。
- *
- * @return              true = 拆包钩子已驻留
- */
-static bool ApplyModule10_DefuseBackend()
-{
-    if (!Item_IsReady(ITEM_M10_DEFUSE) || g_hScenarioDetour == null)
-    {
-        Item_SetArmed(ITEM_M10_DEFUSE, false);
-        return false;
-    }
-
-    if (!SyncDetourEnabled(g_hScenarioDetour, g_bScenarioHooked,
-        false, Hook_IsDoingScenario_Pre, true, "Module 10"))
-    {
-        // 挂钩失败属动态环境抖动，不证伪探测结论：只清 Armed 保留 Ready，下次 Enable 重试
-        Item_SetArmed(ITEM_M10_DEFUSE, false);
-        LogError("[BotRouteFix] [Module 10] Defuse detour enable failed; defuse item unarmed.");
-        return false;
-    }
-
-    Item_SetArmed(ITEM_M10_DEFUSE, true);
-    return true;
-}
-
-/**
- * 还原拆包事项：摘钩、清首席（= 全员放行回原生）并解除武装
- */
-static void RestoreModule10_DefuseBackend()
-{
-    SyncDetourEnabled(g_hScenarioDetour, g_bScenarioHooked, false, Hook_IsDoingScenario_Pre, false, "Module 10");
-    g_iChief = -1;
-    Item_SetArmed(ITEM_M10_DEFUSE, false);
-}
-
-
-//========================================================================================
 // MODULE 10 ELECTION PRIMITIVES
 //========================================================================================
 
@@ -503,4 +412,107 @@ static void Defuse_RelayChief()
         g_iTotalChiefs++;
         DebugLog("[BotRouteFix] [Module 10] Chief relay: %N takes over defuse", best);
     }
+}
+
+
+//========================================================================================
+// MODULE 10 DETOUR & HOOKS (ISDOINGSCENARIO::PRE)
+//========================================================================================
+
+/**
+ * 事项 M10 首席拆包的唯一入口钩子（IsDoingScenario Pre）
+ *
+ * ITEM_M10_DEFUSE 武装、包已下、首席在位且来者非首席时才掐成 false
+ * （掩护组掉进 Hide 分支自建掩护）；其余一律 MRES_Ignored 直通原生。
+ * 失败语义：回调内不判定事项成败；条件不符一律 MRES_Ignored，不拦截原生。
+ *
+ * 契约注记：底层 DHooks 在 0 参数 non-void 钩子下槽 2 实推 rHndl（DHookSetReturn 内部双认
+ * g_HookReturnHandle 与 g_HookParamsHandle），此处保留 hParams 惯用标签防误调 DHookGetReturn，勿再改名。
+ */
+public MRESReturn Hook_IsDoingScenario_Pre(int client, DHookParam hParams)
+{
+    if (!Item_IsArmed(ITEM_M10_DEFUSE))
+    {
+        return MRES_Ignored;
+    }
+
+    if (!IsTeamBot(client, 3, true))
+    {
+        return MRES_Ignored;
+    }
+
+    // 包没下/首席缺位（无候选）→ 直通原生
+    if (!g_bBombPlanted || g_iChief == -1)
+    {
+        return MRES_Ignored;
+    }
+
+    // 首席直通原生：defer 关照去；defer 开且有真人玩家，原生 false 按板凳；
+    // 真人玩家死光，原生翻 true，首席自动上——无需重选
+    if (client == g_iChief)
+    {
+        return MRES_Ignored;
+    }
+
+    // 远端 CT（距雷包 > 750 码）放行直通原生：组织回防冲向包点，
+    // 激活 cs_bot_hide.cpp:147 自动起步进点，打破警家原地蹲坑自旋僵局
+    float botPos[3];
+    GetClientAbsOrigin(client, botPos);
+    if (GetVectorDistance(botPos, g_fBombPos) > DEFUSE_GUARD_DISTANCE)
+    {
+        return MRES_Ignored;
+    }
+
+    // 近端（<= 750 码）掩护组拦截：就地转入包点真掩体警戒掩护
+    DHookSetReturn(hParams, false);
+    g_iTotalScenarioGated++;
+    // DebugLog("[BotRouteFix] [Module 10] Bot %N held at GUARD_BOMB_ZONE (chief %N goes)", client, g_iChief);
+    return MRES_Supercede;
+}
+
+
+//========================================================================================
+// MODULE 10 ITEM APPLY / RESTORE BACKENDS
+//========================================================================================
+
+/**
+ * 应用拆包事项：只有 Prep 已就绪才启用 Pre 钩子
+ *
+ * 事项 ITEM_M10_DEFUSE 的应用入口；不做 Detour 创建与签名绑定（那是 Prep 的职责）。
+ * 失败时该事项 FAILED。
+ * 失败语义：钩子启用失败只清 Armed 保留 Ready，事项待下次 Enable 重试。
+ *
+ * @return              true = 拆包钩子已驻留
+ */
+static bool ApplyModule10_DefuseBackend()
+{
+    if (!Item_IsReady(ITEM_M10_DEFUSE) || g_hScenarioDetour == null)
+    {
+        Item_SetArmed(ITEM_M10_DEFUSE, false);
+        return false;
+    }
+
+    if (!SyncDetourEnabled(g_hScenarioDetour, g_bScenarioHooked,
+        false, Hook_IsDoingScenario_Pre, true, "Module 10"))
+    {
+        // 挂钩失败属动态环境抖动，不证伪探测结论：只清 Armed 保留 Ready，下次 Enable 重试
+        Item_SetArmed(ITEM_M10_DEFUSE, false);
+        LogError("[BotRouteFix] [Module 10] Defuse detour enable failed; defuse item unarmed.");
+        return false;
+    }
+
+    Item_SetArmed(ITEM_M10_DEFUSE, true);
+    return true;
+}
+
+/**
+ * 还原拆包事项（ITEM_M10_DEFUSE）：摘钩、清首席（= 全员放行回原生）并解除武装。
+ *
+ * 失败语义：无（幂等；摘钩 + 清首席 + Armed(false)）。
+ */
+static void RestoreModule10_DefuseBackend()
+{
+    SyncDetourEnabled(g_hScenarioDetour, g_bScenarioHooked, false, Hook_IsDoingScenario_Pre, false, "Module 10");
+    g_iChief = -1;
+    Item_SetArmed(ITEM_M10_DEFUSE, false);
 }

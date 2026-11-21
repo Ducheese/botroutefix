@@ -91,6 +91,7 @@ static float g_flVisualHuntTimestamp[MAXPLAYERS + 1];
  *
  * 只定位目标、校验模板并备份原始字节，不写入 NOP。
  * 任一后端失败都返回 false，Init 会把 NOP 事项标记为 FAILED。
+ * 失败语义：任一依赖缺失返回 false，Init 将事项标记 FAILED。
  *
  * @return              true = NOP 事项后端就绪
  */
@@ -173,9 +174,10 @@ static bool PrepModule4_NopBackend()
 }
 
 /**
- * 事项后端：HuntState dhook writes
+ * 事项后端：HuntState dhook writes（ITEM_M4_HUNT）
  *
  * 条件 = hunt area 偏移 + cleared timestamp 偏移 + hasVisitedEnemySpawn 偏移 + Detour 挂载。
+ * 失败语义：任一依赖缺失返回 false，Init 将事项标记 FAILED。
  *
  * @return              true = HuntState 事项后端就绪
  */
@@ -206,7 +208,9 @@ static bool PrepModule4_HuntBackend()
 }
 
 /**
- * 挂载 HuntState::OnUpdate Detour
+ * 挂载 HuntState::OnUpdate Detour（事项 ITEM_M4_HUNT 的执行载体）
+ *
+ * 失败语义：句柄创建或签名绑定失败返回 false 并就地清理。
  *
  * @return              true = Detour 句柄已创建并绑定签名
  */
@@ -241,7 +245,9 @@ static bool MountHuntStateDetour()
 //========================================================================================
 
 /**
- * 初始化模块 4 的两个独立事项
+ * 初始化模块 4 的两个独立事项：随机覆盖 NOP（ITEM_M4_NOP）/ HuntState dhook writes（ITEM_M4_HUNT）
+ *
+ * 失败语义：全灭时 LogModuleAllFailed + return false；部分成功按事项各自 FAILED，不连带。
  *
  * @return              true = 至少一个事项武装成功
  */
@@ -276,13 +282,14 @@ bool InitModule4_Hunt()
 }
 
 /**
- * 动态启用或停用模块 4
+ * 动态启用或停用模块 4（事项 ITEM_M4_NOP / ITEM_M4_HUNT 的调度入口）
  *
  * 两个事项分别武装、分别还原；NOP 失败不影响 HuntState 钩子，反之亦然。
  * 规则关闭时若 Hunt 后端就绪，钩子保持只读观察挂载（不写内存、不计数），
  * 用于可视化原生 Hunt 选区；后端缺失时钩子彻底停用。
+ * 失败语义：只做调度，无返回值；两个事项分别按 Ready 武装，Active = OR(Armed)。
  *
- * @param enable        true = 按事项后端就绪情况武装；false = 解除武装并还原资源
+ * @param enable        true = 按事项后端就绪情况武装；false = 还原并解除武装
  */
 void EnableModule4_Hunt(bool enable)
 {
@@ -320,9 +327,10 @@ void EnableModule4_Hunt(bool enable)
 }
 
 /**
- * 还原模块 4（插件卸载）
+ * 还原模块 4（事项 ITEM_M4_NOP / ITEM_M4_HUNT；插件卸载）
  *
  * 彻底退出观察模式并脱钩，确保两个钩子先安全停用后再释放 Detour 句柄。
+ * 失败语义：无（尽力还原；幂等）。
  */
 void RestoreModule4_Hunt()
 {
@@ -394,11 +402,41 @@ void Module4_OnRoundStart()
 }
 
 //========================================================================================
+// MODULE 4 INSTRUCTION VALIDATION PRIMITIVES
+//========================================================================================
+
+/**
+ * 判断目标地址是否为预期的随机覆盖写回指令
+ *
+ * 64 位：49 89 56 08 (mov [r14+8], rdx)
+ * 32 位：89 4B 04    (mov [ebx+4], ecx)
+ *
+ * @param addr          待校验地址
+ * @return              true = 模板匹配
+ */
+static bool IsHuntRandomBypassInstruction(Address addr)
+{
+    if (g_bIsWin64)
+    {
+        return LoadFromAddress(addr, NumberType_Int8) == 0x49
+            && LoadFromAddress(addr + view_as<Address>(1), NumberType_Int8) == 0x89
+            && LoadFromAddress(addr + view_as<Address>(2), NumberType_Int8) == 0x56
+            && LoadFromAddress(addr + view_as<Address>(3), NumberType_Int8) == 0x08;
+    }
+
+    return LoadFromAddress(addr, NumberType_Int8) == 0x89
+        && LoadFromAddress(addr + view_as<Address>(1), NumberType_Int8) == 0x4B
+        && LoadFromAddress(addr + view_as<Address>(2), NumberType_Int8) == 0x04;
+}
+
+//========================================================================================
 // MODULE 4 DETOUR & HOOKS (HUNTSTATE::ONUPDATE)
 //========================================================================================
 
 /**
- * HuntState::OnUpdate Pre：破除 45 秒敌方老家锁定
+ * HuntState::OnUpdate Pre：破除 45 秒敌方老家锁定（事项 ITEM_M4_HUNT 的执行入口）。
+ *
+ * 失败语义：回调内不判定事项成败；条件不符一律 MRES_Ignored，不拦截原生。
  *
  * @param pThis         HuntState 指针（未使用）
  * @param hParams       DHook 参数
@@ -433,7 +471,8 @@ public MRESReturn Hook_HuntState_OnUpdate_Pre(Address pThis, DHookParam hParams)
  * HuntState::OnUpdate Post：记录当前 hunt area（观察）+ 盖时间戳（仅武装时写入）
  *
  * 观察与写入分离：可视化记录是只读观测，事项未武装时也执行，用于 M4 关闭时
- * 查看原生选区；盖章认领与计数是事项写操作，只在 HuntState 事项武装时执行。
+ * 查看原生选区；盖章认领与计数是事项写操作。
+ * 失败语义：回调内不判定事项成败；条件不符一律 MRES_Ignored，不拦截原生。
  *
  * @param pThis         HuntState 指针
  * @param hParams       DHook 参数
@@ -494,7 +533,9 @@ public MRESReturn Hook_HuntState_OnUpdate_Post(Address pThis, DHookParam hParams
 //========================================================================================
 
 /**
- * 应用 NOP 事项：只有 Prep 已成功备份时才写入 NOP
+ * 应用 NOP 事项（ITEM_M4_NOP）：只有 Prep 已成功备份时才写入 NOP
+ *
+ * 失败语义：写入失败同步清 Ready 并回滚，事项 FAILED。
  *
  * @return              true = NOP 已驻留
  */
@@ -523,7 +564,9 @@ static bool ApplyModule4_NopBackend()
 }
 
 /**
- * 应用 HuntState 事项：Pre/Post 两个钩子必须同时成功
+ * 应用 HuntState 事项（ITEM_M4_HUNT）：Pre/Post 两个钩子必须同时成功
+ *
+ * 失败语义：任一钩子启用失败则回滚已启用的另一个，只清 Armed 保留 Ready，事项待下次 Enable 重试。
  *
  * @return              true = 两个钩子均已启用
  */
@@ -557,7 +600,9 @@ static bool ApplyModule4_HuntBackend()
 }
 
 /**
- * 还原 NOP 事项
+ * 还原 NOP 事项（ITEM_M4_NOP）：写回原始字节并解除武装。
+ *
+ * 失败语义：无（幂等；写回 + Armed(false)）。
  */
 static void RestoreModule4_NopBackend()
 {
@@ -566,7 +611,9 @@ static void RestoreModule4_NopBackend()
 }
 
 /**
- * 还原 HuntState 事项：先停用两个钩子，再清 Armed
+ * 还原 HuntState 事项（ITEM_M4_HUNT）：先停用两个钩子，再清 Armed。
+ *
+ * 失败语义：无（幂等；摘钩 + Armed(false)）。
  */
 static void RestoreModule4_HuntBackend()
 {
@@ -575,32 +622,4 @@ static void RestoreModule4_HuntBackend()
     SyncDetourEnabled(g_hHuntStateDetour, g_bHuntPostHooked, true,
         Hook_HuntState_OnUpdate_Post, false, "Module 4");
     Item_SetArmed(ITEM_M4_HUNT, false);
-}
-
-//========================================================================================
-// MODULE 4 INSTRUCTION VALIDATION PRIMITIVES
-//========================================================================================
-
-/**
- * 判断目标地址是否为预期的随机覆盖写回指令
- *
- * 64 位：49 89 56 08 (mov [r14+8], rdx)
- * 32 位：89 4B 04    (mov [ebx+4], ecx)
- *
- * @param addr          待校验地址
- * @return              true = 模板匹配
- */
-static bool IsHuntRandomBypassInstruction(Address addr)
-{
-    if (g_bIsWin64)
-    {
-        return LoadFromAddress(addr, NumberType_Int8) == 0x49
-            && LoadFromAddress(addr + view_as<Address>(1), NumberType_Int8) == 0x89
-            && LoadFromAddress(addr + view_as<Address>(2), NumberType_Int8) == 0x56
-            && LoadFromAddress(addr + view_as<Address>(3), NumberType_Int8) == 0x08;
-    }
-
-    return LoadFromAddress(addr, NumberType_Int8) == 0x89
-        && LoadFromAddress(addr + view_as<Address>(1), NumberType_Int8) == 0x4B
-        && LoadFromAddress(addr + view_as<Address>(2), NumberType_Int8) == 0x04;
 }

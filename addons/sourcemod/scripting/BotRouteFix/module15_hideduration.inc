@@ -80,6 +80,7 @@ static bool g_bHideDurationHooked = false;
  *
  * 只读偏移、挂载 HideState::OnEnter Post Detour，不启用钩子（启用由 Apply 执行）。
  * 任一后端失败返回 false，Init 会把事项标记为 FAILED。
+ * 失败语义：任一依赖缺失返回 false，Init 将事项标记 FAILED。
  *
  * @return              true = Hide 时长事项后端就绪
  */
@@ -142,7 +143,9 @@ static bool MountHideDurationDetour()
 //========================================================================================
 
 /**
- * 初始化模块 15 的唯一事项：Hide 蹲守时长缩放
+ * 初始化模块 15 的唯一事项：Hide 蹲守时长缩放（ITEM_M15_HIDE）
+ *
+ * 失败语义：任一后端缺失 → LogModuleAllFailed + return false（事项 FAILED，不静默降级）。
  *
  * @return              true = 事项已武装
  */
@@ -168,7 +171,10 @@ bool InitModule15_HideDuration()
 }
 
 /**
- * 动态启用或停用模块 15（幂等；底层钩子随借钩双方的整体需求同步收敛）
+ * 动态启用或停用模块 15（事项 ITEM_M15_HIDE 的调度入口；幂等；底层钩子随借钩双方的整体需求同步收敛）
+ *
+ * 只做调度：只武装 Ready 的事项；单事项故 Active == Armed。
+ * 失败语义：无返回值；Apply 内部失败只清 Armed 并就地 LogError。
  *
  * @param enable        true = 武装并同步宿主钩子；false = 解除武装并同步
  */
@@ -190,7 +196,9 @@ void EnableModule15_HideDuration(bool enable)
 }
 
 /**
- * 还原模块 15（插件卸载：强制摘钩并释放句柄）
+ * 还原模块 15（事项 ITEM_M15_HIDE；插件卸载：强制摘钩并释放句柄）。
+ *
+ * 失败语义：无（尽力还原；幂等）。
  */
 void RestoreModule15_HideDuration()
 {
@@ -209,13 +217,14 @@ void RestoreModule15_HideDuration()
 }
 
 /**
- * 同步 HideState::OnEnter 宿主 Detour 的真实启用态（M9/M12/M15 共用单钩的协同中枢）
+ * 同步 HideState::OnEnter 宿主 Detour 的真实启用态（事项 ITEM_M15_HIDE 的共享宿主；M9/M12/M15 共用单钩的协同中枢）
  *
  * 模块 12（狙击 camp 门禁）不单独注册 Detour，而是借本模块的 Post Detour 作为执行宿主；
  * 模块 9（抢包名册 Hide 真值门禁）同样借宿主捕获 HideState 虚表指纹。
  * 底层钩子只要任一借钩方仍在工作就必须保持启用；只有三方全部关闭才真正 Disable。
  * 既杜绝重复 Enable/Disable 触发 "Function not detoured" 致命状态机异常，
  * 也避免"关掉模块 15 顺带把模块 12 门禁打死"的隐性耦合一刀切。
+ * 失败语义：无（返回值即开关态本身；只做同步，不判定事项成败）。
  *
  * @return              true = 同步后宿主钩子处于启用态
  */
@@ -296,7 +305,9 @@ void Module15_OnClientDisconnect(int client)
 //========================================================================================
 
 /**
- * HideState::OnEnter Post：M12 camp 重骰 → M5 短蹲 → M15 士气缩放
+ * HideState::OnEnter Post：M12 camp 重骰 → M5 短蹲 → M15 士气缩放（事项 ITEM_M15_HIDE 的执行入口，兼 M9/M12 借用宿主）。
+ *
+ * 失败语义：回调内不判定事项成败；本钩子恒返回 MRES_Ignored（只做条件写入与重定向，不拦截原生）。
  *
  * @param pThis         HideState 指针
  * @param hParams       DHook 参数
@@ -394,9 +405,10 @@ void Module15_RequestShortHide(int client)
 }
 
 /**
- * 应用 Hide 时长事项：同步宿主钩子并按真实启用态武装
+ * 应用 Hide 时长事项（ITEM_M15_HIDE）：同步宿主钩子并按真实启用态武装
  *
  * 挂钩失败属动态环境抖动，不证伪探测结论：只清 Armed 保留 Ready，下次 Enable 重试。
+ * 失败语义：挂钩失败只清 Armed 保留 Ready，事项待下次 Enable 重试。
  *
  * @return              true = 事项已武装且宿主钩子在线
  */
@@ -422,7 +434,9 @@ static bool ApplyModule15_HideBackend()
 }
 
 /**
- * 还原 Hide 时长事项：解除武装并按借钩双方需求收敛宿主钩子
+ * 还原 Hide 时长事项（ITEM_M15_HIDE）：解除武装并按借钩双方需求收敛宿主钩子。
+ *
+ * 失败语义：无（幂等；解除武装 + 宿主收敛）。
  */
 static void RestoreModule15_HideBackend()
 {

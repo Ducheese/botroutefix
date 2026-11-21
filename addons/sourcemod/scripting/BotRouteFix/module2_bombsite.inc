@@ -65,6 +65,7 @@ static int g_iZoneStride = -1;
  *
  * 条件 = earliest timestamp 偏移 + morale 偏移 + TheCSBots 单例（单例由 Init 预先解析）。
  * 任一缺失 → clockReady=false，只让运包时钟事项 FAILED，不影响包点锁。
+ * 失败语义：任一依赖缺失返回 false（clockReady=false），Init 将事项标记 FAILED。
  *
  * @return              运包时钟事项的后端是否就绪
  */
@@ -91,6 +92,7 @@ static bool PrepModule2_ClockBackend()
  *
  * 条件 = zone 三个偏移 + 签名 + patch 偏移 + 19 字节模板校验 + 原始基线备份。
  * 任一缺失 → lockReady=false，只让包点锁事项 FAILED，不影响运包时钟。
+ * 失败语义：任一依赖缺失返回 false（lockReady=false），Init 将事项标记 FAILED。
  *
  * @return              包点锁事项的后端是否就绪
  */
@@ -183,6 +185,7 @@ static bool PrepModule2_LockBackend()
  * 任一事项失败只让对应事项 FAILED，另一件仍可 ACTIVE。
  *
  * 分别准备两个事项并立即武装；任一失败不拖累另一个。
+ * 失败语义：全灭时 LogModuleAllFailed + return false；部分成功按事项各自 FAILED，不连带。
  *
  * @return              是否至少有一个事项武装成功
  */
@@ -225,7 +228,10 @@ bool InitModule2_Bombsite()
 }
 
 /**
- * 动态启用或停用模块 2（幂等；两个事项分别武装/还原，互不连带）
+ * 动态启用或停用模块 2（事项 ITEM_M2_LOCK / ITEM_M2_CLOCK 的调度入口；幂等；两个事项分别武装/还原，互不连带）
+ *
+ * 只做调度：只武装 Ready 的事项；Active = OR(Armed)。
+ * 失败语义：无返回值；按事项各自 Armed 落定（事件驱动注入在 freeze 回合事件里，不在 Enable 内）。
  *
  * @param enable        true = 按事项后端就绪情况武装；false = 还原并解除武装
  */
@@ -265,7 +271,9 @@ void EnableModule2_Bombsite(bool enable)
 }
 
 /**
- * 还原模块 2（插件卸载：解除锁定并复位业务态）
+ * 还原模块 2（事项 ITEM_M2_LOCK / ITEM_M2_CLOCK；插件卸载：解除锁定并复位业务态）。
+ *
+ * 失败语义：无（尽力还原；幂等）。
  */
 void RestoreModule2_Bombsite()
 {
@@ -708,6 +716,7 @@ static void SelectRandomBombsite()
  *
  * 事件驱动写入口（round_freeze_end 选点后调用），只写不探测；
  * 地址/单例未就绪时直接放行原逻辑，不标记补丁驻留。
+ * 失败语义：条件不齐直接放行原逻辑（no-op），不写补丁、不标记驻留，Ready 结论不变。
  *
  * @param zoneIndex     目标包点索引 (0 ~ zoneCount-1)
  */
@@ -772,6 +781,7 @@ static void ApplyModule2_LockBackend(int zoneIndex)
  * 事项 M2 包点锁的后端还原：写回 GetClosestZone 原始指令现场
  *
  * 未驻留或地址无效时 no-op；还原后清锁定态与目标索引。
+ * 失败语义：无（未驻留即 no-op；尽力还原）。
  */
 static void RestoreModule2_LockBackend()
 {

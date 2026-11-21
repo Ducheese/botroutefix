@@ -57,7 +57,7 @@ static int g_GuardPatchBytes[55];
 static bool g_bModule1_Active = false;
 
 //========================================================================================
-// ITEM 1 BACKEND: GUARD BOMBSITE CHANCE FORMULA REWRITE (70 - 10 * Morale)
+// MODULE 1 ITEM 1 BACKENDS: GUARD BOMBSITE CHANCE FORMULA REWRITE (70 - 10 * Morale)
 //========================================================================================
 
 /**
@@ -65,6 +65,7 @@ static bool g_bModule1_Active = false;
  *
  * 只定位目标、校验模板、构造机器码并备份原始字节，不写入补丁（写入由 Apply 执行）。
  * 任一后端失败都返回 false，Init 会把守点事项标记为 FAILED。
+ * 失败语义：任一依赖缺失返回 false，Init 将事项标记 FAILED。
  *
  * @return              true = 守点事项后端就绪
  */
@@ -257,7 +258,7 @@ static bool PrepModule1_GuardBackend()
 }
 
 //========================================================================================
-// ITEM 2 BACKEND: CT ANTI-RUSH (IsDefenseRushing NOP BYPASS)
+// MODULE 1 ITEM 2 BACKENDS: CT ANTI-RUSH (IsDefenseRushing NOP BYPASS)
 //========================================================================================
 
 /**
@@ -265,6 +266,7 @@ static bool PrepModule1_GuardBackend()
  *
  * 只定位目标、校验模板并备份原始字节，不写入补丁（写入由 Apply 执行）。
  * 任一后端失败都返回 false，Init 会把防前冲事项标记为 FAILED。
+ * 失败语义：任一依赖缺失返回 false，Init 将事项标记 FAILED。
  *
  * @return              true = 防前冲事项后端就绪
  */
@@ -349,9 +351,10 @@ static bool PrepModule1_AntiRushBackend()
 //========================================================================================
 
 /**
- * 初始化模块 1 的两个独立事项：守点公式与防前冲
+ * 初始化模块 1 的两个独立事项：守点公式（ITEM_M1_GUARD）与防前冲（ITEM_M1_ANTI_RUSH）
  *
  * 分别准备两条事项链并立即武装；任一失败不拖累另一条。
+ * 失败语义：全灭时 LogModuleAllFailed + return false；部分成功按事项各自 FAILED，不连带。
  *
  * @return              是否至少有一个事项武装成功
  */
@@ -386,7 +389,10 @@ bool InitModule1_Defense()
 }
 
 /**
- * 动态启用或停用模块 1（幂等；两个事项分别武装/还原，互不连带）
+ * 动态启用或停用模块 1（事项 ITEM_M1_GUARD / ITEM_M1_ANTI_RUSH 的调度入口；幂等；两个事项分别武装/还原，互不连带）
+ *
+ * 只做调度：只武装 Ready 的事项；Active = OR(Armed)。
+ * 失败语义：无返回值；Apply 内部失败只清对应事项 Armed。
  *
  * @param enable        true = 按事项后端就绪情况武装；false = 解除武装并还原资源
  */
@@ -419,7 +425,9 @@ void EnableModule1_Defense(bool enable)
 }
 
 /**
- * 还原模块 1（插件卸载：恢复原始字节并复位业务态）
+ * 还原模块 1（事项 ITEM_M1_GUARD / ITEM_M1_ANTI_RUSH；插件卸载：恢复原始字节并复位业务态）。
+ *
+ * 失败语义：无（尽力还原；幂等）。
  */
 void RestoreModule1_Defense()
 {
@@ -460,6 +468,7 @@ float Module1_CalculateGuardBombsiteChance(int morale)
  *
  * 事项 M1 guard chance formula 的应用入口；不做定位与校验（那是 Prep 的职责）。
  * 失败时该事项 FAILED，另一事项不受影响。
+ * 失败语义：写入失败同步清 Ready 并回滚，事项 FAILED，另一事项不受影响。
  *
  * @return              true = 补丁已驻留
  */
@@ -491,6 +500,7 @@ static bool ApplyModule1_GuardBackend()
  *
  * 事项 M1 anti-rush NOP 的应用入口；不做定位与校验（那是 Prep 的职责）。
  * 失败时该事项 FAILED，另一事项不受影响。
+ * 失败语义：写入失败同步清 Ready 并回滚，事项 FAILED，另一事项不受影响。
  *
  * @return              true = NOP 已驻留
  */
@@ -519,7 +529,9 @@ static bool ApplyModule1_AntiRushBackend()
 }
 
 /**
- * 还原守点概率公式补丁（写回原始字节并解除武装）
+ * 还原守点概率公式补丁（事项 ITEM_M1_GUARD；写回原始字节并解除武装）。
+ *
+ * 失败语义：无（幂等；写回 + Armed(false)）。
  */
 static void RestoreModule1_GuardBackend()
 {
@@ -528,7 +540,9 @@ static void RestoreModule1_GuardBackend()
 }
 
 /**
- * 还原防开局前冲补丁（写回原始字节并解除武装）
+ * 还原防开局前冲补丁（事项 ITEM_M1_ANTI_RUSH；写回原始字节并解除武装）。
+ *
+ * 失败语义：无（幂等；写回 + Armed(false)）。
  */
 static void RestoreModule1_AntiRushBackend()
 {

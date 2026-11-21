@@ -63,6 +63,7 @@ static bool g_bModule3_Active = false;
  *
  * 只做校验、偏移缓存与 TheNavAreas 解析，不武装事项。
  * 任一后端缺失都返回 false，对应事项由 Init 标记为 FAILED。
+ * 失败语义：任一依赖缺失返回 false，对应事项由 Init 标记 FAILED。
  *
  * @return              true = 衰减事项后端全部就绪
  */
@@ -234,7 +235,9 @@ static bool ResolveTheNavAreas()
 //========================================================================================
 
 /**
- * 初始化模块 3 的唯一事项：全图危险度软衰减
+ * 初始化模块 3 的唯一事项：全图危险度软衰减（ITEM_M3_DECAY）
+ *
+ * 失败语义：任一后端缺失 → LogModuleAllFailed + return false（事项 FAILED，不静默降级）。
  *
  * @return              true = 事项已武装
  */
@@ -262,9 +265,10 @@ bool InitModule3_Danger()
 }
 
 /**
- * 动态启用或停用模块 3
+ * 动态启用或停用模块 3（事项 ITEM_M3_DECAY 的调度入口）
  *
  * 事项没有常驻补丁，Enable(false) 只撤销武装标记；round_start 不再执行衰减。
+ * 失败语义：只做调度，无返回值；武装态 = enable && Ready。
  *
  * @param enable        true = 武装；false = 解除武装
  */
@@ -279,10 +283,14 @@ void EnableModule3_Danger(bool enable)
     g_bModule3_Active = Item_IsArmed(ITEM_M3_DECAY);
 }
 
+//========================================================================================
+// MODULE 3 ITEM APPLY / RESTORE BACKENDS
+//========================================================================================
+
 /**
- * 还原模块 3（插件卸载）
+ * 还原模块 3（事项 ITEM_M3_DECAY；插件卸载：无持久补丁，只复位业务态）。
  *
- * 本模块没有持久代码补丁，只复位业务态。
+ * 失败语义：无（尽力还原；幂等）。
  */
 void RestoreModule3_Danger()
 {

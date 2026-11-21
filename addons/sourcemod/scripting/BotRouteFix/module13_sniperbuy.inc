@@ -76,6 +76,7 @@ static bool g_bModule13_Active = false;
  *
  * 按架构定位/校验/备份并构造机器码，不写入代码段（写入由 Apply 执行）。
  * 任一后端失败返回 false，Init 会把事项标记为 FAILED。
+ * 失败语义：任一依赖缺失返回 false，Init 将事项标记 FAILED。
  *
  * @return              true = 买狙事项后端就绪
  */
@@ -378,7 +379,9 @@ static bool PrepModule13_CaveSite()
 //========================================================================================
 
 /**
- * 初始化模块 13 的唯一事项：随机买狙公式重写
+ * 初始化模块 13 的唯一事项：随机买狙公式重写（ITEM_M13_BUY）
+ *
+ * 失败语义：任一后端缺失 → LogModuleAllFailed + return false（事项 FAILED，不静默降级）。
  *
  * @return              true = 事项已武装
  */
@@ -404,7 +407,10 @@ bool InitModule13_SniperBuy()
 }
 
 /**
- * 动态启用或停用模块 13
+ * 动态启用或停用模块 13（事项 ITEM_M13_BUY 的调度入口）。
+ *
+ * 只做调度：只武装 Ready 的事项；单事项故 Active == Armed。
+ * 失败语义：无返回值；Apply 内部失败只清 Armed 并就地 LogError。
  *
  * @param enable        true = 按事项后端就绪情况武装；false = 还原并解除武装
  */
@@ -426,7 +432,9 @@ void EnableModule13_SniperBuy(bool enable)
 }
 
 /**
- * 还原模块 13（插件卸载：恢复原始字节并复位业务态）
+ * 还原模块 13（事项 ITEM_M13_BUY；插件卸载：恢复原始字节并复位业务态）。
+ *
+ * 失败语义：无（尽力还原；幂等）。
  */
 void RestoreModule13_SniperBuy()
 {
@@ -463,9 +471,10 @@ float Module13_CalculateSniperBuyChance(int morale)
 //========================================================================================
 
 /**
- * 应用买狙公式事项：全成或全败
+ * 应用买狙公式事项（ITEM_M13_BUY）：全成或全败
  *
  * 物理写入失败证伪了 Prep 的模板校验，必须同步清 Ready 并回滚已写段落。
+ * 失败语义：写入失败同步清 Ready 并回滚已写段落，事项 FAILED。
  *
  * @return              true = 补丁已驻留
  */
@@ -513,7 +522,9 @@ static bool ApplyModule13_BuyBackend()
 }
 
 /**
- * 还原买狙公式事项：写回两段原始字节并解除武装
+ * 还原买狙公式事项（ITEM_M13_BUY）：写回两段原始字节并解除武装。
+ *
+ * 失败语义：无（幂等；写回 + Armed(false)）。
  */
 static void RestoreModule13_BuyBackend()
 {

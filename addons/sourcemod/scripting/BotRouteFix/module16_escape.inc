@@ -97,7 +97,7 @@ static bool PrepModule16_EscapeBackend()
 }
 
 /**
- * 挂载 CCSBot::EquipKnife Detour（创建句柄并绑定签名）
+ * 挂载 CCSBot::EquipKnife Detour（事项 ITEM_M16_ESCAPE；创建句柄并绑定签名）
  *
  * 只探测不使能：句柄就绪供 ApplyModule16_EscapeBackend 挂载。
  * 失败语义：句柄创建失败或签名缺失返回 false 并就地清理。
@@ -187,7 +187,7 @@ void EnableModule16_Escape(bool enable)
 }
 
 /**
- * 还原模块 16（插件卸载/规则关闭）：摘钩、解除武装、销毁自有 Detour 句柄。
+ * 还原模块 16（事项 ITEM_M16_ESCAPE；插件卸载/规则关闭）：摘钩、解除武装、销毁自有 Detour 句柄。
  *
  * 失败语义：无（尽力还原；句柄销毁后置 null，下次启用以 Prep 重建）。
  */

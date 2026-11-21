@@ -88,6 +88,7 @@ enum struct EscortCandidate
  * 校验 Follow/StopFollowing/MoveTo/Idle SDKCall 句柄、包匪士气偏移、meme 灭活补丁
  * 与 CCSBot::Idle 监督 Detour，不做任何名单操作。任一后端缺失返回 false，Init 会把
  * 护送事项标记为 FAILED。meme 补丁缺席时名册会被原生开局 meme 冲垮，不降级。
+ * 失败语义：任一依赖缺失返回 false，Init 将事项标记 FAILED。
  *
  * @return              true = 护送事项后端就绪
  */
@@ -269,6 +270,7 @@ bool InitModule7_Escort()
  * 动态启用或停用模块 7（属于事项 ITEM_M7_ESCORT）
  *
  * 调度 Apply 或 Restore 后端；只武装 Ready 的事项；停用即解散名单解除全员跟随。
+ * 失败语义：只做调度，无返回值；单事项故 Active == Armed。
  *
  * @param enable        true = 武装事项；false = 解除武装并还原资源
  */
@@ -293,6 +295,7 @@ void EnableModule7_Escort(bool enable)
  * 还原模块 7（插件卸载，属于事项 ITEM_M7_ESCORT）
  *
  * 解除跟随链、还原 meme 补丁、脱钩并释放 Detour 句柄。
+ * 失败语义：无（尽力还原；幂等）。
  */
 void RestoreModule7_Escort()
 {
@@ -551,199 +554,7 @@ void Module7_OnClientDisconnect(int client)
     {
         return;
     }
-
     Escort_OnClientDisconnect(client);
-}
-
-//========================================================================================
-// MODULE 7 DETOUR & HOOKS (CCSBOT::IDLE DETOUR)
-//========================================================================================
-
-/**
- * CCSBot::Idle 前置回调：感知先锋非正常停步
- *
- * 属于事项 ITEM_M7_ESCORT。
- * 门禁：!Item_IsArmed(ITEM_M7_ESCORT) || g_iEscortMode != Escort_Pointman 则返回 MRES_Ignored。
- * 只做过滤与延迟，不在 detour 内改状态；真正决策延后至 Escort_FrameSupervise。
- * 目的：Follow 角色靠 IdleState::IsFollowing -> ContinueFollowing 自愈，先锋不是 Follow，
- * 必须由本回调在每次收口时复核目标，到场交接、未到场重发。
- *
- * @param client        客户端索引
- * @return              MRES_Ignored
- */
-public MRESReturn Hook_CCSBotIdle_Pre(int client)
-{
-    if (!Item_IsArmed(ITEM_M7_ESCORT)
-        || g_iEscortMode != Escort_Pointman
-        || !g_PointmanObjective.active
-        || client != g_iEscortPointman
-        || g_bSuperviseScheduled)
-    {
-        return MRES_Ignored;
-    }
-
-    g_bSuperviseScheduled = true;
-    RequestFrame(Escort_FrameSupervise, g_iEscortGeneration);
-    return MRES_Ignored;
-}
-
-/**
- * 重发节流用一次性定时器（属于事项 ITEM_M7_ESCORT）
- *
- * 与 RequestFrame 共用同一套监督逻辑；执行后返回 Plugin_Stop 自动自毁。
- */
-public Action Escort_TimerSupervise(Handle timer, any data)
-{
-    Escort_FrameSupervise(data);
-    return Plugin_Stop;
-}
-
-/**
- * 先锋监督延后帧：现解目标，到场交接，未到场重发 MoveTo（属于事项 ITEM_M7_ESCORT）
- *
- * 门禁：代际失配或 !Item_IsArmed(ITEM_M7_ESCORT) 直接放弃。
- *
- * @param data          下发时的代际（与 g_iEscortGeneration 不一致即作废）
- */
-public void Escort_FrameSupervise(any data)
-{
-    g_bSuperviseScheduled = false;
-
-    if (view_as<int>(data) != g_iEscortGeneration)
-    {
-        return;
-    }
-
-    if (!Item_IsArmed(ITEM_M7_ESCORT)
-        || g_iEscortMode != Escort_Pointman
-        || !g_PointmanObjective.active)
-    {
-        return;
-    }
-
-    int carrier = g_iEscortCarrier;
-    int pointman = g_iEscortPointman;
-
-    if (!IsValidClient(carrier, true))
-    {
-        Escort_ReleaseAll();
-        return;
-    }
-    if (!IsTeamBot(pointman, 2, true))
-    {
-        Escort_Reconcile();
-        return;
-    }
-
-    float pos[3];
-    GetClientAbsOrigin(pointman, pos);
-
-    // 单一真相来源：每次下发都现解，不读组织时刻的快照（包匪原生 closet 行走中会翻转）
-    float goal[3];
-    bool locked = false;
-    if (!Escort_ResolveGoal(carrier, goal, locked))
-    {
-        return;
-    }
-
-    float distSq = Escort_DistSq(pos, goal);
-    float arriveSq = ESCORT_ARRIVE_RADIUS * ESCORT_ARRIVE_RADIUS;
-
-    float carrierPos[3];
-    GetClientAbsOrigin(carrier, carrierPos);
-    float carrierDistSq = Escort_DistSq(carrierPos, goal);
-
-    // 规则 4：到场交接（先锋到场 或 包匪自身已到场，任一达成即交接回包匪）
-    if (distSq <= arriveSq || carrierDistSq <= arriveSq)
-    {
-        g_bPointmanArrived = true;
-        DebugLog("[BotRouteFix] [Module 7] Arrived bombsite (pointman dist %.0f, carrier dist %.0f); handoff to carrier %N",
-            GetVectorDistance(pos, goal), GetVectorDistance(carrierPos, goal), carrier);
-        Escort_SwitchToCarrier(carrier);
-        return;
-    }
-
-    float now = GetGameTime();
-
-    // 重发节流：不可达目标会每帧 Idle，必须限制为每 ESCORT_REISSUE_INTERVAL 一次
-    float sinceIssue = now - g_PointmanObjective.lastIssue;
-    if (sinceIssue < ESCORT_REISSUE_INTERVAL)
-    {
-        if (!g_bSuperviseScheduled)
-        {
-            g_bSuperviseScheduled = true;
-            CreateTimer(ESCORT_REISSUE_INTERVAL - sinceIssue, Escort_TimerSupervise,
-                g_iEscortGeneration, TIMER_FLAG_NO_MAPCHANGE);
-        }
-        return;
-    }
-
-    g_PointmanObjective.lastIssue = now;
-    DebugLog("[BotRouteFix] [Module 7] Pointman %N idle (dist %.0f); reissue MoveTo",
-        pointman, GetVectorDistance(pos, goal));
-
-    BotStopFollowing(pointman);
-    BotMoveTo(pointman, goal);
-}
-
-//========================================================================================
-// MODULE 7 ITEM APPLY / RESTORE BACKENDS
-//========================================================================================
-
-/**
- * 应用护送事项：先落 meme 灭活补丁，挂载先锋 Idle detour，再武装并重配名单
- *
- * 事项 ITEM_M7_ESCORT 的应用入口；不做句柄与偏移校验（那是 Prep 的职责）。
- * 补丁写入失败证伪了 Prep 的模板校验，必须同步清 Ready 并回滚，不留半吊子。
- * 失败时该事项 FAILED。
- *
- * @return              true = 名单已武装
- */
-static bool ApplyModule7_EscortBackend()
-{
-    if (!Item_IsReady(ITEM_M7_ESCORT)
-        || g_hSDKCall_Follow == null || g_hSDKCall_StopFollowing == null
-        || g_hSDKCall_MoveTo == null || g_hSDKCall_Idle == null
-        || g_hIdleDetour == null)
-    {
-        Item_SetArmed(ITEM_M7_ESCORT, false);
-        return false;
-    }
-
-    // 先落 meme 灭活补丁：补丁不在位，Escort_Refresh 配出的名册会被原生开局 meme 瞬间冲垮
-    if (!g_PatchFollowMeme.Apply(g_FollowMemePatchBytes))
-    {
-        g_PatchFollowMeme.Restore();
-        Item_SetReady(ITEM_M7_ESCORT, false);
-        Item_SetArmed(ITEM_M7_ESCORT, false);
-        LogError("[BotRouteFix] [Module 7] FollowMeme ret write failed; escort item FAILED.");
-        return false;
-    }
-
-    // 挂载先锋监督 Detour：挂载失败只清 Armed（句柄有效，待下次全关全开重试）
-    if (!SyncDetourEnabled(g_hIdleDetour, g_bIdleHooked, false, Hook_CCSBotIdle_Pre, true, "Module 7"))
-    {
-        g_PatchFollowMeme.Restore();
-        Item_SetArmed(ITEM_M7_ESCORT, false);
-        LogError("[BotRouteFix] [Module 7] CCSBot_Idle detour enable failed; escort item FAILED.");
-        return false;
-    }
-
-    Item_SetArmed(ITEM_M7_ESCORT, true);
-    Escort_Refresh();
-    return true;
-}
-
-/**
- * 还原护送事项：脱下先锋监督 Detour，先恢复 meme 解释器字节，再解除武装并解散名单（停用即全员放行回原生）
- */
-static void RestoreModule7_EscortBackend()
-{
-    // 先摘监督钩子，再释放（释放里的 BotIdle 不再回调 M7）
-    SyncDetourEnabled(g_hIdleDetour, g_bIdleHooked, false, Hook_CCSBotIdle_Pre, false, "Module 7");
-    g_PatchFollowMeme.Restore();
-    Item_SetArmed(ITEM_M7_ESCORT, false);
-    Escort_ReleaseAll();
 }
 
 //========================================================================================
@@ -1646,4 +1457,199 @@ static void Escort_OnClientDisconnect(int client)
         return;
     }
     Escort_OnRosterLost(client, false);
+}
+
+//========================================================================================
+// MODULE 7 DETOUR & HOOKS (CCSBOT::IDLE DETOUR)
+//========================================================================================
+
+/**
+ * CCSBot::Idle 前置回调：感知先锋非正常停步
+ *
+ * 属于事项 ITEM_M7_ESCORT。
+ * 门禁：!Item_IsArmed(ITEM_M7_ESCORT) || g_iEscortMode != Escort_Pointman 则返回 MRES_Ignored。
+ * 只做过滤与延迟，不在 detour 内改状态；真正决策延后至 Escort_FrameSupervise。
+ * 目的：Follow 角色靠 IdleState::IsFollowing -> ContinueFollowing 自愈，先锋不是 Follow，
+ * 必须由本回调在每次收口时复核目标，到场交接、未到场重发。
+ * 失败语义：回调内不判定事项成败；只做过滤与延迟记账，不直接改写状态（决策延后至 Escort_FrameSupervise）。
+ *
+ * @param client        客户端索引
+ * @return              MRES_Ignored
+ */
+public MRESReturn Hook_CCSBotIdle_Pre(int client)
+{
+    if (!Item_IsArmed(ITEM_M7_ESCORT)
+        || g_iEscortMode != Escort_Pointman
+        || !g_PointmanObjective.active
+        || client != g_iEscortPointman
+        || g_bSuperviseScheduled)
+    {
+        return MRES_Ignored;
+    }
+
+    g_bSuperviseScheduled = true;
+    RequestFrame(Escort_FrameSupervise, g_iEscortGeneration);
+    return MRES_Ignored;
+}
+
+/**
+ * 重发节流用一次性定时器（属于事项 ITEM_M7_ESCORT）
+ *
+ * 与 RequestFrame 共用同一套监督逻辑；执行后返回 Plugin_Stop 自动自毁。
+ */
+public Action Escort_TimerSupervise(Handle timer, any data)
+{
+    Escort_FrameSupervise(data);
+    return Plugin_Stop;
+}
+
+/**
+ * 先锋监督延后帧：现解目标，到场交接，未到场重发 MoveTo（属于事项 ITEM_M7_ESCORT）
+ *
+ * 门禁：代际失配或 !Item_IsArmed(ITEM_M7_ESCORT) 直接放弃。
+ *
+ * @param data          下发时的代际（与 g_iEscortGeneration 不一致即作废）
+ */
+public void Escort_FrameSupervise(any data)
+{
+    g_bSuperviseScheduled = false;
+
+    if (view_as<int>(data) != g_iEscortGeneration)
+    {
+        return;
+    }
+
+    if (!Item_IsArmed(ITEM_M7_ESCORT)
+        || g_iEscortMode != Escort_Pointman
+        || !g_PointmanObjective.active)
+    {
+        return;
+    }
+
+    int carrier = g_iEscortCarrier;
+    int pointman = g_iEscortPointman;
+
+    if (!IsValidClient(carrier, true))
+    {
+        Escort_ReleaseAll();
+        return;
+    }
+    if (!IsTeamBot(pointman, 2, true))
+    {
+        Escort_Reconcile();
+        return;
+    }
+
+    float pos[3];
+    GetClientAbsOrigin(pointman, pos);
+
+    // 单一真相来源：每次下发都现解，不读组织时刻的快照（包匪原生 closet 行走中会翻转）
+    float goal[3];
+    bool locked = false;
+    if (!Escort_ResolveGoal(carrier, goal, locked))
+    {
+        return;
+    }
+
+    float distSq = Escort_DistSq(pos, goal);
+    float arriveSq = ESCORT_ARRIVE_RADIUS * ESCORT_ARRIVE_RADIUS;
+
+    float carrierPos[3];
+    GetClientAbsOrigin(carrier, carrierPos);
+    float carrierDistSq = Escort_DistSq(carrierPos, goal);
+
+    // 规则 4：到场交接（先锋到场 或 包匪自身已到场，任一达成即交接回包匪）
+    if (distSq <= arriveSq || carrierDistSq <= arriveSq)
+    {
+        g_bPointmanArrived = true;
+        DebugLog("[BotRouteFix] [Module 7] Arrived bombsite (pointman dist %.0f, carrier dist %.0f); handoff to carrier %N",
+            GetVectorDistance(pos, goal), GetVectorDistance(carrierPos, goal), carrier);
+        Escort_SwitchToCarrier(carrier);
+        return;
+    }
+
+    float now = GetGameTime();
+
+    // 重发节流：不可达目标会每帧 Idle，必须限制为每 ESCORT_REISSUE_INTERVAL 一次
+    float sinceIssue = now - g_PointmanObjective.lastIssue;
+    if (sinceIssue < ESCORT_REISSUE_INTERVAL)
+    {
+        if (!g_bSuperviseScheduled)
+        {
+            g_bSuperviseScheduled = true;
+            CreateTimer(ESCORT_REISSUE_INTERVAL - sinceIssue, Escort_TimerSupervise,
+                g_iEscortGeneration, TIMER_FLAG_NO_MAPCHANGE);
+        }
+        return;
+    }
+
+    g_PointmanObjective.lastIssue = now;
+    DebugLog("[BotRouteFix] [Module 7] Pointman %N idle (dist %.0f); reissue MoveTo",
+        pointman, GetVectorDistance(pos, goal));
+
+    BotStopFollowing(pointman);
+    BotMoveTo(pointman, goal);
+}
+
+//========================================================================================
+// MODULE 7 ITEM APPLY / RESTORE BACKENDS
+//========================================================================================
+
+/**
+ * 应用护送事项：先落 meme 灭活补丁，挂载先锋 Idle detour，再武装并重配名单
+ *
+ * 事项 ITEM_M7_ESCORT 的应用入口；不做句柄与偏移校验（那是 Prep 的职责）。
+ * 补丁写入失败证伪了 Prep 的模板校验，必须同步清 Ready 并回滚，不留半吊子。
+ * 失败时该事项 FAILED。
+ * 失败语义：补丁写入失败同步清 Ready 并回滚；钩子启用失败回滚补丁、只清 Armed；失败时该事项 FAILED。
+ *
+ * @return              true = 名单已武装
+ */
+static bool ApplyModule7_EscortBackend()
+{
+    if (!Item_IsReady(ITEM_M7_ESCORT)
+        || g_hSDKCall_Follow == null || g_hSDKCall_StopFollowing == null
+        || g_hSDKCall_MoveTo == null || g_hSDKCall_Idle == null
+        || g_hIdleDetour == null)
+    {
+        Item_SetArmed(ITEM_M7_ESCORT, false);
+        return false;
+    }
+
+    // 先落 meme 灭活补丁：补丁不在位，Escort_Refresh 配出的名册会被原生开局 meme 瞬间冲垮
+    if (!g_PatchFollowMeme.Apply(g_FollowMemePatchBytes))
+    {
+        g_PatchFollowMeme.Restore();
+        Item_SetReady(ITEM_M7_ESCORT, false);
+        Item_SetArmed(ITEM_M7_ESCORT, false);
+        LogError("[BotRouteFix] [Module 7] FollowMeme ret write failed; escort item FAILED.");
+        return false;
+    }
+
+    // 挂载先锋监督 Detour：挂载失败只清 Armed（句柄有效，待下次全关全开重试）
+    if (!SyncDetourEnabled(g_hIdleDetour, g_bIdleHooked, false, Hook_CCSBotIdle_Pre, true, "Module 7"))
+    {
+        g_PatchFollowMeme.Restore();
+        Item_SetArmed(ITEM_M7_ESCORT, false);
+        LogError("[BotRouteFix] [Module 7] CCSBot_Idle detour enable failed; escort item FAILED.");
+        return false;
+    }
+
+    Item_SetArmed(ITEM_M7_ESCORT, true);
+    Escort_Refresh();
+    return true;
+}
+
+/**
+ * 还原护送事项（ITEM_M7_ESCORT）：脱下先锋监督 Detour，先恢复 meme 解释器字节，再解除武装并解散名单（停用即全员放行回原生）。
+ *
+ * 失败语义：无（幂等；脱钩 + 写回 + Armed(false) + 解散名单）。
+ */
+static void RestoreModule7_EscortBackend()
+{
+    // 先摘监督钩子，再释放（释放里的 BotIdle 不再回调 M7）
+    SyncDetourEnabled(g_hIdleDetour, g_bIdleHooked, false, Hook_CCSBotIdle_Pre, false, "Module 7");
+    g_PatchFollowMeme.Restore();
+    Item_SetArmed(ITEM_M7_ESCORT, false);
+    Escort_ReleaseAll();
 }

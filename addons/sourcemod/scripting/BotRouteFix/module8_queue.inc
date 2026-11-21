@@ -63,6 +63,7 @@ static float g_flDeadlockBrokenUntil[MAXPLAYERS + 1];
  *
  * 只读偏移、挂载 UpdatePathMovement Post 钩子，不启用钩子（启用由 Apply 执行）。
  * 任一后端失败返回 false，Init 会把排队事项标记为 FAILED，死锁事项不受影响。
+ * 失败语义：任一依赖缺失返回 false，Init 将事项标记 FAILED。
  *
  * @return              true = 排队事项后端就绪
  */
@@ -127,6 +128,7 @@ static bool PrepModule8_QueueBackend()
  * 只校验 Hunt SDKCall 句柄。死锁事项复用排队事项的 Post 钩子做等待检测，
  * 强切本身走 SDKCall，因此本 Prep 不挂载任何钩子。
  * 失败返回 false，Init 会把死锁事项标记为 FAILED，排队事项不受影响。
+ * 失败语义：任一依赖缺失返回 false，Init 将事项标记 FAILED。
  *
  * @return              true = 死锁事项后端就绪
  */
@@ -147,8 +149,10 @@ static bool PrepModule8_DeadlockBackend()
 //========================================================================================
 
 /**
- * 初始化模块 8（读偏移 + 挂 UpdatePathMovement Post）
- * 若 gamedata 尚未填入 "CCSBot_UpdatePathMovement" 签名，则优雅进入待机状态（不阻断全库启动）
+ * 初始化模块 8 的两个独立事项：排队打碎（ITEM_M8_QUEUE）与死锁强切（ITEM_M8_DEADLOCK）
+ *
+ * 读偏移 + 挂 UpdatePathMovement Post；签名缺失时优雅待机（不阻断全库启动）。
+ * 失败语义：全灭时 LogModuleAllFailed + return false；部分成功按事项各自 FAILED，不连带。
  */
 bool InitModule8_Queue()
 {
@@ -179,7 +183,10 @@ bool InitModule8_Queue()
 }
 
 /**
- * 动态启用或停用模块 8（幂等）
+ * 动态启用或停用模块 8（事项 ITEM_M8_QUEUE / ITEM_M8_DEADLOCK 的调度入口；幂等）。
+ *
+ * 只做调度：只武装 Ready 的事项；Active = OR(Armed)。
+ * 失败语义：无返回值；Apply 内部失败只清对应事项 Armed。
  */
 void EnableModule8_Queue(bool enable)
 {
@@ -211,7 +218,9 @@ void EnableModule8_Queue(bool enable)
 }
 
 /**
- * 还原模块 8（插件卸载：摘钩并释放句柄）
+ * 还原模块 8（事项 ITEM_M8_QUEUE / ITEM_M8_DEADLOCK；插件卸载：摘钩并释放句柄）。
+ *
+ * 失败语义：无（尽力还原；幂等）。
  */
 void RestoreModule8_Queue()
 {
@@ -345,6 +354,98 @@ public void Module8_FrameHunt(any data)
 
 
 //========================================================================================
+// MODULE 8 QUEUE PRIMITIVES
+//========================================================================================
+
+/**
+ * 事项 M8 排队打碎的可视化追踪登记：记下加过 danger 的 NavArea
+ *
+ * 同一 Area 重复登记只刷新过期时间；满 64 个挤掉最早过期的。空地址直接返回。
+ */
+static void RecordBlockedArea(Address pArea, float expireTime)
+{
+    // 调用方保证：入参刚过 Queue_NailDanger 的容器校验；此处哨兵快拒即可。
+    if (!IsValidAddress(pArea))
+    {
+        return;
+    }
+
+    for (int i = 0; i < g_iBlockedAreaCount; i++)
+    {
+        if (g_BlockedAreas[i] == pArea)
+        {
+            if (expireTime > g_flBlockedAreaExpire[i])
+            {
+                g_flBlockedAreaExpire[i] = expireTime;
+            }
+            return;
+        }
+    }
+
+    if (g_iBlockedAreaCount < MAX_BLOCKED_AREAS)
+    {
+        g_BlockedAreas[g_iBlockedAreaCount] = pArea;
+        g_flBlockedAreaExpire[g_iBlockedAreaCount] = expireTime;
+        g_iBlockedAreaCount++;
+        return;
+    }
+
+    int oldestIdx = 0;
+    float oldestTime = g_flBlockedAreaExpire[0];
+    for (int i = 1; i < MAX_BLOCKED_AREAS; i++)
+    {
+        if (g_flBlockedAreaExpire[i] < oldestTime)
+        {
+            oldestTime = g_flBlockedAreaExpire[i];
+            oldestIdx = i;
+        }
+    }
+    g_BlockedAreas[oldestIdx] = pArea;
+    g_flBlockedAreaExpire[oldestIdx] = expireTime;
+}
+
+/**
+ * 事项 M8 排队打碎的钉 danger：给指定 NavArea 按阵营钉 +0.8（封顶 2.5）
+ *
+ * 先按沉降公式结算旧值再加，刷时间戳；逼 A* 立即绕开，下次重算不走回头路。
+ */
+static void Queue_NailDanger(Address pArea, int teamIdx, float curtime)
+{
+    // 写前门禁：哨兵快拒 + 容器 exact-match，活路径槽位不可信。
+    if (!IsValidAddress(pArea) || !Module3_IsKnownNavArea(pArea))
+    {
+        return;
+    }
+
+    RecordBlockedArea(pArea, curtime + 60.0);
+
+    float rawDanger = view_as<float>(LoadFromAddress(pArea + view_as<Address>(g_iOffset_Danger + teamIdx * 4), NumberType_Int32));
+    float dangerTimestamp = view_as<float>(LoadFromAddress(pArea + view_as<Address>(g_iOffset_DangerTimestamp + teamIdx * 4), NumberType_Int32));
+
+    float elapsed = curtime - dangerTimestamp;
+    if (elapsed < 0.0)
+    {
+        elapsed = 0.0;
+    }
+
+    float effDanger = rawDanger - (elapsed / DANGER_DECAY_RATE_SEC);
+    if (effDanger < 0.0)
+    {
+        effDanger = 0.0;
+    }
+
+    float newDanger = effDanger + QUEUE_NAIL_DANGER;
+    if (newDanger > QUEUE_NAIL_MAX)
+    {
+        newDanger = QUEUE_NAIL_MAX;
+    }
+
+    StoreToAddress(pArea + view_as<Address>(g_iOffset_Danger + teamIdx * 4), view_as<int>(newDanger), NumberType_Int32);
+    StoreToAddress(pArea + view_as<Address>(g_iOffset_DangerTimestamp + teamIdx * 4), view_as<int>(curtime), NumberType_Int32);
+}
+
+
+//========================================================================================
 // MODULE 8 DETOUR & HOOKS (UPDATEPATHMOVEMENT::POST)
 //========================================================================================
 
@@ -353,6 +454,7 @@ public void Module8_FrameHunt(any data)
  *
  * ITEM_M8_QUEUE 武装才介入：等待超 2 秒即打碎排队（清等待旗、钉 danger、碎路径），
  * 累计打碎 5 次且 ITEM_M8_DEADLOCK 武装则递延切 Hunt。条件不符一律 MRES_Ignored 放行。
+ * 失败语义：回调内不判定事项成败；只做条件打碎与递延切 Hunt，本钩恒返回 MRES_Ignored。
  */
 public MRESReturn Hook_UpdatePathMovement_Post(int client, DHookReturn hReturn, DHookParam hParams)
 {
@@ -474,6 +576,7 @@ public MRESReturn Hook_UpdatePathMovement_Post(int client, DHookReturn hReturn, 
  *
  * 事项 ITEM_M8_QUEUE 的应用入口；不做偏移读取与钩子挂载（那是 Prep 的职责）。
  * 失败时该事项 FAILED，死锁事项不受影响。
+ * 失败语义：Post 钩子启用失败只清 Armed 保留 Ready，事项待下次 Enable 重试；死锁事项不受影响。
  *
  * @return              true = 排队钩子已驻留
  */
@@ -503,6 +606,7 @@ static bool ApplyModule8_QueueBackend()
  *
  * 死锁事项复用排队事项的 Post 钩子做等待检测，强切本身走 Hunt SDKCall，
  * 因此本 Apply 不做任何挂钩动作，只做武装门控。
+ * 失败语义：纯门控无注入；条件不齐仅置 Armed(false)，不改写 Ready 结论。
  *
  * @return              true = 死锁事项已武装
  */
@@ -514,7 +618,9 @@ static bool ApplyModule8_DeadlockBackend()
 }
 
 /**
- * 还原排队打碎事项：摘钩并解除武装
+ * 还原排队打碎事项（ITEM_M8_QUEUE）：摘钩并解除武装。
+ *
+ * 失败语义：无（幂等；摘钩 + Armed(false)）。
  */
 static void RestoreModule8_QueueBackend()
 {
@@ -523,101 +629,11 @@ static void RestoreModule8_QueueBackend()
 }
 
 /**
- * 还原死锁强切事项：解除武装（钩子由排队事项释放）
+ * 还原死锁强切事项（ITEM_M8_DEADLOCK）：解除武装（钩子由排队事项释放）。
+ *
+ * 失败语义：无（幂等；Armed(false)，钩子归排队事项释放）。
  */
 static void RestoreModule8_DeadlockBackend()
 {
     Item_SetArmed(ITEM_M8_DEADLOCK, false);
-}
-
-
-//========================================================================================
-// MODULE 8 QUEUE PRIMITIVES
-//========================================================================================
-
-/**
- * 事项 M8 排队打碎的可视化追踪登记：记下加过 danger 的 NavArea
- *
- * 同一 Area 重复登记只刷新过期时间；满 64 个挤掉最早过期的。空地址直接返回。
- */
-static void RecordBlockedArea(Address pArea, float expireTime)
-{
-    // 调用方保证：入参刚过 Queue_NailDanger 的容器校验；此处哨兵快拒即可。
-    if (!IsValidAddress(pArea))
-    {
-        return;
-    }
-
-    for (int i = 0; i < g_iBlockedAreaCount; i++)
-    {
-        if (g_BlockedAreas[i] == pArea)
-        {
-            if (expireTime > g_flBlockedAreaExpire[i])
-            {
-                g_flBlockedAreaExpire[i] = expireTime;
-            }
-            return;
-        }
-    }
-
-    if (g_iBlockedAreaCount < MAX_BLOCKED_AREAS)
-    {
-        g_BlockedAreas[g_iBlockedAreaCount] = pArea;
-        g_flBlockedAreaExpire[g_iBlockedAreaCount] = expireTime;
-        g_iBlockedAreaCount++;
-        return;
-    }
-
-    int oldestIdx = 0;
-    float oldestTime = g_flBlockedAreaExpire[0];
-    for (int i = 1; i < MAX_BLOCKED_AREAS; i++)
-    {
-        if (g_flBlockedAreaExpire[i] < oldestTime)
-        {
-            oldestTime = g_flBlockedAreaExpire[i];
-            oldestIdx = i;
-        }
-    }
-    g_BlockedAreas[oldestIdx] = pArea;
-    g_flBlockedAreaExpire[oldestIdx] = expireTime;
-}
-
-/**
- * 事项 M8 排队打碎的钉 danger：给指定 NavArea 按阵营钉 +0.8（封顶 2.5）
- *
- * 先按沉降公式结算旧值再加，刷时间戳；逼 A* 立即绕开，下次重算不走回头路。
- */
-static void Queue_NailDanger(Address pArea, int teamIdx, float curtime)
-{
-    // 写前门禁：哨兵快拒 + 容器 exact-match，活路径槽位不可信。
-    if (!IsValidAddress(pArea) || !Module3_IsKnownNavArea(pArea))
-    {
-        return;
-    }
-
-    RecordBlockedArea(pArea, curtime + 60.0);
-
-    float rawDanger = view_as<float>(LoadFromAddress(pArea + view_as<Address>(g_iOffset_Danger + teamIdx * 4), NumberType_Int32));
-    float dangerTimestamp = view_as<float>(LoadFromAddress(pArea + view_as<Address>(g_iOffset_DangerTimestamp + teamIdx * 4), NumberType_Int32));
-
-    float elapsed = curtime - dangerTimestamp;
-    if (elapsed < 0.0)
-    {
-        elapsed = 0.0;
-    }
-
-    float effDanger = rawDanger - (elapsed / DANGER_DECAY_RATE_SEC);
-    if (effDanger < 0.0)
-    {
-        effDanger = 0.0;
-    }
-
-    float newDanger = effDanger + QUEUE_NAIL_DANGER;
-    if (newDanger > QUEUE_NAIL_MAX)
-    {
-        newDanger = QUEUE_NAIL_MAX;
-    }
-
-    StoreToAddress(pArea + view_as<Address>(g_iOffset_Danger + teamIdx * 4), view_as<int>(newDanger), NumberType_Int32);
-    StoreToAddress(pArea + view_as<Address>(g_iOffset_DangerTimestamp + teamIdx * 4), view_as<int>(curtime), NumberType_Int32);
 }

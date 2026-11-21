@@ -91,6 +91,7 @@ static const char g_sSniperCamp12_OffNames[6][32] =
  *
  * 校验 Hunt SDKCall、task/disposition 偏移，并逐站点定位/校验/备份/构造旁路字节；
  * 不写入任何代码段（写入由 Apply 执行）。任一后端失败返回 false，Init 标记事项 FAILED。
+ * 失败语义：任一依赖缺失返回 false，Init 将事项标记 FAILED。
  *
  * @return              true = 六站点与门禁偏移全部就绪
  */
@@ -353,7 +354,9 @@ static bool PrepModule12_ValidateSite(int siteIndex, bool isConvert, Address jcc
 //========================================================================================
 
 /**
- * 初始化模块 12（六站点全成或全败）
+ * 初始化模块 12 的唯一事项：camp 门禁（ITEM_M12_SNIPERCAMP），六站点全成或全败
+ *
+ * 失败语义：任一后端缺失 → LogModuleAllFailed + return false（事项 FAILED，不静默降级）。
  *
  * @return              true = 事项已武装
  */
@@ -389,7 +392,10 @@ bool InitModule12_SniperCamp()
 }
 
 /**
- * 动态启用或停用模块 12（幂等；停用即写回六处 jcc 并解除武装）
+ * 动态启用或停用模块 12（事项 ITEM_M12_SNIPERCAMP 的调度入口；幂等；停用即写回六处 jcc 并解除武装）
+ *
+ * 只做调度：只武装 Ready 的事项；单事项故 Active == Armed。
+ * 失败语义：无返回值；Apply 内部失败只清 Armed 并就地 LogError。
  *
  * @param enable        true = 按事项后端就绪情况武装；false = 还原并解除武装
  */
@@ -416,7 +422,9 @@ void EnableModule12_SniperCamp(bool enable)
 }
 
 /**
- * 还原模块 12（插件卸载：写回六处 jcc 并解除武装；钩子本身归模块 15 管）
+ * 还原模块 12（事项 ITEM_M12_SNIPERCAMP；插件卸载：写回六处 jcc 并解除武装；钩子本身归模块 15 管）。
+ *
+ * 失败语义：无（尽力还原；幂等）。
  */
 void RestoreModule12_SniperCamp()
 {
@@ -459,7 +467,7 @@ float Module12_CalculateSniperCampChance(int morale)
 }
 
 //========================================================================================
-// MODULE 12 DETOUR HOOK ENTRY (BORROWED FROM MODULE 15)
+// MODULE 12 DETOUR & HOOKS (BORROWED HOST: MODULE 15 HIDE ONENTER)
 //========================================================================================
 
 /**
@@ -547,9 +555,10 @@ public void Module12_FrameHunt(any data)
 //========================================================================================
 
 /**
- * 应用 camp 门禁事项：六站点全成或全败
+ * 应用 camp 门禁事项（ITEM_M12_SNIPERCAMP）：六站点全成或全败
  *
  * 物理写入失败证伪了 Prep 的模板校验，必须同步清 Ready 并回滚已写站点。
+ * 失败语义：写入失败同步清 Ready 并回滚已写站点，事项 FAILED。
  *
  * @return              true = 六处旁路全部驻留
  */
@@ -596,7 +605,9 @@ static bool ApplyModule12_SniperCampBackend()
 }
 
 /**
- * 还原 camp 门禁事项：写回六处原始 jcc 并解除武装
+ * 还原 camp 门禁事项（ITEM_M12_SNIPERCAMP）：写回六处原始 jcc 并解除武装。
+ *
+ * 失败语义：无（幂等；写回 + Armed(false)）。
  */
 static void RestoreModule12_SniperCampBackend()
 {

@@ -281,9 +281,10 @@ bool InitModule6_Noise()
 }
 
 /**
- * 动态启用或停用模块 6
+ * 动态启用或停用模块 6（事项 ITEM_M6_NOISE 的调度入口）
  *
  * 事项没有常驻补丁，Enable(false) 只停用钩子并撤销武装标记。
+ * 失败语义：只做调度，无返回值；单事项故 Active == Armed。
  *
  * @param enable        true = 武装；false = 解除武装
  */
@@ -307,9 +308,10 @@ void EnableModule6_Noise(bool enable)
 }
 
 /**
- * 还原模块 6（插件卸载）
+ * 还原模块 6（事项 ITEM_M6_NOISE；插件卸载）
  *
  * 本模块没有持久代码补丁，只停用钩子并复位业务态，最后释放 Detour 句柄。
+ * 失败语义：无（尽力还原；幂等）。
  */
 void RestoreModule6_Noise()
 {
@@ -412,6 +414,7 @@ int Module6_GetBotDisposition(int client)
  * 负士气直接阻断（等效强制 OPPO）；非负士气按士气阶梯限距 + 线性距离概率判定。
  * Defuse/Plant/Move 等关键任务在引擎层根本不调本函数，进钩子的只有
  * 巡逻推进与掩体架枪两类 Bot，故不判任务、不判阵营、不判下包状态。
+ * 失败语义：回调内不判定事项成败；Supercede 仅表示梯度命中（阻断出击），其余一律 Ignored 放行。
  *
  * @param client        试图出击调查声音的 Bot 客户端索引
  * @param hParams       DHook 参数
@@ -657,6 +660,7 @@ static void Module6_SweepPlantDisposition()
  *
  * 事项 ITEM_M6_NOISE 的应用入口；不做 Detour 创建与签名绑定（那是 Prep 的职责）。
  * 三个钩子同属一个事项：任一失败都回滚，避免只开半边；失败只清 Armed 保留 Ready。
+ * 失败语义：任一钩子启用失败则回滚已启用的，只清 Armed 保留 Ready，事项待下次 Enable 重试。
  * 武装成功后单次扫盘（热重载时把已在下包任务的持包人一次性补齐）。
  *
  * @return              true = 三钩子已驻留
@@ -697,7 +701,9 @@ static bool ApplyModule6_NoiseBackend()
 }
 
 /**
- * 还原噪声事项：摘三钩并解除武装
+ * 还原噪声事项（ITEM_M6_NOISE）：摘三钩并解除武装。
+ *
+ * 失败语义：无（幂等；摘钩 + Armed(false)）。
  */
 static void RestoreModule6_NoiseBackend()
 {

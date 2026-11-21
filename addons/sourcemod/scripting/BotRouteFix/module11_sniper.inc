@@ -90,7 +90,8 @@ static int g_iOffset_EnemyQueueIndex = -1;
  * 事项后端：走廊 danger（ITEM_M11_CORRIDOR）
  *
  * 只定位/校验走廊钉刺所需偏移与测距子系统，不挂载钩子、不写内存。
- * 任一后端缺失返回 false，Init 会把走廊事项标记为 FAILED。
+ * 任一后端缺失都返回 false，Init 会把走廊事项标记为 FAILED。
+ * 失败语义：任一依赖缺失返回 false，Init 将事项标记 FAILED。
  * nav 缺失只让走廊事项 FAILED；Detour 仍在时撤退请求继续转发（不属于本事项）。
  *
  * @return              true = 走廊事项后端就绪
@@ -144,6 +145,7 @@ static bool PrepModule11_CorridorBackend()
  *
  * 载体不是事项后端：它只负责把"看见狙击手"这个事件送进回调，
  * 走廊钉刺与撤退请求都在回调里按各自门禁执行。
+ * 失败语义：创建/绑定失败返回 false（载体挂载失败不连带走廊事项，Init 直接丢弃其返回值）。
  *
  * @return              true = Detour 句柄已创建并绑定签名
  */
@@ -177,11 +179,13 @@ static bool PrepModule11_NotificationTransport()
 //========================================================================================
 
 /**
- * 初始化模块 11
+ * 初始化模块 11（走廊事项 ITEM_M11_CORRIDOR；通知载体非事项，只负责事件投递）
  *
  * 先挂通知载体，再单独探测走廊事项；任一失败不连坐另一方。
+ * 失败语义：gamedata 缺失直接 Ready(false)+return false；载体挂载结果丢弃、不阻断；
+ * 走廊事项未武装 → LogModuleAllFailed + return false（事项 FAILED，不静默降级）。
  *
- * @return              true = 载体已挂载（事项状态以 items.inc 为准）
+ * @return              true = 走廊事项已武装（载体状态不影响返回值）
  */
 bool InitModule11_Sniper()
 {
@@ -210,6 +214,7 @@ bool InitModule11_Sniper()
  * 动态启用或停用模块 11（幂等）
  *
  * 载体随模块规则开关；走廊事项按后端就绪独立武装。
+ * 失败语义：只做调度，无返回值；载体与事项各自按 Apply 结果落定，互不连带。
  *
  * @param enable        true = 挂载体并按 Ready 武装；false = 摘钩并解除武装
  */
@@ -235,7 +240,9 @@ void EnableModule11_Sniper(bool enable)
 }
 
 /**
- * 还原模块 11（插件卸载：摘钩并释放句柄）
+ * 还原模块 11（事项 ITEM_M11_CORRIDOR；插件卸载：摘钩并释放句柄）。
+ *
+ * 失败语义：无（尽力还原；幂等）。
  */
 void RestoreModule11_Sniper()
 {
@@ -344,153 +351,6 @@ void Module11_OnRoundStart()
 void Module11_OnMapStart()
 {
     Module11_OnRoundStart();
-}
-
-//========================================================================================
-// MODULE 11 DETOUR & HOOKS (BOTCHATTERINTERFACE::SPOTTEDSNIPER, POST)
-//========================================================================================
-
-/**
- * SpottedSniper Post：走廊加压 + 撤退请求
- *
- * 载体只在模块启用时挂载；走廊钉刺按事项武装门控，
- * 撤退请求是跨模块通知（归 M5），载体在就照发。
- *
- * @param pThis         BotChatterInterface 指针
- * @param hParams       DHook 参数
- * @return              MRES_Ignored
- */
-public MRESReturn Hook_SpottedSniper_Post(Address pThis)
-{
-    if (pThis == Address_Null || g_iOffset_ChatterMe <= 0)
-    {
-        return MRES_Ignored;
-    }
-
-    Address pMe = LoadAddressFromAddress(pThis + view_as<Address>(g_iOffset_ChatterMe));
-    int spotter = ResolveBotClient(pMe);
-    if (!IsBot(spotter, true))
-    {
-        return MRES_Ignored;
-    }
-
-    // 1. 若自己也是狙击手，放行对狙博弈
-    if (IsSniper(spotter))
-    {
-        return MRES_Ignored;
-    }
-
-    int spotterTeam = GetClientTeam(spotter);
-    if (spotterTeam != 2 && spotterTeam != 3)
-    {
-        return MRES_Ignored;
-    }
-
-    // 原生 20 秒节流在上游按人头卡着，per-bot 节流永远轮不到，直接走
-    float curtime = GetGameTime();
-
-    // 2. 锁定敌方狙击手坐标
-    float sniperPos[3];
-    int sniper = Sniper_FindTargetSniper(spotter, sniperPos);
-    if (sniper == -1)
-    {
-        DebugLog("[BotRouteFix] [Module 11] Spotter %N: SpottedSniper triggered, but target sniper could not be resolved in m_enemy or m_enemyQueue", spotter);
-        return MRES_Ignored;
-    }
-
-    // 目击连线追踪登记（与走廊钉刺解耦：贴脸放行也画，画的是目击关系不是走廊威胁）
-    RecordSniperPair(spotter, sniper, curtime + SNIPER_PAIR_HIGHLIGHT_SEC);
-
-    int teamIdx = spotterTeam - 2;
-
-    // 3. 贴脸无效化：distance < 265 时狙击枪退化为步枪，只构成点威胁、不构成走廊威胁。
-    //    不钉 danger（两点重叠没有走廊可钉，钉了污染遭遇区）、不碎路径、不发撤退请求，
-    //    威胁模型交回常规交火（M5 残血/一打多）处理。
-    float spotterPos[3];
-    GetClientAbsOrigin(spotter, spotterPos);
-    if (GetVectorDistance(spotterPos, sniperPos) < SNIPER_NO_RETREAT_DIST)
-    {
-        // 贴脸属于"放行交火"，不计入请求数（否则 status 的 requests 会混入大量无效样本）
-        DebugLog("[BotRouteFix] [Module 11] Bot %N spotted sniper %N at close range, treated as rifle (no danger, no retreat)", spotter, sniper);
-        return MRES_Ignored;
-    }
-
-    // 4. 走廊事项：临时探测到狙击手的走廊路径，并为沿途 NavArea 钉上 +0.8f 危险度
-    //    ★ 必须走 BotNavProbePathAreas（快照-计算-还原）：CCSBot::ComputePath 会先 DestroyPath()
-    //      再写入新路径（cs_bot_pathfind.cpp:1877-1891），直接调用会篡改 spotter 当前行进路径，
-    //      硬豁免目标（包匪下包临界、CT 拆包任务）不会被 M5 后撤，也就没人帮它重建路径。
-    int corridorSteps = 0;
-    int nailedAreas = 0;
-    if (Item_IsArmed(ITEM_M11_CORRIDOR))
-    {
-        int corridorCount = BotNavProbePathAreas(spotter, sniperPos);
-        corridorSteps = (corridorCount > SNIPER_MAX_STEPS) ? SNIPER_MAX_STEPS : corridorCount;
-        for (int i = 0; i < corridorSteps; i++)
-        {
-            Address pArea = BotNavProbeAreaAt(i);
-            if (Sniper_NailDanger(pArea, teamIdx, curtime))
-            {
-                nailedAreas++;
-                RecordPressurizedCorridor(pArea, curtime + SNIPER_CORRIDOR_HIGHLIGHT_SEC);
-            }
-        }
-    }
-
-    // 5. 联动模块 5：只发撤退请求（带 TTL），不碎路径。撤退归 M5，本模块不判档位。
-    //    是否真撤、撤多久由 M5 按身份/阶段裁决——硬豁免目标（包匪下包临界、CT 拆包临界）
-    //    不能被本模块打断使命动作；真正撤退时 Hide 内部会自行 DestroyPath/ComputePath。
-    Module5_RequestSniperRetreat(spotter);
-    g_iTotalSniperRequests++;
-
-    DebugLog("[BotRouteFix] [Module 11] Bot %N spotted sniper %N, nailed %d/%d corridor areas, requested retreat",
-        spotter, sniper, nailedAreas, corridorSteps);
-    return MRES_Ignored;
-}
-
-//========================================================================================
-// MODULE 11 ITEM APPLY / RESTORE BACKENDS
-//========================================================================================
-
-/**
- * 应用通知载体：规则开启且签名可用即挂载（模块级资源，不参与事项状态）
- *
- * 走廊事项 FAILED 时载体仍需保持挂载，撤退请求才能继续转发（M11 特例）。
- * 失败语义：载体挂不上时走廊事项必然 FAILED，请求也无法转发。
- *
- * @return              true = 载体处于启用态
- */
-static bool ApplyModule11_Transport()
-{
-    return SyncDetourEnabled(g_hSpottedSniperDetour, g_bSpottedSniperHooked,
-        true, Hook_SpottedSniper_Post, true, "Module 11");
-}
-
-/**
- * 应用走廊事项：只有 Ready 且载体已在运行才武装
- *
- * 走廊钉刺的执行点在 Detour 回调内，本入口只做武装门控（无独立注入点）。
- *
- * @return              true = 事项已武装
- */
-static bool ApplyModule11_CorridorBackend()
-{
-    bool ok = (Item_IsReady(ITEM_M11_CORRIDOR)
-        && g_hSpottedSniperDetour != null
-        && g_bSpottedSniperHooked);
-    Item_SetArmed(ITEM_M11_CORRIDOR, ok);
-    return ok;
-}
-
-/**
- * 还原走廊事项：解除武装并摘除通知载体
- *
- * 载体归模块所有，停用即一并关闭；下次启用重新 Sync。
- */
-static void RestoreModule11_CorridorBackend()
-{
-    Item_SetArmed(ITEM_M11_CORRIDOR, false);
-    SyncDetourEnabled(g_hSpottedSniperDetour, g_bSpottedSniperHooked,
-        true, Hook_SpottedSniper_Post, false, "Module 11");
 }
 
 //========================================================================================
@@ -737,4 +597,154 @@ static void RecordPressurizedCorridor(Address pArea, float expireTime)
     }
     g_PressurizedAreas[oldestIdx] = pArea;
     g_flPressurizedExpire[oldestIdx] = expireTime;
+}
+
+//========================================================================================
+// MODULE 11 DETOUR & HOOKS (BOTCHATTERINTERFACE::SPOTTEDSNIPER, POST)
+//========================================================================================
+
+/**
+ * SpottedSniper Post：走廊加压 + 撤退请求
+ *
+ * 载体只在模块启用时挂载；走廊钉刺按事项武装门控，
+ * 撤退请求是跨模块通知（归 M5），载体在就照发。
+ * 失败语义：回调内不判定事项成败；条件不符一律 MRES_Ignored，不拦截原生。
+ *
+ * @param pThis         BotChatterInterface 指针
+ * @param hParams       DHook 参数
+ * @return              MRES_Ignored
+ */
+public MRESReturn Hook_SpottedSniper_Post(Address pThis)
+{
+    if (pThis == Address_Null || g_iOffset_ChatterMe <= 0)
+    {
+        return MRES_Ignored;
+    }
+
+    Address pMe = LoadAddressFromAddress(pThis + view_as<Address>(g_iOffset_ChatterMe));
+    int spotter = ResolveBotClient(pMe);
+    if (!IsBot(spotter, true))
+    {
+        return MRES_Ignored;
+    }
+
+    // 1. 若自己也是狙击手，放行对狙博弈
+    if (IsSniper(spotter))
+    {
+        return MRES_Ignored;
+    }
+
+    int spotterTeam = GetClientTeam(spotter);
+    if (spotterTeam != 2 && spotterTeam != 3)
+    {
+        return MRES_Ignored;
+    }
+
+    // 原生 20 秒节流在上游按人头卡着，per-bot 节流永远轮不到，直接走
+    float curtime = GetGameTime();
+
+    // 2. 锁定敌方狙击手坐标
+    float sniperPos[3];
+    int sniper = Sniper_FindTargetSniper(spotter, sniperPos);
+    if (sniper == -1)
+    {
+        DebugLog("[BotRouteFix] [Module 11] Spotter %N: SpottedSniper triggered, but target sniper could not be resolved in m_enemy or m_enemyQueue", spotter);
+        return MRES_Ignored;
+    }
+
+    // 目击连线追踪登记（与走廊钉刺解耦：贴脸放行也画，画的是目击关系不是走廊威胁）
+    RecordSniperPair(spotter, sniper, curtime + SNIPER_PAIR_HIGHLIGHT_SEC);
+
+    int teamIdx = spotterTeam - 2;
+
+    // 3. 贴脸无效化：distance < 265 时狙击枪退化为步枪，只构成点威胁、不构成走廊威胁。
+    //    不钉 danger（两点重叠没有走廊可钉，钉了污染遭遇区）、不碎路径、不发撤退请求，
+    //    威胁模型交回常规交火（M5 残血/一打多）处理。
+    float spotterPos[3];
+    GetClientAbsOrigin(spotter, spotterPos);
+    if (GetVectorDistance(spotterPos, sniperPos) < SNIPER_NO_RETREAT_DIST)
+    {
+        // 贴脸属于"放行交火"，不计入请求数（否则 status 的 requests 会混入大量无效样本）
+        DebugLog("[BotRouteFix] [Module 11] Bot %N spotted sniper %N at close range, treated as rifle (no danger, no retreat)", spotter, sniper);
+        return MRES_Ignored;
+    }
+
+    // 4. 走廊事项：临时探测到狙击手的走廊路径，并为沿途 NavArea 钉上 +0.8f 危险度
+    //    ★ 必须走 BotNavProbePathAreas（快照-计算-还原）：CCSBot::ComputePath 会先 DestroyPath()
+    //      再写入新路径（cs_bot_pathfind.cpp:1877-1891），直接调用会篡改 spotter 当前行进路径，
+    //      硬豁免目标（包匪下包临界、CT 拆包任务）不会被 M5 后撤，也就没人帮它重建路径。
+    int corridorSteps = 0;
+    int nailedAreas = 0;
+    if (Item_IsArmed(ITEM_M11_CORRIDOR))
+    {
+        int corridorCount = BotNavProbePathAreas(spotter, sniperPos);
+        corridorSteps = (corridorCount > SNIPER_MAX_STEPS) ? SNIPER_MAX_STEPS : corridorCount;
+        for (int i = 0; i < corridorSteps; i++)
+        {
+            Address pArea = BotNavProbeAreaAt(i);
+            if (Sniper_NailDanger(pArea, teamIdx, curtime))
+            {
+                nailedAreas++;
+                RecordPressurizedCorridor(pArea, curtime + SNIPER_CORRIDOR_HIGHLIGHT_SEC);
+            }
+        }
+    }
+
+    // 5. 联动模块 5：只发撤退请求（带 TTL），不碎路径。撤退归 M5，本模块不判档位。
+    //    是否真撤、撤多久由 M5 按身份/阶段裁决——硬豁免目标（包匪下包临界、CT 拆包临界）
+    //    不能被本模块打断使命动作；真正撤退时 Hide 内部会自行 DestroyPath/ComputePath。
+    Module5_RequestSniperRetreat(spotter);
+    g_iTotalSniperRequests++;
+
+    DebugLog("[BotRouteFix] [Module 11] Bot %N spotted sniper %N, nailed %d/%d corridor areas, requested retreat",
+        spotter, sniper, nailedAreas, corridorSteps);
+    return MRES_Ignored;
+}
+
+//========================================================================================
+// MODULE 11 ITEM APPLY / RESTORE BACKENDS
+//========================================================================================
+
+/**
+ * 应用通知载体：规则开启且签名可用即挂载（模块级资源，不参与事项状态）
+ *
+ * 走廊事项 FAILED 时载体仍需保持挂载，撤退请求才能继续转发（M11 特例）。
+ * 失败语义：载体挂不上时走廊事项必然 FAILED，请求也无法转发。
+ *
+ * @return              true = 载体处于启用态
+ */
+static bool ApplyModule11_Transport()
+{
+    return SyncDetourEnabled(g_hSpottedSniperDetour, g_bSpottedSniperHooked,
+        true, Hook_SpottedSniper_Post, true, "Module 11");
+}
+
+/**
+ * 应用走廊事项：只有 Ready 且载体已在运行才武装
+ *
+ * 走廊钉刺的执行点在 Detour 回调内，本入口只做武装门控（无独立注入点）。
+ * 失败语义：纯门控无注入；条件不齐仅置 Armed(false)，不改写 Ready 结论。
+ *
+ * @return              true = 事项已武装
+ */
+static bool ApplyModule11_CorridorBackend()
+{
+    bool ok = (Item_IsReady(ITEM_M11_CORRIDOR)
+        && g_hSpottedSniperDetour != null
+        && g_bSpottedSniperHooked);
+    Item_SetArmed(ITEM_M11_CORRIDOR, ok);
+    return ok;
+}
+
+/**
+ * 还原走廊事项：解除武装并摘除通知载体
+ *
+ * 载体归模块所有，停用即一并关闭；下次启用重新 Sync。
+ * 失败语义：无（尽力还原；幂等）。
+ */
+static void RestoreModule11_CorridorBackend()
+{
+    Item_SetArmed(ITEM_M11_CORRIDOR, false);
+    SyncDetourEnabled(g_hSpottedSniperDetour, g_bSpottedSniperHooked,
+        true, Hook_SpottedSniper_Post, false, "Module 11");
 }

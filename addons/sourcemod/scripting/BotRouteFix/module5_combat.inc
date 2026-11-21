@@ -145,6 +145,7 @@ static int g_iOffset_NearbyFriendCount = -1;
  * 只定位目标、校验模板并确认可备份，不写入 NOP（写入由 Apply 执行，M4 式分工）。
  * 外来已 NOP 但无基线时直接标事项 FAILED，不允许无基线假装可用。
  * 任一后端失败都返回 false，Init 会把 NOP 事项标记为 FAILED。
+ * 失败语义：任一依赖缺失返回 false，Init 将事项标记 FAILED。
  *
  * @return              true = NOP 事项后端就绪
  */
@@ -222,9 +223,10 @@ static bool PrepModule5_ReloadBackend()
 }
 
 /**
- * 事项后端：闪避 dhook 写
+ * 事项后端：闪避 dhook 写（ITEM_M5_DODGE）
  *
  * 条件 = m_shouldDodge 偏移 + AttackState::OnEnter Detour 挂载。
+ * 失败语义：任一依赖缺失返回 false，Init 将事项标记 FAILED。
  *
  * @return              true = 闪避事项后端就绪
  */
@@ -283,6 +285,7 @@ static bool MountAttackDodgeDetour()
  *
  * 条件 = 全部后撤偏移 + AttackState::OnUpdate Detour 挂载 + IsOutnumbered SDKCall。
  * 任一后端缺失整条后撤停，不允许只跑残血分支。
+ * 失败语义：任一依赖缺失返回 false，Init 将事项标记 FAILED。
  *
  * @return              true = 后撤事项后端就绪
  */
@@ -354,9 +357,10 @@ static bool MountAttackRetreatDetour()
 //========================================================================================
 
 /**
- * 初始化模块 5 的三个独立事项：换弹掩体 NOP / 闪避 dhook 写 / 后撤（整体）
+ * 初始化模块 5 的三个独立事项：换弹掩体 NOP（ITEM_M5_RELOAD）/ 闪避 dhook 写（ITEM_M5_DODGE）/ 后撤（整体，ITEM_M5_RETREAT）
  *
  * 分别准备三条事项链并立即武装；任一失败不拖累其他两条。
+ * 失败语义：全灭时 LogModuleAllFailed + return false；部分成功按事项各自 FAILED，不连带。
  *
  * @return              true = 至少一个事项武装成功
  */
@@ -397,9 +401,12 @@ bool InitModule5_Combat()
 }
 
 /**
- * 动态启用或停用模块 5（幂等；三个事项分别武装、分别还原，互不连带）
+ * 动态启用或停用模块 5（事项 ITEM_M5_RELOAD / ITEM_M5_DODGE / ITEM_M5_RETREAT 的调度入口；幂等；三个事项分别武装、分别还原，互不连带）
  *
- * @param enable        true = 按事项后端就绪情况武装；false = 解除武装并还原资源
+ * 只做调度：只武装 Ready 的事项；Active = OR(Armed)。
+ * 失败语义：无返回值；Apply 内部失败只清对应事项 Armed。
+ *
+ * @param enable        true = 按事项后端就绪情况武装；false = 还原并解除武装
  */
 void EnableModule5_Combat(bool enable)
 {
@@ -436,9 +443,10 @@ void EnableModule5_Combat(bool enable)
 }
 
 /**
- * 还原模块 5（插件卸载）
+ * 还原模块 5（事项 ITEM_M5_RELOAD / ITEM_M5_DODGE / ITEM_M5_RETREAT；插件卸载）
  *
  * 逐事项还原后释放 Detour 句柄；NOP 补丁与钩子全部复位。
+ * 失败语义：无（尽力还原；幂等）。
  */
 void RestoreModule5_Combat()
 {
@@ -596,6 +604,7 @@ void Module5_OnClientDisconnect(int client)
  * AttackState::OnEnter Post：强制 100% 闪避决策
  *
  * 事项 M5 闪避 dhook 写的执行点；只在闪避事项武装时写入。
+ * 失败语义：回调内不判定事项成败；条件不符一律 MRES_Ignored，不拦截原生。
  *
  * @param pThis         AttackState 指针
  * @param hParams       DHook 参数
@@ -641,6 +650,7 @@ public MRESReturn Hook_AttackState_OnEnter_Post(Address pThis, DHookParam hParam
  *
  * 事项 M5 后撤（整体）的执行点；只在后撤事项武装时写入。
  * 触发源优先级：狙击威慑 > 孤身一打多 > 残血；档位由本模块统一裁决。
+ * 失败语义：回调内不判定事项成败；条件不符一律 MRES_Ignored，不拦截原生。
  *
  * @param pThis         AttackState 指针
  * @param hParams       DHook 参数
@@ -842,6 +852,7 @@ void Module5_RequestSniperRetreat(int client)
  *
  * 事项 M5 换弹掩体 NOP 的应用入口；不做定位与校验（那是 Prep 的职责）。
  * 失败时该事项 FAILED，另两项不受影响。
+ * 失败语义：写入失败同步清 Ready 并回滚，事项 FAILED，另两项不受影响。
  *
  * @return              true = NOP 已驻留
  */
@@ -873,6 +884,7 @@ static bool ApplyModule5_ReloadBackend()
  * 应用闪避事项：启用 AttackState::OnEnter Post 钩子
  *
  * 事项 M5 闪避 dhook 写的唯一应用入口；失败时该事项 FAILED，另两项不受影响。
+ * 失败语义：钩子启用失败只清 Armed 保留 Ready，事项待下次 Enable 重试。
  *
  * @return              true = Post 钩子已启用
  */
@@ -896,6 +908,7 @@ static bool ApplyModule5_DodgeBackend()
  * 事项 M5 后撤（整体）的唯一应用入口；所有后端（偏移 + Detour + SDKCall）已在 Init
  * 就绪才允许整条链启用，任一缺失整条后撤停，不允许只跑残血分支。
  * 失败时该事项 FAILED，另两项不受影响。
+ * 失败语义：钩子启用失败只清 Armed 保留 Ready，事项待下次 Enable 重试。
  *
  * @return              true = Pre 钩子已启用
  */
@@ -914,7 +927,9 @@ static bool ApplyModule5_RetreatBackend()
 }
 
 /**
- * 还原换弹掩体 NOP 事项（写回原始字节并解除武装）
+ * 还原换弹掩体 NOP 事项（ITEM_M5_RELOAD；写回原始字节并解除武装）。
+ *
+ * 失败语义：无（幂等；写回 + Armed(false)）。
  */
 static void RestoreModule5_ReloadBackend()
 {
@@ -923,7 +938,9 @@ static void RestoreModule5_ReloadBackend()
 }
 
 /**
- * 还原闪避事项（停用 Post 钩子并解除武装）
+ * 还原闪避事项（ITEM_M5_DODGE；停用 Post 钩子并解除武装）。
+ *
+ * 失败语义：无（幂等；摘钩 + Armed(false)）。
  */
 static void RestoreModule5_DodgeBackend()
 {
@@ -932,7 +949,9 @@ static void RestoreModule5_DodgeBackend()
 }
 
 /**
- * 还原后撤事项（停用 Pre 钩子并解除武装）
+ * 还原后撤事项（ITEM_M5_RETREAT；停用 Pre 钩子并解除武装）。
+ *
+ * 失败语义：无（幂等；摘钩 + Armed(false)）。
  */
 static void RestoreModule5_RetreatBackend()
 {
