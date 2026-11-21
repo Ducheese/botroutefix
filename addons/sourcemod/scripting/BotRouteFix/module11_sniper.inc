@@ -368,7 +368,7 @@ public MRESReturn Hook_SpottedSniper_Post(Address pThis)
     }
 
     Address pMe = LoadAddressFromAddress(pThis + view_as<Address>(g_iOffset_ChatterMe));
-    int spotter = Sniper_ResolveClient(pMe);
+    int spotter = ResolveBotClient(pMe);
     if (!IsBot(spotter, true))
     {
         return MRES_Ignored;
@@ -501,31 +501,6 @@ static void RestoreModule11_CorridorBackend()
  * 狙击手判定统一走 sdkcalls.inc 的 `IsSniper` 总入口（引擎真值优先 + 名册回退，
  * 人机通用）。本文件不再自带判定实现，三个调用点直接调总入口。
  */
-
-/**
- * 事项 M11 corridor danger 的实体指针反解：从 m_me 解析出客户端索引
- *
- * 空指针或找不到对应 Bot 时返回 -1。
- */
-static int Sniper_ResolveClient(Address pMe)
-{
-    if (pMe == Address_Null)
-    {
-        return -1;
-    }
-
-    for (int i = 1; i <= MaxClients; i++)
-    {
-        if (IsBot(i, true))
-        {
-            if (GetEntityAddress(i) == pMe)
-            {
-                return i;
-            }
-        }
-    }
-    return -1;
-}
 
 /**
  * 事项 M11 corridor danger 的路径 2：从瞬时感知威胁队列回溯狙击手目标

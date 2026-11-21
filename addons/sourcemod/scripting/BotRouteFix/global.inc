@@ -22,6 +22,13 @@
 // 沉降契约的唯一出处：模块 3(软衰减) / 模块 8(排队钉刺) / 模块 11(走廊钉刺) 共用
 #define DANGER_DECAY_RATE_SEC       120.0
 
+// 引擎 CCSBot 任务枚举原值（cs_bot.h TaskType）：任务常量唯一出处，M5/M6/M12/M16 共用；
+// 各模块只消费不定义，Prep 亦不校验它（原值永真）
+#define BOT_TASK_PLANT_BOMB           1       // 引擎原生任务枚举：PLANT_BOMB (下包任务)
+#define BOT_TASK_DEFUSE_BOMB          3       // 引擎原生任务枚举：DEFUSE_BOMB (拆包任务)
+#define BOT_TASK_MOVE_TO_SNIPER_SPOT  19      // 引擎原生任务枚举：MOVE_TO_SNIPER_SPOT (狙击手前往架枪点)
+#define BOT_TASK_ESCAPE_FROM_BOMB     9       // 引擎原生任务枚举：ESCAPE_FROM_BOMB (逃离炸弹)
+
 //========================================================================================
 // HANDLES & GLOBAL VARIABLES
 //========================================================================================

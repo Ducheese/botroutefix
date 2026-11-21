@@ -244,7 +244,7 @@
 > 事项 = 一个用户可见、不可分割的战术行为；它下面的所有机制、所有后端都只是这个事项的条件。
 > **任一后端缺失 → 整个事项失败，不允许另一半继续执行。**
 
-### 21 件事项
+### 22 件事项
 
 | 模块 | 数量 | 事项（底层物理机制标签，对齐 `items.inc`） |
 | :--- | :---: | :--- |
@@ -263,6 +263,7 @@
 | M13 | 1 | `M13 sniper buy formula patch` |
 | M14 | 1 | `M14 defend-rush formula patch` |
 | M15 | 1 | `M15 hide duration dhook writes` |
+| M16 | 1 | `M16 escape weapon dhook & SDKCall` |
 
 ### 四态
 
@@ -318,6 +319,8 @@ MODULE X ... PRIMITIVES / DETOUR & HOOKS / ITEM APPLY / RESTORE BACKENDS
 ```
 
 调用顺序从上往下可读：`Prep → Mount → Lifecycle → Public → Events → Hooks → Apply/Restore → Validation`。被调用者尽量出现在调用者附近（如 M4 的 `MountHuntStateDetour` 紧跟 `PrepModule4_HuntBackend`），而不是扔在文件尾。
+
+- **引擎级常量上收 `global.inc`**：任务枚举等引擎原值只在 `global.inc` 的 DEFINES 区定义一次并注明共用方（如任务常量唯一出处，M5/M6/M12/M16 共用）；模块只消费不定义，更不得直接复用他模块文件的 `#define`（include 顺序不可靠，换序即 `undefined symbol`）。模块私有阈值留在本文件。
 
 ### 函数命名
 
@@ -410,7 +413,7 @@ addons\sourcemod\
         ├── global.inc                全局常量、宏定义、环境架构识别与公共状态
         ├── memory.inc                底层内存安全补丁抽象与字节序列写入管理 (MemoryPatch)
         ├── helpers.inc               Bot 实体判定、Morale 属性与通用内存数据读取
-        ├── items.inc                 21 件事项能力表与四态计算（唯一状态源）
+        ├── items.inc                 22 件事项能力表与四态计算（唯一状态源）
         ├── sdkcalls.inc              引擎级虚函数/静态函数底层调用封装 (SDKCall Hub)
         ├── nav_measure.inc             真实地面行走距离无损测量子系统 (NavMeasure，M9/M10 共用)
         ├── events.inc                游戏事件监听与多模块生命周期同步分发 (Events Hub)
@@ -424,13 +427,14 @@ addons\sourcemod\
         ├── module6_noise.inc         [模块 6] 噪声出击统一梯度 + 下包 OPPO 守卫 (Noise Interception + Plant OPPO Guard)
         ├── module7_escort.inc        [模块 7] T 包匪贴身保镖花名册 (Carrier Escort Roster)
         ├── module8_queue.inc         [模块 8] 门口礼貌排队打碎与死锁强切 Hunt (Polite Queue Breaker & Deadlock Hunt Transition)
-        ├── module9_loosefetch.inc    [模块 9] 掉包 Top3 抢包花名册 + 抢包 OPPO 守卫 (Loose-Bomb Fetch Roster + Fetch OPPO Guard)
+        ├── module9_loosefetch.inc    [模块 9] T 掉包 Top3 抢包花名册 + 抢包 OPPO 守卫 (Loose-Bomb Fetch Roster + Fetch OPPO Guard)
         ├── module10_defuse.inc       [模块 10] CT 首席拆包员 (Chief Defuser)
         ├── module11_sniper.inc       [模块 11] 狙击手威慑与走廊加压 (Sniper Deterrence & Corridor Danger)
-        ├── module12_snipercamp.inc     [模块 12] 狙击 camp 概率重构 (60-10*M, OnEnter 重骰门)
+        ├── module12_snipercamp.inc   [模块 12] 狙击 camp 概率重构 (60-10*M, OnEnter 重骰门)
         ├── module13_sniperbuy.inc    [模块 13] 随机买狙概率重构 (50-10*M, 汇编补丁)
         ├── module14_defendrush.inc   [模块 14] 开局前沿架枪概率重构 (40-10*M, defendRushChance)
-        └── module15_hideduration.inc [模块 15] Hide 蹲守时长士气缩放 + 紧急短蹲入口 (m_duration *= 1-0.15*M / RequestShort=1s)
+        ├── module15_hideduration.inc [模块 15] Hide 蹲守时长士气缩放 + 紧急短蹲入口 (m_duration *= 1-0.15*M / RequestShort=1s)
+        └── module16_escape.inc       [模块 16] 逃跑切枪纪律 (Escape Knife→Gun on Contact)
 ```
 
 ---
@@ -445,16 +449,16 @@ addons\sourcemod\
 | `sm_brf_debug`   | `"0"`     | 是否开启各模块内部逐行调试日志与调试可视化 |
 
 #### 模块规则说明
-通过 `sm_brf_modules` 单一参数即可灵活管理 15 个战术模块，支持以下用法：
-- **默认全开**：`"all"` 或 `"*"`（1~15 号全部开启，开箱即用推荐）；
+通过 `sm_brf_modules` 单一参数即可灵活管理 16 个战术模块，支持以下用法：
+- **默认全开**：`"all"` 或 `"*"`（1~16 号全部开启，开箱即用推荐）；
 - **排除模式（做减法）**：以 `-` 开头，在全开基准上关闭指定项。如 `"-5, -13"`（全开，仅关闭模块 5 和 13），`"all, -8-10"`（全开，排除 8~10 号）；
 - **指定模式（做加法）**：输入正整数或区间，仅开启列出的项。如 `"8, 9"`（仅开启模块 8 和 9，其余全关），`"1-4, 7"`；
-- **一键全关**：`"none"`、`"off"`、`"0"` 或空串（15 个模块全部停用，底层补丁与钩子全量卸载回原生）；
+- **一键全关**：`"none"`、`"off"`、`"0"` 或空串（16 个模块全部停用，底层补丁与钩子全量卸载回原生）；
 - **从左到右顺序覆盖**：规则从左到右依次解析执行。例如 `"all, 0"` 会先全开再全关（最终全关）；`"0, 5"` 或 `"none, 5"` 会先执行全关再开启 5 号（最终仅 5 号开启）；反之 `"5, 0"` 或 `"5, none"` 最终结果为全关；
 - **非法规则安全回退**：若输入无法识别任何有效模块编号（如拼写错误 `"al"`、`"abc"`、残缺的 `"1-"` 等），系统将记录一条 `LogError` 告警并安全回退为默认全开 `"all"`，彻底杜绝所有模块被静默全关；
 - **空格与符号折叠**：符号与数字之间被空格隔开的写法会被自动压紧，`"- 5"` 等同于 `"-5"`，`"1 - 4"` 等同于 `"1-4"`；`"all -5"` 这类合法写法不受影响；
 - **数字严格校验**：仅接受纯数字与区间，`"abc-5"`、`"5-abc"`、`"5abc"` 等包含非数字字符的写法一律视为非法并回退 `"all"`；
-- **越界处理**：部分越界自动截断到 1~15（`"15-20"` 视为 15，`"0-5"` 视为 1~5）；完全越界（`"99"`、`"20-30"`、`"-99"`）视为无效 Token，若整条规则无任何有效项则回退 `"all"`；
+- **越界处理**：部分越界自动截断到 1~16（`"16-20"` 视为 16，`"0-5"` 视为 1~5）；完全越界（`"99"`、`"20-30"`、`"-99"`）视为无效 Token，若整条规则无任何有效项则回退 `"all"`；
 - **容错设计**：支持逗号、分号或空格分隔，区间支持 `-` 与 `~`，输入不区分大小写，变更即刻热生效；规则日志仅在规则实际变化时打印，换图不会重复刷屏。
 
 > 旧总开关 `sm_botroutefix_enable`（历史名）已彻底移除：事件总线不再做任何全局粗暴拦截，
@@ -463,7 +467,7 @@ addons\sourcemod\
 ### 控制台指令
 | 指令 | 权限 | 说明 |
 | :--- | :--- | :--- |
-| `sm_brf_status` | 管理员 (`ADMFLAG_GENERIC`) | 分两段：前半 15 模块启停行（`ACTIVE` 光杆 counts，`DEGRADED` / `FAILED` 点名 failed 事项居中、counts 永远挂尾，`INACTIVE` 显示 `disabled by rule`；静态士气公式在模块名里）；后半 `Live`（与上分隔行等长）：全局炸弹三态 `PLANTED` / `DROPPED` / `CARRIED by <人> (士气/身份)`（不显示包点）+ 士气两行（`T n bots alive (AVG Morale: +x 名)`，avg 只统计存活；`T Morale: [...]` 全员名单不筛存活；偏移丢失时显示 `unavailable`）+ 各模块快照行（`M01 CT Guard` / `M02 锁+延迟五变种` / `M03~M15 计数器与名册` + `M12/M13/M14` per-bot 概率名单；仅 `ACTIVE` / `DEGRADED`；per-bot 现算值不进 live）。累积计数器单调递增、换图不清零 |
+| `sm_brf_status` | 管理员 (`ADMFLAG_GENERIC`) | 分两段：前半 16 模块启停行（`ACTIVE` 光杆 counts，`DEGRADED` / `FAILED` 点名 failed 事项居中、counts 永远挂尾，`INACTIVE` 显示 `disabled by rule`；静态士气公式在模块名里）；后半 `Live`（与上分隔行等长）：全局炸弹三态 `PLANTED` / `DROPPED` / `CARRIED by <人> (士气/身份)`（不显示包点）+ 士气两行（`T n bots alive (AVG Morale: +x 名)`，avg 只统计存活；`T Morale: [...]` 全员名单不筛存活；偏移丢失时显示 `unavailable`）+ 各模块快照行（`M01 CT Guard` / `M02 锁+延迟五变种` / `M03~M16 计数器与名册` + `M12/M13/M14` per-bot 概率名单；仅 `ACTIVE` / `DEGRADED`；per-bot 现算值不进 live）。累积计数器单调递增、换图不清零 |
 
 ### 初始化日志口径（Initialization 契约）
 
@@ -473,7 +477,7 @@ addons\sourcemod\
   - 只读解析点：`Resolved ... @ ...`；偏移/SDKCall 点：`... verified (...)`（无地址可打，如 detour 句柄）；
   - 纯 hook/名册：无检查点行（挂钩失败走事项 FAILED 错误行）；
   - **武装确认统一走 `LogModuleArmed`**：`[Module N] <label> items armed (<detail>) [<arch>]`。
-  - `<label>` 必须为 1~2 个英文单词的标准纯短名（首字母大写，严禁带模块编号前缀、公式或长变量，全库标准：`Defense`, `Bombsite`, `Danger decay`, `HuntState`, `Combat`, `Noise`, `Escort`, `Queue`, `Fetch`, `Defuse`, `Corridor`, `Sniper camp`, `Sniper buy`, `Defend rush`, `Hide duration`）；
+  - `<label>` 必须为 1~2 个英文单词的标准纯短名（首字母大写，严禁带模块编号前缀、公式或长变量，全库标准：`Defense`, `Bombsite`, `Danger decay`, `HuntState`, `Combat`, `Noise`, `Escort`, `Queue`, `Fetch`, `Defuse`, `Corridor`, `Sniper camp`, `Sniper buy`, `Defend rush`, `Hide duration`, `Escape`）；
   - `<detail>`：多事项列名（如 `guard=1, anti-rush=1`），单事项成功时严格传纯数字 `"1"`（全败走 LogModuleAllFailed 拦截，永不传 `"0"` 或三元表达式）。
 - **卸载日志统一口径 (Restore 契约)**：各模块 `RestoreModule*()` 在还原完成后必须统一输出 `[BotRouteFix] [Module N] <ShortName> <设施> safely restored.`（纯补丁为 `patches safely restored to original bytes.`，纯钩子为 `hooks safely restored.`，混合为 `hooks and memory patches safely restored.`，纯数据重置为 `state reset (no persistent patch).`），禁止遗漏。
 - **变体**：部分武装 → `LogModulePartial`（`Partial activation (...)`）；事项全灭 → `LogModuleAllFailed`（`All items failed; module will report FAILED.`）；失败原因各事项就地 `LogError`。
@@ -482,7 +486,7 @@ addons\sourcemod\
   - 门禁口径：业务写入必守卫（首行或分支入口均可）；纯观测（如 M4 visual 数组）或跨模块信号（如 M11 侦察向 M5 发撤退请求）走消费方门禁；多租户共享宿主钩子（如 M15 借钩宿主）按各租户业务分支分别守卫，杜绝为字面形式强加首行粗暴短路；
   - 运行期日志：前缀统一 `[BotRouteFix] [Module N]`；`DebugLog` 只记离散事件/状态变化（选举/拾取/安放/重定向/放行/认领），不记每 tick 求值——M4 的 `HuntState::OnUpdate` pre/post 刻意零输出（高频 tick），它的可观测面是 status 的 `total claims` 计数器；`LogError` 只用于不变量破坏（如 M7 非法名册数），普通业务分支一律 `DebugLog`；新增 Hook 回调必须带一行说明决策的 `DebugLog`，不留注释掉的死代码。
 - **准备期与运行期的门禁分界**：准备期输出（Prep/Mount/Apply/Restore/Enable 内的句柄创建、签名绑定、基线备份、补丁落子、`verified`/`Resolved` 确认行）走 Init 口径，**无条件输出，不受 `sm_brf_debug` 约束**；运行期离散事件（Hook 回调/事件响应内的逐条决策，如持包人变更、锁落子/还原、士气处置切换）**必须走 `DebugLog`，受 debug 约束**。M2 锁落子/还原与 M6 逐条拦截/放行的 `DebugLog` 属后者（运行期逐 noise 事件），不是准备期，门控正确。
-- **各模块检查点清单**：M1 守点/反冲各 1 个写入点；M2 单例指针 + 时钟偏移 + 锁写入点；M3 危险度偏移 + nav 解析 + 状态重置；M4 随机旁路写入点 + 搜寻偏移；M5 reload 写入点 + 闪避偏移 + 后撤后端；M6 士气/噪声/Task/Disp 偏移 + SetDisposition SDKCall + 双 Detour；M7 Follow/StopFollowing SDKCalls + 士气偏移 + FollowMeme ret 补丁；M8 排队偏移 + 死锁 SDKCall；M9 State/Fetch/Disp 偏移 + SetDisposition SDKCall + NavMeasure + 双 Detour；M10 无（纯 hook/名册）；M11 走廊对抗偏移；M12 蹲守偏移 + 6 个 bypass 点；M13 rewrite/cave 二选一（按架构）；M14 4 站点 + 1 常量池；M15 隐藏时长偏移。
+- **各模块检查点清单**：M1 守点/反冲各 1 个写入点；M2 单例指针 + 时钟偏移 + 锁写入点；M3 危险度偏移 + nav 解析 + 状态重置；M4 随机旁路写入点 + 搜寻偏移；M5 reload 写入点 + 闪避偏移 + 后撤后端；M6 士气/噪声/Task/Disp 偏移 + SetDisposition SDKCall + 双 Detour；M7 Follow/StopFollowing SDKCalls + 士气偏移 + FollowMeme ret 补丁；M8 排队偏移 + 死锁 SDKCall；M9 State/Fetch/Disp 偏移 + SetDisposition SDKCall + NavMeasure + 双 Detour；M10 无（纯 hook/名册）；M11 走廊对抗偏移；M12 蹲守偏移 + 6 个 bypass 点；M13 rewrite/cave 二选一（按架构）；M14 4 站点 + 1 常量池；M15 隐藏时长偏移；M16 EquipKnife 签名 + EquipBestWeapon SDKCall + 1 自有 Detour。
 
 ---
 
@@ -523,7 +527,7 @@ addons\sourcemod\
 ### 模块 12 借用模块 15 单 Detour 协作契约 (Module 12 Detour Borrowing Contract)
 - 模块 12（狙击 Camp 门禁）与模块 15（Hide 蹲守时长缩放）在底层均需要拦截 `HideState::OnEnter`。为杜绝在同一虚函数/函数签名上挂载双重 Detour 导致的钩子递归重入、执行顺序不确定及调用栈消耗，模块 12 不单独注册 Detour，而是直接借用模块 15 的 Post Detour 作为执行宿主。
 - 协作契约：在模块 15 Detour 入口首先调用 `Module12_SniperCamp(client)`；若模块 12 判定为高士气前压并递延重定向至 `Hunt`，则返回 `true`，模块 15 随即短路返回，跳过无意义的时长缩放计算，各模块职责清晰解耦。
-- **底层启用态协同（`SyncHideDurationDetourState`）**：底层钩子只要任一借钩方（M12 / M15）规则开启就必须保持启用，只有双方全部关闭才真正 Disable。模块 12 的 `EnableModule12_SniperCamp()` 与模块 15 的业务态变更都会调用该同步函数，并在宿主状态变化后回调 `Module12_OnHostStateChanged()` 重算 M12 事项。
+- **底层启用态协同（`SyncHideDurationDetourState`）**：底层钩子只要任一借钩方（M9 / M12 / M15）规则开启就必须保持启用，只有全部关闭才真正 Disable。模块 12 的 `EnableModule12_SniperCamp()` 与模块 15 的业务态变更都会调用该同步函数。
 - **全成或全败**：M12 唯一事项 = 6 处补丁 + 宿主钩子 + Hunt SDK + morale。宿主不可用时不武装 6 处补丁；补丁任一站点失败立即全部回滚 → M12 FAILED，绝不出现“补丁驻留但门禁不工作”的半态。
 
 ### 后撤三档制跨模块契约 (Retreat Tier Contract: M5 × M11 × M15)
@@ -545,8 +549,8 @@ addons\sourcemod\
 - **残局热重载状态同步（已显式移除）**：旧版曾在 `OnPluginStart` 中使用 `SyncMidRoundState` 探查当前残局下包与地面 C4 状态。模块化重构时已正式移除该复杂检测。若管理员在下包残局中途热重载插件，新插件实例不会在中途补发决策状态，将在下一回合 `round_start` 时完全自然自愈。
 
 ### 模块启动与事项解析策略 (Soft Startup & Item Resolution)
-- 主插件入口不再对 15 个模块做链式 fail-fast。每个 `InitModule*()` 独立执行：Gamedata 签名失效、偏移未命中或二进制模板不匹配只让对应事项 `Ready=false`，插件继续加载。
+- 主插件入口不再对 16 个模块做链式 fail-fast。每个 `InitModule*()` 独立执行：Gamedata 签名失效、偏移未命中或二进制模板不匹配只让对应事项 `Ready=false`，插件继续加载。
 - `InitSDKCalls()` 拆成 8 个独立准备函数；缺失的 SDKCall 只让其消费方事项 FAILED（M5 后撤 / M6 下包 OPPO / M7 保镖 / M8 死锁 Hunt / M9 抢包 OPPO / M9/M10/M11 nav / M11/M12 名单 / M12 camp），不再 `SetFailState`。
-- 启动阶段：15 个模块的 `InitModule*()` 解析后端后立即按 ConVar 初始值（默认 `all`）武装；`OnPluginStart` 末尾 `ApplyModulesConfig()` 再应用同一默认；`OnConfigsExecuted` 按 cfg 实际规则增量收敛。规则关闭的模块会在启动瞬间短暂武装，cfg 生效后回滚。
-- 这是当前**统一**的生命周期：Init/Enable 负责武装，Apply 负责规则收敛。若未来要改成“Init 只解析、Apply 唯一武装入口”，必须 15 个模块一起迁移；不做 M1/M2 单独延迟的半迁移。
+- 启动阶段：16 个模块的 `InitModule*()` 解析后端后立即按 ConVar 初始值（默认 `all`）武装；`OnPluginStart` 末尾 `ApplyModulesConfig()` 再应用同一默认；`OnConfigsExecuted` 按 cfg 实际规则增量收敛。规则关闭的模块会在启动瞬间短暂武装，cfg 生效后回滚。
+- 这是当前**统一**的生命周期：Init/Enable 负责武装，Apply 负责规则收敛。若未来要改成“Init 只解析、Apply 唯一武装入口”，必须 16 个模块一起迁移；不做 M1/M2 单独延迟的半迁移。
 - 解析失败不会杀死其他模块；`g_bBombPlanted` 与事件总线始终运行，不随任何模块启停断流。

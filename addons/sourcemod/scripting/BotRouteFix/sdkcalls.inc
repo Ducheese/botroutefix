@@ -21,6 +21,7 @@ Handle g_hSDKCall_Hunt             = null;
 Handle g_hSDKCall_ResetStuckMonitor = null;
 Handle g_hSDKCall_SetDisposition   = null;
 Handle g_hSDKCall_IsSniper         = null;
+Handle g_hSDKCall_EquipBestWeapon  = null;
 
 //========================================================================================
 // PER-CALL PREPARATION
@@ -202,6 +203,23 @@ static bool PrepSDKCall_IsSniper()
 }
 
 /**
+ * 准备 M16 逃跑切枪的 EquipBestWeapon 后端；缺失则 M16 事项 FAILED。
+ */
+static bool PrepSDKCall_EquipBestWeapon()
+{
+    StartPrepSDKCall(SDKCall_Entity);
+    PrepSDKCall_SetFromConf(g_hGameConf, SDKConf_Signature, "CCSBot_EquipBestWeapon");
+    PrepSDKCall_AddParameter(SDKType_Bool, SDKPass_Plain);
+    g_hSDKCall_EquipBestWeapon = EndPrepSDKCall();
+    if (g_hSDKCall_EquipBestWeapon == null)
+    {
+        LogError("[BotRouteFix] [SDKCalls] CCSBot_EquipBestWeapon unavailable (M16 escape item will FAIL).");
+        return false;
+    }
+    return true;
+}
+
+/**
  * 初始化底层 SDKCall 调用表（逐项准备，汇总返回，不 fail-fast）
  */
 bool InitSDKCalls()
@@ -222,6 +240,7 @@ bool InitSDKCalls()
     if (!PrepSDKCall_ResetStuckMonitor()) allReady = false;
     if (!PrepSDKCall_SetDisposition()) allReady = false;
     if (!PrepSDKCall_IsSniper())       allReady = false;
+    if (!PrepSDKCall_EquipBestWeapon()) allReady = false;
 
     if (allReady)
     {
@@ -294,6 +313,12 @@ void CleanupSDKCalls()
     {
         delete g_hSDKCall_IsSniper;
         g_hSDKCall_IsSniper = null;
+    }
+
+    if (g_hSDKCall_EquipBestWeapon != null)
+    {
+        delete g_hSDKCall_EquipBestWeapon;
+        g_hSDKCall_EquipBestWeapon = null;
     }
 }
 
@@ -452,6 +477,27 @@ stock bool BotSetDisposition(int bot, int disposition)
     }
 
     SDKCall(g_hSDKCall_SetDisposition, bot, disposition);
+    return true;
+}
+
+/**
+ * 让指定 Bot 立即换出最佳武器（CCSBot::EquipBestWeapon）。
+ *
+ * mustEquip=true 绕过节流（m_equipTimer / minEquipInterval）；兜底无更好武器时会尾调
+ * EquipKnife。调用方若在 EquipKnife 钩内调用，必须自带重入闸（M16 已实现）。
+ *
+ * @param bot           Bot 客户端索引（必须是有效 Bot）
+ * @param mustEquip     true = 忽略节流立即换
+ * @return              是否成功发出 SDKCall
+ */
+stock bool BotEquipBestWeapon(int bot, bool mustEquip)
+{
+    if (g_hSDKCall_EquipBestWeapon == null || !IsBot(bot, true))
+    {
+        return false;
+    }
+
+    SDKCall(g_hSDKCall_EquipBestWeapon, bot, mustEquip);
     return true;
 }
 

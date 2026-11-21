@@ -7,16 +7,16 @@
 // MODULE RULES / 模块规则调度系统
 //
 // 编码规则：
-//   - "all" / "*" / "1-15"        : 1~15 全开 (默认基线)
-//   - "none" / "off" / "0" / ""   : 1~15 全关
+//   - "all" / "*" / "1-16"        : 1~16 全开 (默认基线)
+//   - "none" / "off" / "0" / ""   : 1~16 全关
 //   - 排除模式 (以 '-' 开头项)    : "all, -5, -13" 或 "-5, -13" (以全开为基线，排除指定模块)
 //   - 指定模式 (纯正整数或区间)   : "1, 2, 5" 或 "1-4, 7, 9" (以全关为基线，仅开启指定模块)
 //   - 支持逗号、分号、空格混合分隔，区间支持 '-' 或 '~'
 //========================================================================================
 
-#define TOTAL_TACTICAL_MODULES      15
+#define TOTAL_TACTICAL_MODULES      16
 
-// 模块规则意图缓存 (索引 1..15 对应模块 1..15；句柄 g_cvModules 上收 global.inc，与 g_cvDebug 同处)
+// 模块规则意图缓存 (索引 1..16 对应模块 1..16；句柄 g_cvModules 上收 global.inc，与 g_cvDebug 同处)
 // 注意：此数组仅为规则意图缓存（仅记录 ConVar 规则期望该模块开启或关闭，供遥测标注区分 "disabled by rule" 与 "activation failed"），
 // 严禁作为各模块实际运行时业务判据！真实运行态恒以各模块私有的 g_bModuleX_Active / 运行时函数为唯一真理源。
 static bool g_bModuleConfigActive[TOTAL_TACTICAL_MODULES + 1];
@@ -24,7 +24,7 @@ static bool g_bModuleConfigActive[TOTAL_TACTICAL_MODULES + 1];
 /**
  * 查询指定模块是否被模块规则启用
  *
- * @param modIdx        模块编号 (1..15)
+ * @param modIdx        模块编号 (1..16)
  * @return              true 为规则启用，false 为规则禁用
  */
 bool IsModuleEnabledByRule(int modIdx)
@@ -221,10 +221,10 @@ static bool ParseTokenRange(const char[] token, bool &isNegative, int &modStart,
 }
 
 /**
- * 解析模块规则字符串，输出每个模块的目标开关状态 (1..15)
+ * 解析模块规则字符串，输出每个模块的目标开关状态 (1..16)
  *
  * @param rawConfig     输入规则字符串 (例如 "all", "all, -5, -13", "1-4, 7, 9", "-5")
- * @param moduleStates  输出 1..15 的布尔数组
+ * @param moduleStates  输出 1..16 的布尔数组
  */
 void ParseModulesRule(const char[] rawConfig, bool moduleStates[TOTAL_TACTICAL_MODULES + 1])
 {
@@ -289,7 +289,7 @@ void ParseModulesRule(const char[] rawConfig, bool moduleStates[TOTAL_TACTICAL_M
                 {
                     // 只有与 [1..TOTAL_TACTICAL_MODULES] 存在交集才算有效模块 Token。
                     // 否则 "99" / "20-30" 会被误认为合法正向配置绕过硬回退，
-                    // 基线按白名单定为全关，而 Pass 2 又因越界跳过 —— 15 个模块被静默全灭。
+                    // 基线按白名单定为全关，而 Pass 2 又因越界跳过 —— 16 个模块被静默全灭。
                     if (e >= 1 && s <= TOTAL_TACTICAL_MODULES)
                     {
                         if (isNeg)
@@ -439,7 +439,7 @@ void ApplyModulesConfig()
     // 日志去重：启动时 OnPluginStart 与 OnConfigsExecuted 会连续调用同一份规则，
     // 仅在规则真正变化时打印三行摘要，避免换图时重复刷屏。
     // 用显式标志位而非字符串初值判"首次"，否则规则被显式设为空串（语义=全关）时
-    // 会因 "" == "" 被误判为"未变化"，导致 15 个模块静默关闭且无任何日志。
+    // 会因 "" == "" 被误判为"未变化"，导致 16 个模块静默关闭且无任何日志。
     static char s_lastRule[128];
     static bool s_bRuleLogged = false;
 
@@ -486,6 +486,7 @@ void ApplyModulesConfig()
     EnableModule13_SniperBuy(active[13]);
     EnableModule14_DefendRush(active[14]);
     EnableModule15_HideDuration(active[15]);
+    EnableModule16_Escape(active[16]);
 
     // 协同同步 M9/M12/M15 借钩宿主挂载状态
     SyncHideDurationDetourState();

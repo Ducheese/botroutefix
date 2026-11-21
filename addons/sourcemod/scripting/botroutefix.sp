@@ -18,13 +18,14 @@
 //   - BotRouteFix/module6_noise.inc   : [模块 6] 噪声出击统一梯度 (Noise Interception)
 //   - BotRouteFix/module7_escort.inc  : [模块 7] T 包匪贴身保镖花名册 (Carrier Escort Roster)
 //   - BotRouteFix/module8_queue.inc   : [模块 8] 礼貌排队打碎与死锁强切 Hunt (Queue Breaker & Deadlock Hunt Transition)
-//   - BotRouteFix/module9_loosefetch.inc : [模块 9] 掉包 Top3 抢包花名册 (Loose Fetch Roster, NoticeLooseBomb Pre)
+//   - BotRouteFix/module9_loosefetch.inc : [模块 9] T 掉包 Top3 抢包花名册 (Loose Fetch Roster, NoticeLooseBomb Pre)
 //   - BotRouteFix/module10_defuse.inc : [模块 10] CT 首席拆包员 (Chief Defuser, IsDoingScenario Pre)
 //   - BotRouteFix/module11_sniper.inc : [模块 11] 狙击手威慑与走廊加压 (Sniper Deterrence & Corridor Danger)
 //   - BotRouteFix/module12_snipercamp.inc : [模块 12] 狙击 camp 概率重构 (60-10*M, NOP+DHook重骰)
 //   - BotRouteFix/module13_sniperbuy.inc : [模块 13] 随机买狙概率重构 (50-10*M, sniperRifleChance)
 //   - BotRouteFix/module14_defendrush.inc : [模块 14] 开局前沿架枪概率重构 (40-10*M, defendRushChance)
 //   - BotRouteFix/module15_hideduration.inc : [模块 15] Hide 蹲守时长士气缩放 (m_duration *= 1-0.15*M)
+//   - BotRouteFix/module16_escape.inc : [模块 16] 逃跑切枪纪律 (Escape Knife-to-Gun on Contact)
 //========================================================================================
 
 #pragma semicolon 1
@@ -57,6 +58,7 @@
 #include "BotRouteFix/module13_sniperbuy"
 #include "BotRouteFix/module14_defendrush"
 #include "BotRouteFix/module15_hideduration"
+#include "BotRouteFix/module16_escape"
 #include "BotRouteFix/visuals"
 #include "BotRouteFix/module_manager"
 #include "BotRouteFix/events"
@@ -141,6 +143,7 @@ public void OnPluginStart()
     InitModule12_SniperCamp();
     InitModule13_SniperBuy();
     InitModule14_DefendRush();
+    InitModule16_Escape();
 
     // 6. Initialize Module Rules and connect ConVar change hook
     InitModuleManager();
@@ -168,6 +171,7 @@ public void OnPluginEnd()
 {
     // Safely restore business modules in reverse order
     // 借钩宿主原则：M12 借用 M15 的 OnEnter 钩子，必须借用方 M12 先还（还原内存补丁与借用态），宿主 M15 后退（销毁 Detour 句柄）
+    RestoreModule16_Escape();
     RestoreModule12_SniperCamp();
     RestoreModule15_HideDuration();
     RestoreModule14_DefendRush();

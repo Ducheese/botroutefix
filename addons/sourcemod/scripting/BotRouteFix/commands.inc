@@ -200,7 +200,7 @@ static void PrintChanceRoster(int client, int module, const char[] tag, bool ctO
 
 /**
  * 服务端状态遥测（sm_brf_status），分两段：
- *   前半 = 15 模块启停状态（ACTIVE 光杆 counts，DEGRADED/FAILED 点名 failed 事项居中、
+ *   前半 = 16 模块启停状态（ACTIVE 光杆 counts，DEGRADED/FAILED 点名 failed 事项居中、
  *          counts 挂尾，INACTIVE 显示 disabled by rule；不带 live，不报 active 名单）；
  *   后半 = Live：全局快照（炸弹三态 + 双方士气两行，与任何模块开关无关）+
  *          各模块快照 live（仅 ACTIVE/DEGRADED 模块；per-bot 现算值不进 live，
@@ -235,14 +235,14 @@ public Action Command_Status(int client, int args)
     ReplyToCommand(client, "[BotRouteFix] Modules Rule  : %s", modulesRule);
     ReplyToCommand(client, "[BotRouteFix] ------------------------------------------------------------");
 
-    // 前半：15 模块启停状态（只报 failed 事项名居中、counts 挂尾；静态士气公式在名字里）。
+    // 前半：16 模块启停状态（只报 failed 事项名居中、counts 挂尾；静态士气公式在名字里）。
     PrintModuleState(client, 1, "CT Guard Chance (70-10*M) / Anti-Rush");
     PrintModuleState(client, 2, "T Plant Clock (30+10*M) / Site Lock");
     PrintModuleState(client, 3, "NavArea Danger Soft-Decay");
     PrintModuleState(client, 4, "Hunt Target Claim / 45s Bypass");
     PrintModuleState(client, 5, "Combat Dodge / Reload Hide / Retreat");
     PrintModuleState(client, 6, "Noise Interception & OPPO Guard (M<0/500/1000/2000/3000)");
-    PrintModuleState(client, 7, "Carrier Escort & Pointman (3-M)");
+    PrintModuleState(client, 7, "T Carrier Escort & Pointman (3-M)");
     PrintModuleState(client, 8, "Polite Queue Breaker / Deadlock Hunt");
     PrintModuleState(client, 9, "T Loose-Bomb Fetch Roster & OPPO Guard");
     PrintModuleState(client, 10, "CT Chief Defuser");
@@ -251,6 +251,7 @@ public Action Command_Status(int client, int args)
     PrintModuleState(client, 13, "Sniper Buy Chance (50-10*M)");
     PrintModuleState(client, 14, "Defend Rush Chance (40-10*M)");
     PrintModuleState(client, 15, "Hide Duration Scaling x(1-0.15*M)");
+    PrintModuleState(client, 16, "Escape Knife-to-Gun on Contact");
 
     // Live 分隔行与上分隔行等长（总长 74）：前缀 + 27×- + " Live " + 27×-。
     ReplyToCommand(client, "[BotRouteFix] --------------------------- Live ---------------------------");
@@ -558,6 +559,12 @@ public Action Command_Status(int client, int args)
         Format(live, sizeof(live), "total %d rescaled, %d short",
             Module15_GetTotalHideRescaled(), Module15_GetTotalShortHides());
         ReplyToCommand(client, "[BotRouteFix] [Live] M15 | %s", live);
+    }
+
+    if (ModuleHasLive(16))
+    {
+        Format(live, sizeof(live), "total %d weapons drawn", Module16_GetTotalEscapeArmed());
+        ReplyToCommand(client, "[BotRouteFix] [Live] M16 | %s", live);
     }
 
     ReplyToCommand(client, "[BotRouteFix] ============================================================");

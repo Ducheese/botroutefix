@@ -64,8 +64,6 @@
 #define SNIPERCAMP_CHANCE_STEP        10.0    // 每级士气增减步长 (百分比)
 #define SNIPERCAMP_CHANCE_MIN         0.0     // 留守概率下限
 #define SNIPERCAMP_CHANCE_MAX         100.0   // 留守概率上限
-#define BOT_TASK_MOVE_TO_SNIPER_SPOT 19 // 引擎原生任务枚举：MOVE_TO_SNIPER_SPOT (狙击手前往架枪点)
-
 static MemoryPatch g_PatchSniperCampSites[6];
 static int g_SniperCampPatchBytes[6][6];    // 预先构造的旁路字节（Prep 构造 / Apply 原样写入）
 // Task/Disposition 上收 global.inc 共享（OnPluginStart 一次解析），本文件只用不存

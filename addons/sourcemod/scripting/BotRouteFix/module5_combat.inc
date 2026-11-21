@@ -97,8 +97,6 @@
 
 #define HEALTH_RETREAT_THRESHOLD    35      // 残血强制后撤生命值阈值
 #define RETREAT_THROTTLE_INTERVAL   60.0    // 残血脱战后撤节流间隔 (秒)
-#define BOT_TASK_PLANT_BOMB         1       // 引擎原生任务枚举：PLANT_BOMB (下包任务)
-#define BOT_TASK_DEFUSE_BOMB        3       // 引擎原生任务枚举：DEFUSE_BOMB (拆包任务)
 #define SNIPER_RETREAT_REQUEST_TTL  2.0     // 狙击撤退请求有效期 (秒)
 
 //========================================================================================

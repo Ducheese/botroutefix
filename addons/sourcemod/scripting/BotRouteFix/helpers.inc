@@ -192,3 +192,33 @@ stock int GetC4Carrier()
     }
     return 0;
 }
+
+/**
+ * 全库统一的实体地址反解 Bot 客户端索引（收敛 M6 内联循环 / M11 Sniper_ResolveClient /
+ * M16 Escape_ResolveClient 三处同构实现；调用方判 `== 0` 或 `!IsBot(x)` 均安全）。
+ *
+ * 只收 Bot（IsBot 含存活检查）；空指针与未命中一律返回 0（0 即非法索引）。
+ * 失败语义：返回 0，调用方按"未命中"放行原生，不触碰事项状态。
+ *
+ * @param pBot          CCSBot 实体地址
+ * @return              Bot 客户端索引；0 = 空指针/未命中
+ */
+stock int ResolveBotClient(Address pBot)
+{
+    if (pBot == Address_Null)
+    {
+        return 0;
+    }
+
+    for (int i = 1; i <= MaxClients; i++)
+    {
+        if (IsBot(i, true))
+        {
+            if (GetEntityAddress(i) == pBot)
+            {
+                return i;
+            }
+        }
+    }
+    return 0;
+}

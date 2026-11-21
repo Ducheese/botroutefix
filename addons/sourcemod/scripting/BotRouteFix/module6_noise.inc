@@ -27,7 +27,7 @@
 //
 // 事项 ITEM_M6_NOISE（M6 noise + OPPO guard）：噪声拦截 + 下包与先锋 OPPO 守卫同属一件事
 // （归属原则：谁执行最终改写，谁拥有事项；两个写点都在 M6）。
-// 下包与先锋守卫（SetState Post + AttackState OnUpdate 双面）：对 task == TASK_PLANT_BOMB
+// 下包与先锋守卫（SetState Post + AttackState OnUpdate 双面）：对 task == BOT_TASK_PLANT_BOMB
 // （持包者）及 M7 开路先锋（Module7_GetPointman()，如果有）且当前 disposition 仍为 ENGAGE
 // 的补写 OPPORTUNITY_FIRE，对标 CT 方 DEFUSE_BOMB 的原生 OPPO；SELF_DEFENSE / IGNORE 原样保留。
 // 战术缺口封堵：引擎 Attack() 并发直入 m_attackState.OnEnter（不经 SetState，cs_bot_statemachine.cpp），
@@ -52,9 +52,8 @@
 // 士气门限宏定义
 #define MORALE_HOLD_THRESHOLD   -1      // 保守拦截士气阈值 (<= -1 一律不调查)
 
-// 下包 OPPO 守卫宏（引擎 DispositionType / task 原值；DISP_OPPORTUNITY 与 module9
+// 下包 OPPO 守卫宏（引擎 DispositionType 原值；下包任务值见 global.inc；DISP_OPPORTUNITY 与 module9
 // 共用值（同为 1），两边都用 #if !defined 守卫防重定义，改值时两处同步）
-#define TASK_PLANT_BOMB           1       // 引擎原生任务枚举：PLANT_BOMB（下包任务，只派给持包者）
 #define DISP_ENGAGE               0       // ENGAGE_AND_INVESTIGATE
 #if !defined DISP_OPPORTUNITY
 #define DISP_OPPORTUNITY          1       // OPPORTUNITY_FIRE
@@ -508,7 +507,7 @@ public MRESReturn Hook_InvestigateNoise_Pre(int client)
  * 事项 ITEM_M6_NOISE（M6 noise + OPPO guard）的下包与先锋 Disposition 守卫原语
  *
  * 保护对象：
- *   1. task == TASK_PLANT_BOMB（持包者下包任务）
+ *   1. task == BOT_TASK_PLANT_BOMB（持包者下包任务）
  *   2. M7 开路先锋（Module7_GetPointman()，如果有）
  * 对上述两者当前 disposition 仍为 ENGAGE 的补写 OPPORTUNITY_FIRE；
  * 对标 CT 方 DEFUSE_BOMB 的原生 OPPO，使先锋专心开路推点、包匪专心下包，
@@ -547,7 +546,7 @@ static void Module6_EnforcePlantDisposition(int client)
     else
     {
         int task = LoadFromAddress(pBot + view_as<Address>(g_iOffset_Task), NumberType_Int32);
-        if (task == TASK_PLANT_BOMB)
+        if (task == BOT_TASK_PLANT_BOMB)
         {
             isTarget = true;
         }
@@ -588,16 +587,7 @@ public MRESReturn Hook_SetState_Post_Plant(Address pThis, DHookParam hParams)
         return MRES_Ignored;
     }
 
-    int client = 0;
-    for (int i = 1; i <= MaxClients; i++)
-    {
-        if (IsClientInGame(i) && GetEntityAddress(i) == pThis)
-        {
-            client = i;
-            break;
-        }
-    }
-
+    int client = ResolveBotClient(pThis);
     if (client == 0)
     {
         return MRES_Ignored;

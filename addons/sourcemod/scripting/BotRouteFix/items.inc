@@ -47,8 +47,9 @@
 #define ITEM_M13_BUY            19
 #define ITEM_M14_DEFEND         20
 #define ITEM_M15_HIDE           21
+#define ITEM_M16_ESCAPE         22
 
-#define ITEM_COUNT              21
+#define ITEM_COUNT              22
 #define ITEM_ARRAY_SIZE         (ITEM_COUNT + 1)
 
 enum ItemModuleState
@@ -125,6 +126,9 @@ void InitItems()
 
     g_iItemModule[ITEM_M15_HIDE] = 15;
     strcopy(g_sItemName[ITEM_M15_HIDE], 48, "M15 hide duration dhook writes");
+
+    g_iItemModule[ITEM_M16_ESCAPE] = 16;
+    strcopy(g_sItemName[ITEM_M16_ESCAPE], 48, "M16 escape weapon dhook & SDKCall");
 }
 
 /**
@@ -253,7 +257,7 @@ void Items_FailedNamesForModule(int module, char[] buffer, int maxlen)
 /**
  * 计算模块四态
  *
- * @param module        模块编号 1..15
+ * @param module        模块编号 1..16
  * @param ruleEnabled   模块规则是否开启
  */
 ItemModuleState Items_GetModuleState(int module, bool ruleEnabled)
