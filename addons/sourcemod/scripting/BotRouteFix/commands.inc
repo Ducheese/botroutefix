@@ -248,7 +248,7 @@ public Action Command_Status(int client, int args)
     PrintModuleState(client, 10, "CT Chief Defuser");
     PrintModuleState(client, 11, "Sniper Corridor Deterrence");
     PrintModuleState(client, 12, "Sniper Camp (60-10*M)");
-    PrintModuleState(client, 13, "Sniper Buy Chance (50-10*M)");
+    PrintModuleState(client, 13, "Sniper Buy Chance (50+10*M)");
     PrintModuleState(client, 14, "Defend Rush Chance (40-10*M)");
     PrintModuleState(client, 15, "Hide Duration Scaling x(1-0.15*M)");
     PrintModuleState(client, 16, "Escape Knife-to-Gun on Contact");

@@ -4,7 +4,7 @@
 #define _botroutefix_module13_sniperbuy_included
 
 //========================================================================================
-// [模块 13] 随机买狙概率重构 sniperRifleChance (50-10*Morale)
+// [模块 13] 随机买狙概率重构 sniperRifleChance (50+10*Morale)
 //
 // 业务背景与引擎逆向分析：
 //
@@ -14,17 +14,18 @@
 //    只决定 SNIPER_RIFLE 进不进随机候选名单（之后再均匀抽）；画像偏好买走另一条分支，
 //    不受影响。bot_randombuy 开启时 wantSniper 恒真（cmovnz 短路，保留）。
 //
-// 2. 补丁方案：wantSniper = (RandomFloat(0,100) < 50.0f - 10.0f * Morale)。
-//      士气 -3(大劣): 80% 想买狙
+// 2. 补丁方案：wantSniper = (RandomFloat(0,100) < 50.0f + 10.0f * Morale)。
+//    战术逻辑：低士气少买狙（经济窘迫/颓势求稳），高士气多买狙（乘胜追击/扩大优势）。
+//      士气 -3(大劣): 20% 想买狙
 //      士气  0(均势): 50% 想买狙（= 原生）
-//      士气 +3(大优): 20% 想买狙
+//      士气 +3(大优): 80% 想买狙
 //    注意稀释效应：wantSniper=true 只是"狙进名单"，真买到还要再抽一次，实际买狙率更低。
 //
 // 3. 二进制实证：
 //    - 32 位（v91/v92 逐字节同形，签名各 n=1 @ 0x102B76FF / 0x102B9ACF）：
 //      fld [100.0] → team 检查 → masterPrimary 选择 → RandomFloat(0,100) → fld [50.0] →
 //      fcomip → jbe/mov cl,1 → bot_randombuy OR。66 字节整窗原地重写：骰子改走整数
-//      imul eax,-10 / add eax,50 / fild，setbe 保持与原生 jbe 完全一致的严格小于语义
+//      imul eax,10 / add eax,50 / fild，setbe 保持与原生 jbe 完全一致的严格小于语义
 //      （R < chance ⟺ !(chance <= R)，浮点相等零测集也不差分毫）。
 //      edi 在窗内恒为 me（入口 mov ecx,edi 调 GetTeamNumber，此后只读；774C/9B1C 才重载），
 //      故 morale 取 [edi+g_iOffset_Morale]；eax=team（GetTeamNumber 残留）复用。
@@ -36,8 +37,8 @@
 //      由 Gamedata SniperBuy13_CaveOffset 动态配置相对位移 0xC5B13，写前全量校验，漂移则 abort）。
 //      cave 用已死寄存器 ecx/xmm1（r11/r12d/rbx/rcx/r14/r8d 在后均重载；eax 不碰，xmm0 只读），
 //      E9 回跳保留 flags 给 setb。
-//    ★ 机器码立即数固化说明: 当前注入的机器码已将公式 (50.0 - 10.0 * Morale)
-//      固化为底层汇编立即数 (add ecx/eax, 50 与 imul ecx/eax, -10)；下方的 SNIPER_BUY_CHANCE_*
+//    ★ 机器码立即数固化说明: 当前注入的机器码已将公式 (50.0 + 10.0 * Morale)
+//      固化为底层汇编立即数 (add ecx/eax, 50 与 imul ecx/eax, 10)；下方的 SNIPER_BUY_CHANCE_*
 //      宏定义仅供 CalculateSniperBuyChance 等辅助查询与理论对齐，修改宏不会直接改变底层汇编立即数。
 //
 // 事项契约:
@@ -50,7 +51,7 @@
 // MODULE 13 DEFINES & GLOBALS
 //========================================================================================
 
-// 随机买狙击枪意愿概率公式宏定义 (Chance = BASE - STEP * Morale，注：当前机器码内已固化立即数 50 与 -10)
+// 随机买狙击枪意愿概率公式宏定义 (Chance = BASE + STEP * Morale，注：当前机器码内已固化立即数 50 与 10)
 #define SNIPER_BUY_CHANCE_BASE  50.0    // 基础买狙意愿概率 (士气 0 时 50%)
 #define SNIPER_BUY_CHANCE_STEP  10.0    // 每级士气增减步长 (百分比)
 #define SNIPER_BUY_CHANCE_MIN   0.0     // 买狙意愿概率下限
@@ -207,7 +208,7 @@ static bool PrepModule13_RewriteSite()
         0x6A, 0x00,                         // +26 push 0
         0xFF, 0x15, 0, 0, 0, 0,             // +28 call [RandomFloat] → st(0)=R
         0x8B, 0x87, 0, 0, 0, 0,             // +34 mov eax,[edi+morale] (edi=me)
-        0x6B, 0xC0, 0xF6,                   // +40 imul eax,-10
+        0x6B, 0xC0, 0x0A,                   // +40 imul eax,10
         0x83, 0xC0, 0x32,                   // +43 add eax,50
         0x89, 0x04, 0x24,                   // +46 mov [esp],eax
         0xDB, 0x04, 0x24,                   // +49 fild [esp] → st=chance
@@ -341,7 +342,7 @@ static bool PrepModule13_CaveSite()
     int backRel = view_as<int>(backAddr - (caveAddr + view_as<Address>(25)));
     int caveBytes[25] = {
         0x41, 0x8B, 0x8E, 0, 0, 0, 0,       // +0 mov ecx,[r14+morale] (r14=me)
-        0x6B, 0xC9, 0xF6,                   // +7 imul ecx,-10
+        0x6B, 0xC9, 0x0A,                   // +7 imul ecx,10
         0x83, 0xC1, 0x32,                   // +10 add ecx,50
         0xF3, 0x0F, 0x2A, 0xC9,             // +13 cvtsi2ss xmm1,ecx
         0x0F, 0x2F, 0xC1,                   // +17 comiss xmm0,xmm1 (R vs chance)
@@ -454,7 +455,7 @@ void RestoreModule13_SniperBuy()
  */
 float Module13_CalculateSniperBuyChance(int morale)
 {
-    float chance = SNIPER_BUY_CHANCE_BASE - SNIPER_BUY_CHANCE_STEP * float(morale);
+    float chance = SNIPER_BUY_CHANCE_BASE + SNIPER_BUY_CHANCE_STEP * float(morale);
     if (chance > SNIPER_BUY_CHANCE_MAX)
     {
         chance = SNIPER_BUY_CHANCE_MAX;

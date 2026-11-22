@@ -431,7 +431,7 @@ addons\sourcemod\
         ├── module10_defuse.inc       [模块 10] CT 首席拆包员 (Chief Defuser)
         ├── module11_sniper.inc       [模块 11] 狙击手威慑与走廊加压 (Sniper Deterrence & Corridor Danger)
         ├── module12_snipercamp.inc   [模块 12] 狙击 camp 概率重构 (60-10*M, OnEnter 重骰门)
-        ├── module13_sniperbuy.inc    [模块 13] 随机买狙概率重构 (50-10*M, 汇编补丁)
+        ├── module13_sniperbuy.inc    [模块 13] 随机买狙概率重构 (50+10*M, 汇编补丁)
         ├── module14_defendrush.inc   [模块 14] 开局前沿架枪概率重构 (40-10*M, defendRushChance)
         ├── module15_hideduration.inc [模块 15] Hide 蹲守时长士气缩放 + 紧急短蹲入口 (m_duration *= 1-0.15*M / RequestShort=1s)
         └── module16_escape.inc       [模块 16] 逃跑切枪纪律 (Escape Knife→Gun on Contact)
