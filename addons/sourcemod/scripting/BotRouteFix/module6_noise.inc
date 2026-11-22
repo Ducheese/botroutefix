@@ -511,8 +511,9 @@ public MRESReturn Hook_InvestigateNoise_Pre(int client)
  *
  * 保护对象：
  *   1. task == BOT_TASK_PLANT_BOMB（持包者下包任务）
- *   2. M7 开路先锋（Module7_GetPointman()，如果有）
- * 对上述两者当前 disposition 仍为 ENGAGE 的补写 OPPORTUNITY_FIRE；
+ *   2. task == BOT_TASK_FOLLOW 且持有 C4（跟随推点的持包包匪，防 Follow 冲刷 Task 丢守卫）
+ *   3. M7 开路先锋（Module7_GetPointman()，如果有）
+ * 对上述目标当前 disposition 仍为 ENGAGE 的补写 OPPORTUNITY_FIRE；
  * 对标 CT 方 DEFUSE_BOMB 的原生 OPPO，使先锋专心开路推点、包匪专心下包，
  * 绝不脱离路线探查声音，遭遇战脱视后杜绝 33.3% 伏击长蹲。
  * 真正下包的 SELF_DEFENSE / IGNORE 原样保留。
@@ -549,7 +550,7 @@ static void Module6_EnforcePlantDisposition(int client)
     else
     {
         int task = LoadFromAddress(pBot + view_as<Address>(g_iOffset_Task), NumberType_Int32);
-        if (task == BOT_TASK_PLANT_BOMB)
+        if (task == BOT_TASK_PLANT_BOMB || (task == BOT_TASK_FOLLOW && client == GetC4Carrier()))
         {
             isTarget = true;
         }

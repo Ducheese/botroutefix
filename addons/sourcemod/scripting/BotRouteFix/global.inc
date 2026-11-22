@@ -28,6 +28,7 @@
 #define BOT_TASK_DEFUSE_BOMB          3       // 引擎原生任务枚举：DEFUSE_BOMB (拆包任务)
 #define BOT_TASK_MOVE_TO_SNIPER_SPOT  19      // 引擎原生任务枚举：MOVE_TO_SNIPER_SPOT (狙击手前往架枪点)
 #define BOT_TASK_ESCAPE_FROM_BOMB     9       // 引擎原生任务枚举：ESCAPE_FROM_BOMB (逃离炸弹)
+#define BOT_TASK_FOLLOW               11      // 引擎原生任务枚举：FOLLOW (跟随任务)
 
 //========================================================================================
 // HANDLES & GLOBAL VARIABLES
