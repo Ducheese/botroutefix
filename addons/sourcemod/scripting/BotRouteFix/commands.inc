@@ -563,7 +563,9 @@ public Action Command_Status(int client, int args)
 
     if (ModuleHasLive(16))
     {
-        Format(live, sizeof(live), "total %d weapons drawn", Module16_GetTotalEscapeArmed());
+        Format(live, sizeof(live), "total %d drawn, %d contact, %d suppressed",
+            Module16_GetTotalEscapeArmed(), Module16_GetTotalEscapeContactArmed(),
+            Module16_GetTotalEscapeSuppressed());
         ReplyToCommand(client, "[BotRouteFix] [Live] M16 | %s", live);
     }
 
