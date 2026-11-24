@@ -32,7 +32,7 @@
 #define ESCORT_MAX_COUNT 6
 
 // 先锋到场判定与自愈（距离均为 3D 欧氏）
-#define ESCORT_ARRIVE_RADIUS     500.0   // 距目标包点中心 <= 该值视为先锋到场
+#define ESCORT_ARRIVE_RADIUS     300.0   // 距目标包点中心 <= 该值视为先锋到场
 #define ESCORT_REISSUE_INTERVAL  1.0     // 重发 MoveTo 最小间隔（防不可达目标瞬时风暴）
 
 // 护送链路三态（唯一权威状态，所有迁移经 Escort_SwitchTo* / Escort_ReleaseAll）

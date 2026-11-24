@@ -101,7 +101,7 @@
     - 士气 +3 及以上 -> 最大 3000.0 码
   - 超距或线性概率衰减（1.0 - dist / maxDist）未命中时，清空声音时间戳并直接 `MRES_Supercede` 拦截，彻底瓦解战火黑洞效应！命中则放行。
 - **下包 OPPO 守卫（Plant Bomb OPPO Guard）**：
-  - 持包人跑位（`task == TASK_PLANT_BOMB`，下包任务只派给持包者）遭遇战脱视时，通过 `CCSBot::SetState` Post 钩子补写 `DISP_OPPORTUNITY`（对标 CT 原生 `DEFUSE_BOMB` 的 OPPO），防止 33.3% 概率落入 Ambush Hide 蹲坑 3~15 秒断档；
+  - 对 M7 开路先锋、`plantDelay` 到期后（`GetGameTime() >= earliest`，或时间戳不可用）的 C4 持包者，以及 `task == PLANT_BOMB`（含到期前提前进点情形），通过 `CCSBot::SetState` Post 与 `AttackState::OnUpdate` Pre 双面守卫补写 `DISP_OPPORTUNITY`（对标 CT 原生 `DEFUSE_BOMB` 的 OPPO）；到期前顺风控图阶段保留原生听声与伏击，到期后与先锋对称统一按角色兜底，不再因 `FOLLOW`、`MOVE_TO_LAST_KNOWN_ENEMY_POSITION` 等 Task 切换脱保并落入 33.3% Ambush Hide 蹲坑 3~15 秒断档；
   - 两项守卫边界：真正埋包动作（`PlantBombState`）的 `SELF_DEFENSE (2)` 原样保留；`GUARD_TICKING_BOMB` 坚决不碰（T 守包人保持听声出击梯度）；
   - 遥测更新为 `total blocked, allowed, oppo-guarded` 进 status M06 行。
 

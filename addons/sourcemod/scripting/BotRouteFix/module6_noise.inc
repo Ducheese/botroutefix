@@ -27,9 +27,11 @@
 //
 // 事项 ITEM_M6_NOISE（M6 noise + OPPO guard）：噪声拦截 + 下包与先锋 OPPO 守卫同属一件事
 // （归属原则：谁执行最终改写，谁拥有事项；两个写点都在 M6）。
-// 下包与先锋守卫（SetState Post + AttackState OnUpdate 双面）：对 task == BOT_TASK_PLANT_BOMB
-// （持包者）及 M7 开路先锋（Module7_GetPointman()，如果有）且当前 disposition 仍为 ENGAGE
-// 的补写 OPPORTUNITY_FIRE，对标 CT 方 DEFUSE_BOMB 的原生 OPPO；SELF_DEFENSE / IGNORE 原样保留。
+// 下包与先锋守卫（SetState Post + AttackState OnUpdate 双面）：对 M7 开路先锋（Module7_GetPointman()，如果有）、
+// plantDelay 到期后的持包者（client == GetC4Carrier() 且 earliest <= 0.0 || GetGameTime() >= earliest），
+// 以及 task == BOT_TASK_PLANT_BOMB（涵盖到期前提前进点触发的下包任务）
+// 且当前 disposition 仍为 ENGAGE 的补写 OPPORTUNITY_FIRE，对标 CT 方 DEFUSE_BOMB 的原生 OPPO；
+// SELF_DEFENSE / IGNORE 原样保留。
 // 战术缺口封堵：引擎 Attack() 并发直入 m_attackState.OnEnter（不经 SetState，cs_bot_statemachine.cpp），
 // 交火全程 SetState Post 面零执行；而出生直写 ENGAGE（cs_bot_init.cpp）与任务授予时机不保证
 // 伴随状态迁移，包匪/先锋可能带着 ENGAGE 入战，脱视 0.1s 即遭 33.3% Ambush Hide 拐进坑 3~15 秒。
@@ -510,9 +512,12 @@ public MRESReturn Hook_InvestigateNoise_Pre(int client)
  * 事项 ITEM_M6_NOISE（M6 noise + OPPO guard）的下包与先锋 Disposition 守卫原语
  *
  * 保护对象：
- *   1. task == BOT_TASK_PLANT_BOMB（持包者下包任务）
- *   2. task == BOT_TASK_FOLLOW 且持有 C4（跟随推点的持包包匪，防 Follow 冲刷 Task 丢守卫）
- *   3. M7 开路先锋（Module7_GetPointman()，如果有）
+ *   1. M7 开路先锋（Module7_GetPointman()，如果有）
+ *   2. plantDelay 到期后的持包者（client == GetC4Carrier() 且 Module2_GetEarliestPlantTime() 已开放；
+ *      若无法读取最早下包时间戳则返回 <= 0.0，视为已开放）——与开路先锋对称，不再枚举 TaskType，
+ *      避免 FOLLOW / MOVE_TO_LAST_KNOWN / SEEK_AND_DESTROY 等任务切换导致脱保并落入 33.3% Ambush Hide；
+ *      到期前顺风 Hunt 控图阶段仍保留原生听声与伏击行为
+ *   3. task == BOT_TASK_PLANT_BOMB（兜底：覆盖 plantDelay 到期前提前进点由 IdleState 切入的下包任务）
  * 对上述目标当前 disposition 仍为 ENGAGE 的补写 OPPORTUNITY_FIRE；
  * 对标 CT 方 DEFUSE_BOMB 的原生 OPPO，使先锋专心开路推点、包匪专心下包，
  * 绝不脱离路线探查声音，遭遇战脱视后杜绝 33.3% 伏击长蹲。
@@ -541,16 +546,25 @@ static void Module6_EnforcePlantDisposition(int client)
     bool isTarget = false;
     bool isPointman = false;
 
+    float earliest = Module2_GetEarliestPlantTime();
+    bool plantOpen = (earliest <= 0.0 || GetGameTime() >= earliest);
+
     int pointman = Module7_GetPointman();
+    int carrier = GetC4Carrier();
     if (pointman > 0 && client == pointman)
     {
         isTarget = true;
         isPointman = true;
     }
+    else if (carrier > 0 && client == carrier && plantOpen)
+    {
+        isTarget = true;
+    }
     else
     {
+        // plantDelay 未到但包匪自己踩进包点（Idle:166 会提前开下）时仍保底
         int task = LoadFromAddress(pBot + view_as<Address>(g_iOffset_Task), NumberType_Int32);
-        if (task == BOT_TASK_PLANT_BOMB || (task == BOT_TASK_FOLLOW && client == GetC4Carrier()))
+        if (task == BOT_TASK_PLANT_BOMB)
         {
             isTarget = true;
         }

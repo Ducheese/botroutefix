@@ -900,7 +900,7 @@ static void Module9_EnforceFetchDisposition(int client)
     }
 
     int disposition = LoadFromAddress(pBot + view_as<Address>(g_iOffset_Disposition), NumberType_Int32);
-    if (disposition == DISP_OPPORTUNITY)
+    if (disposition != DISP_ENGAGE)
     {
         return;
     }
