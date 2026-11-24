@@ -895,14 +895,14 @@ static void Escort_FillToTarget(int carrier, float anchor[3], int desired)
 }
 
 /**
- * 解析先锋目标包点（代表包匪意志：优先 M2 锁定包点，未锁时欧氏就近）
+ * 解析先锋目标包点（代表包匪意志：优先 M2 锁定包点，未锁时按原生包匪 Nav safest 就近）
  *
  * 属于事项 ITEM_M7_ESCORT。
  * 先锋只继承包匪去哪个包点的意志；何时出发由建队门控决定（Bot 包匪等能进下包任务才组织）。
  *
- * @param carrier       包匪索引（用于计算欧氏就近起点）
+ * @param carrier       包匪索引（用于代入 Nav safest 算路）
  * @param goal          输出目标包点世界坐标 (3D)
- * @param locked        输出布尔：true = 命中 M2 锁定包点，false = 欧氏就近
+ * @param locked        输出布尔：true = 命中 M2 锁定包点，false = 原生 Nav safest 就近
  * @return              true = 成功解析有效包点，false = 地图无可用包点
  */
 static bool Escort_ResolveGoal(int carrier, float goal[3], bool &locked)
@@ -914,11 +914,11 @@ static bool Escort_ResolveGoal(int carrier, float goal[3], bool &locked)
         return true;
     }
 
-    // 2. 未锁定时，以包匪当前坐标为基准获取欧氏就近包点（3D 空间直线测距，非路网行走成本）
+    // 2. 未锁定时，以包匪为基准获取 Nav safest 就近包点（贴近原生包匪选点，带危险度惩罚）
     float carrierPos[3];
     GetClientAbsOrigin(carrier, carrierPos);
     locked = false;
-    return Module2_GetNativeClosestBombsitePosition(carrierPos, goal);
+    return Module2_GetNativeClosestBombsitePosition(carrier, goal, carrierPos);
 }
 
 /**

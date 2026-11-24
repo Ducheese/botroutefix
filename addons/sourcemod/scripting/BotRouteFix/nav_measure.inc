@@ -29,6 +29,12 @@
 
 #define NAV_MEASURE_MAX_PATH_NODES  256     // 与 cs_bot.h 的 MAX_PATH_LENGTH 对齐
 
+// 路由类型定义（与引擎 enum RouteType 严格对齐）
+#define ROUTE_DEFAULT   0   // 原生默认路由（不带危险度惩罚）
+#define ROUTE_FASTEST   1   // 最快路线（忽略阻碍与小跌落痛感）
+#define ROUTE_SAFEST    2   // 最安全路线（带 NavArea 动态危险度与侵略度加权惩罚）
+#define ROUTE_RETREAT   3   // 撤退路线
+
 // 探针输出 scratch（单线程使用，调用后立即消费；避免 Address[] 动态数组参数的写回语义问题）
 // 【编译器缺陷补偿】同 M11：全局 Address 数组 4B/元分配、8B 步进，故声明双倍长度。
 static Address g_NavProbeAreas[NAV_MEASURE_MAX_PATH_NODES * 2];
@@ -120,9 +126,10 @@ stock bool BotNavReady()
  * @param target    目标世界坐标
  * @param maxAreas  采集上限（0 = 只测距，不采集）
  * @param distance  输出真实地面行走距离 units（失败 -1.0）
+ * @param route     路由类型 (ROUTE_DEFAULT=0, ROUTE_FASTEST=1, ROUTE_SAFEST=2, ROUTE_RETREAT=3)
  * @return          实际采集的 NavArea 数量（0 = 失败/无路径/不采集）
  */
-static int NavMeasure_ProbePath(int client, const float target[3], int maxAreas, float &distance)
+static int NavMeasure_ProbePath(int client, const float target[3], int maxAreas, float &distance, int route = ROUTE_DEFAULT)
 {
     distance = -1.0;
     g_iNavProbeCount = 0;
@@ -197,7 +204,7 @@ static int NavMeasure_ProbePath(int client, const float target[3], int maxAreas,
     }
 
     // 2. 实测（距离 + 可选 NavArea 采集）
-    bool hasPath = SDKCall(g_hSDKCall_ComputePath, client, target, 0);
+    bool hasPath = SDKCall(g_hSDKCall_ComputePath, client, target, route);
     int writtenAreas = 0;
     float totalDist = -1.0;
 
@@ -284,16 +291,17 @@ static int NavMeasure_ProbePath(int client, const float target[3], int maxAreas,
 //========================================================================================
 
 /**
- * 真实地面行走距离（旧版 GetNavMeshWalkDistance 原样移植）
+ * 真实地面行走距离（可指定路由策略，默认 ROUTE_DEFAULT 原生路由）
  *
  * @param client    Bot 客户端索引 (必须为存活有效 Bot)
  * @param target    目标世界坐标
+ * @param route     路由类型 (ROUTE_DEFAULT=0, ROUTE_FASTEST=1, ROUTE_SAFEST=2, ROUTE_RETREAT=3)
  * @return          行走距离 units（失败 -1.0）
  */
-stock float BotNavWalkDistance(int client, const float target[3])
+stock float BotNavWalkDistance(int client, const float target[3], int route = ROUTE_DEFAULT)
 {
     float dist;
-    NavMeasure_ProbePath(client, target, 0, dist);
+    NavMeasure_ProbePath(client, target, 0, dist, route);
     return dist;
 }
 
@@ -301,18 +309,20 @@ stock float BotNavWalkDistance(int client, const float target[3])
  * 临时走廊探测：采集通往目标的路径 NavArea 指针，关键导航状态无副作用
  *
  * 用于模块 11 钉走廊 danger，避免 ComputePath 篡改 Bot 当前行进路径。
+ * 默认使用 ROUTE_FASTEST：无视危险度惩罚直指对峙走廊，防止走廊已有危险度时绕道侧翼误伤其他路网。
  * 爬梯中返回 0（跳过探测）；spot 遭遇点等次级状态可能短暂受影响，下一拍自愈。
  * 结果存放在内部 scratch，调用后立即用 BotNavProbeAreaAt(index) 读取；
  * 多次探测之间不保留（下一次探测会覆盖）。
  *
  * @param client    Bot 客户端索引 (必须为存活有效 Bot)
  * @param target    目标世界坐标
+ * @param route     路由类型 (默认 ROUTE_FASTEST 保证直击走廊，绝不绕行)
  * @return          采集到的 NavArea 数量（0 = 失败/无路径）
  */
-stock int BotNavProbePathAreas(int client, const float target[3])
+stock int BotNavProbePathAreas(int client, const float target[3], int route = ROUTE_FASTEST)
 {
     float dist;
-    return NavMeasure_ProbePath(client, target, NAV_MEASURE_MAX_PATH_NODES, dist);
+    return NavMeasure_ProbePath(client, target, NAV_MEASURE_MAX_PATH_NODES, dist, route);
 }
 
 /**

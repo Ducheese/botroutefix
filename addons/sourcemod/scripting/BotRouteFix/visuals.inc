@@ -275,7 +275,7 @@ public Action Timer_RenderVisualsFast(Handle timer)
             else
             {
                 float nativePos[3];
-                if (Module2_GetNativeClosestBombsitePosition(carrierChest, nativePos))
+                if (Module2_GetNativeClosestBombsitePosition(carrier, nativePos, carrierChest))
                 {
                     DrawBeam(carrierChest, nativePos, colorM2Beam, 3.0, 0.0, 0.25);
                 }

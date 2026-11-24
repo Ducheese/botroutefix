@@ -42,7 +42,7 @@ static int g_iChief = -1;
 static float g_fBombPos[3];
 
 // 持钳加成距离
-#define DEFUSE_KIT_BONUS 300.0
+#define DEFUSE_KIT_BONUS 500.0
 
 // 包点掩护与警戒判决半径（物理对齐引擎 cs_bot.h:462 / bot_hide.cpp:89 的 750.0 码掩体搜索阈值）
 #define DEFUSE_GUARD_DISTANCE 750.0
@@ -344,8 +344,8 @@ static int Defuse_SelectBest()
             continue;
         }
 
-        // 寻路不可达直接跳过不参评（持钳也不加分，避免到不了的人靠钳当选）
-        float walk = BotNavWalkDistance(i, g_fBombPos);
+        // 寻路不可达直接跳过不参评（ROUTE_FASTEST 纯拼最快直达秒数；持钳加分，避免到不了的人靠钳当选）
+        float walk = BotNavWalkDistance(i, g_fBombPos, ROUTE_FASTEST);
         if (walk < 0.0)
         {
             continue;

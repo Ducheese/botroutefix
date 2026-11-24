@@ -704,8 +704,8 @@ static void Fetch_ElectRoster()
             continue;
         }
 
-        // 真实地面行走距离选人；不可达跳过（跨楼层够不着的不选）
-        float dist = BotNavWalkDistance(i, dropPos);
+        // 真实地面行走距离选人（ROUTE_SAFEST 贴合原生捡包避险路线）；不可达跳过（跨楼层够不着的不选）
+        float dist = BotNavWalkDistance(i, dropPos, ROUTE_SAFEST);
         if (dist < 0.0)
         {
             continue;
@@ -782,7 +782,7 @@ static void Fetch_RemoveAndBackfill(int client, const char[] reason)
             continue;
         }
 
-        float dist = BotNavWalkDistance(i, g_fDropPos);
+        float dist = BotNavWalkDistance(i, g_fDropPos, ROUTE_SAFEST);
         if (dist < 0.0)
         {
             continue;

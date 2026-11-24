@@ -380,18 +380,22 @@ bool Module2_GetTargetBombsitePosition(float pos[3])
 }
 
 /**
- * 获取距离给定坐标欧氏直线距离最近的包点世界中心（供跨模块与可视化读取）
+ * 获取距离给定 Bot 基于 NavMesh 路网行走成本最近的包点世界中心（贴近原生包匪选包点算法）
  *
- * 跨模块只读 getter，不参与本模块事项状态；复刻 CCSBotManager::GetClosestZone(Vector) 的
- * 3D 欧氏空间直线穿墙测距（LengthSqr）。
- * 【注意】：此函数计算的是三维欧氏距离，绝不等价于引擎原生包匪下包时基于 NavMesh 路网
- * 行走成本（CCSBotManager::GetClosestZone(CNavArea*, CostFunctor) / NavAreaTravelDistance）的真实就近决策。
+ * 跨模块只读 getter，不参与本模块事项状态。
+ * 复刻引擎原生包匪下包逻辑（cs_bot_idle.cpp:180 TheCSBots()->GetClosestZone(me->GetLastKnownArea(), PathCost(me))）：
+ * 1. 遍历所有未阻挡包点（Zone）；
+ * 2. 借助 NavMeasure 调用 CCSBot::ComputePath(center, ROUTE_SAFEST) 实测路网行走距离；
+ *    该路线受 SAFEST_ROUTE 避险权重加权（综合各 NavArea 动态危险度与侵略度惩罚）；
+ * 3. 选取可达且有效路径距离最短的包点作为最佳目标；
+ * 4. 容灾兜底：若 client 非有效 Bot、NavMeasure 待机或路网临时不可达，优雅回退至 3D 几何直线测距。
  *
- * @param fromPos     起点坐标（通常为包匪位置）
- * @param pos         输出最近包点中心三维坐标
- * @return            true = 成功解析；false = 容器/偏移不可用
+ * @param client        参考 Bot（通常为包匪；用于代入其队伍、侵略度与最后已知 NavArea 进行 SAFEST 算路）
+ * @param pos           输出最近包点中心三维坐标
+ * @param fallbackPos   可选几何兜底坐标（若未提供或为 0 向量，则取 client 当前原点）
+ * @return              true = 成功解析；false = 容器/偏移不可用
  */
-bool Module2_GetNativeClosestBombsitePosition(const float fromPos[3], float pos[3])
+bool Module2_GetNativeClosestBombsitePosition(int client, float pos[3], const float fallbackPos[3] = NULL_VECTOR)
 {
     if (g_pTheCSBotsPtr == Address_Null || g_iOffset_ZoneCount <= 0 || g_iOffset_ZoneBase <= 0 || g_iZoneStride <= 0)
     {
@@ -412,24 +416,67 @@ bool Module2_GetNativeClosestBombsitePosition(const float fromPos[3], float pos[
 
     int offsetCenter = g_bIsWin64 ? 140 : 72;
     int bestZone = -1;
-    float bestDistSq = 0.0;
+    float bestDist = -1.0;
 
-    for (int i = 0; i < zoneCount; i++)
+    // 1. 首选：若 client 为有效存活 Bot 且无损测距就绪，严格走 SAFEST_ROUTE 实测（贴近原生包匪选点）
+    if (IsBot(client, true) && BotNavReady())
     {
-        Address pZone = pTheCSBots + view_as<Address>(g_iOffset_ZoneBase + i * g_iZoneStride);
-        float center[3];
-        center[0] = view_as<float>(LoadFromAddress(pZone + view_as<Address>(offsetCenter),     NumberType_Int32));
-        center[1] = view_as<float>(LoadFromAddress(pZone + view_as<Address>(offsetCenter + 4), NumberType_Int32));
-        center[2] = view_as<float>(LoadFromAddress(pZone + view_as<Address>(offsetCenter + 8), NumberType_Int32));
-
-        float dx = center[0] - fromPos[0];
-        float dy = center[1] - fromPos[1];
-        float dz = center[2] - fromPos[2];
-        float distSq = dx * dx + dy * dy + dz * dz;
-        if (bestZone < 0 || distSq < bestDistSq)
+        for (int i = 0; i < zoneCount; i++)
         {
-            bestZone = i;
-            bestDistSq = distSq;
+            Address pZone = pTheCSBots + view_as<Address>(g_iOffset_ZoneBase + i * g_iZoneStride);
+            float center[3];
+            center[0] = view_as<float>(LoadFromAddress(pZone + view_as<Address>(offsetCenter),     NumberType_Int32));
+            center[1] = view_as<float>(LoadFromAddress(pZone + view_as<Address>(offsetCenter + 4), NumberType_Int32));
+            center[2] = view_as<float>(LoadFromAddress(pZone + view_as<Address>(offsetCenter + 8), NumberType_Int32));
+
+            // 实测 SAFEST_ROUTE 路线步长（带 NavArea 危险度避险惩罚）
+            float dist = BotNavWalkDistance(client, center, ROUTE_SAFEST);
+            if (dist >= 0.0)
+            {
+                if (bestZone < 0 || dist < bestDist)
+                {
+                    bestZone = i;
+                    bestDist = dist;
+                }
+            }
+        }
+    }
+
+    // 2. 容灾兜底：Nav 寻路不可达/非 Bot 时代入几何欧氏测距（绝不失败空转）
+    if (bestZone < 0)
+    {
+        float from[3];
+        if (!IsNullVector(fallbackPos))
+        {
+            from = fallbackPos;
+        }
+        else if (IsValidClient(client, true))
+        {
+            GetClientAbsOrigin(client, from);
+        }
+        else
+        {
+            return false;
+        }
+
+        float bestDistSq = 0.0;
+        for (int i = 0; i < zoneCount; i++)
+        {
+            Address pZone = pTheCSBots + view_as<Address>(g_iOffset_ZoneBase + i * g_iZoneStride);
+            float center[3];
+            center[0] = view_as<float>(LoadFromAddress(pZone + view_as<Address>(offsetCenter),     NumberType_Int32));
+            center[1] = view_as<float>(LoadFromAddress(pZone + view_as<Address>(offsetCenter + 4), NumberType_Int32));
+            center[2] = view_as<float>(LoadFromAddress(pZone + view_as<Address>(offsetCenter + 8), NumberType_Int32));
+
+            float dx = center[0] - from[0];
+            float dy = center[1] - from[1];
+            float dz = center[2] - from[2];
+            float distSq = dx * dx + dy * dy + dz * dz;
+            if (bestZone < 0 || distSq < bestDistSq)
+            {
+                bestZone = i;
+                bestDistSq = distSq;
+            }
         }
     }
 
