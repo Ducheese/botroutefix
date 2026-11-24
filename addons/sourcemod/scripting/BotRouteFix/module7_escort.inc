@@ -47,6 +47,7 @@ enum EscortMode
 enum struct PointmanObjective
 {
     bool  active;        // 目标是否已下发
+    float goal[3];       // 目标包点中心
     float lastIssue;     // 最近一次下发 MoveTo 的时刻（秒）
 }
 
@@ -796,14 +797,14 @@ static void Escort_FillToTarget(int carrier, float anchor[3], int desired)
 }
 
 /**
- * 解析先锋目标包点（代表包匪意志：优先 M2 锁定包点，未锁时原生就近）
+ * 解析先锋目标包点（代表包匪意志：优先 M2 锁定包点，未锁时欧氏就近）
  *
  * 属于事项 ITEM_M7_ESCORT。
  * 先锋只继承包匪去哪个包点的意志；何时出发由建队门控决定（Bot 包匪等能进下包任务才组织）。
  *
- * @param carrier       包匪索引（用于计算原生就近起点）
+ * @param carrier       包匪索引（用于计算欧氏就近起点）
  * @param goal          输出目标包点世界坐标 (3D)
- * @param locked        输出布尔：true = 命中 M2 锁定包点，false = 原生就近
+ * @param locked        输出布尔：true = 命中 M2 锁定包点，false = 欧氏就近
  * @return              true = 成功解析有效包点，false = 地图无可用包点
  */
 static bool Escort_ResolveGoal(int carrier, float goal[3], bool &locked)
@@ -815,7 +816,7 @@ static bool Escort_ResolveGoal(int carrier, float goal[3], bool &locked)
         return true;
     }
 
-    // 2. 未锁定时，以包匪当前坐标为基准获取原生就近包点
+    // 2. 未锁定时，以包匪当前坐标为基准获取欧氏就近包点（3D 空间直线测距，非路网行走成本）
     float carrierPos[3];
     GetClientAbsOrigin(carrier, carrierPos);
     locked = false;
@@ -1023,7 +1024,10 @@ static bool Escort_SwitchToPointman(int carrier)
     g_iEscortMode = Escort_Pointman;
     g_iEscortPointman = pointman;
     g_PointmanObjective.active = true;
-    // 目标不存此处：后续每次下发由 FrameSupervise 现解
+    for (int i = 0; i < 3; i++)
+    {
+        g_PointmanObjective.goal[i] = goal[i];
+    }
     g_PointmanObjective.lastIssue = GetGameTime();
     g_bSuperviseScheduled = false;
     g_iEscortGeneration++;
@@ -1504,7 +1508,7 @@ public Action Escort_TimerSupervise(Handle timer, any data)
 }
 
 /**
- * 先锋监督延后帧：现解目标，到场交接，未到场重发 MoveTo（属于事项 ITEM_M7_ESCORT）
+ * 先锋监督延后帧：到场交接，或未到场重发 MoveTo（属于事项 ITEM_M7_ESCORT）
  *
  * 门禁：代际失配或 !Item_IsArmed(ITEM_M7_ESCORT) 直接放弃。
  *
@@ -1541,14 +1545,11 @@ public void Escort_FrameSupervise(any data)
     }
 
     float pos[3];
-    GetClientAbsOrigin(pointman, pos);
-
-    // 单一真相来源：每次下发都现解，不读组织时刻的快照（包匪原生 closet 行走中会翻转）
     float goal[3];
-    bool locked = false;
-    if (!Escort_ResolveGoal(carrier, goal, locked))
+    GetClientAbsOrigin(pointman, pos);
+    for (int i = 0; i < 3; i++)
     {
-        return;
+        goal[i] = g_PointmanObjective.goal[i];
     }
 
     float distSq = Escort_DistSq(pos, goal);

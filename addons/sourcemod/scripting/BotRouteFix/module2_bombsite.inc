@@ -380,9 +380,12 @@ bool Module2_GetTargetBombsitePosition(float pos[3])
 }
 
 /**
- * 获取距离给定坐标最近的包点世界中心（引擎原生就近语义，供可视化读取）
+ * 获取距离给定坐标欧氏直线距离最近的包点世界中心（供跨模块与可视化读取）
  *
- * 跨模块只读 getter，不参与本模块事项状态；M2 关闭时可视化用它绘制原生下包目标。
+ * 跨模块只读 getter，不参与本模块事项状态；复刻 CCSBotManager::GetClosestZone(Vector) 的
+ * 3D 欧氏空间直线穿墙测距（LengthSqr）。
+ * 【注意】：此函数计算的是三维欧氏距离，绝不等价于引擎原生包匪下包时基于 NavMesh 路网
+ * 行走成本（CCSBotManager::GetClosestZone(CNavArea*, CostFunctor) / NavAreaTravelDistance）的真实就近决策。
  *
  * @param fromPos     起点坐标（通常为包匪位置）
  * @param pos         输出最近包点中心三维坐标
