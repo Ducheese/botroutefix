@@ -245,7 +245,7 @@ public Action Command_Status(int client, int args)
     PrintModuleState(client, 7, "T Carrier Escort & Pointman (3-M)");
     PrintModuleState(client, 8, "Polite Queue Breaker / Deadlock Hunt");
     PrintModuleState(client, 9, "T Loose-Bomb Fetch Roster & OPPO Guard");
-    PrintModuleState(client, 10, "CT Chief Defuser");
+    PrintModuleState(client, 10, "CT Defuse Roster");
     PrintModuleState(client, 11, "Sniper Corridor Deterrence");
     PrintModuleState(client, 12, "Sniper Camp (60-10*M)");
     PrintModuleState(client, 13, "Sniper Buy Chance (50+10*M)");
@@ -509,18 +509,9 @@ public Action Command_Status(int client, int args)
 
     if (ModuleHasLive(10))
     {
-        float dummyPos[3];
-        int chief = Module10_GetChiefDefuser(dummyPos);
-        if (chief != -1)
-        {
-            Format(live, sizeof(live), "chief %N | total %d elected, %d gated",
-                chief, Module10_GetTotalChiefs(), Module10_GetTotalGated());
-        }
-        else
-        {
-            Format(live, sizeof(live), "none | total %d elected, %d gated",
-                Module10_GetTotalChiefs(), Module10_GetTotalGated());
-        }
+        Format(live, sizeof(live), "%d/%d roster | total %d elected, %d gated",
+            Module10_GetRosterCount(), Module10_GetRosterSize(),
+            Module10_GetTotalElections(), Module10_GetTotalGated());
         ReplyToCommand(client, "[BotRouteFix] [Live] M10 | %s", live);
     }
 

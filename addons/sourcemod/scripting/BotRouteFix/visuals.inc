@@ -27,7 +27,7 @@
 //   - M11 (Sniper): 发现者连狙击手青色波浪线（M9/M10 同款，目击后高亮 10 秒）＋加压走廊青色脉冲环（只画圈不画框，钉刺后高亮 60 秒）；
 //   - 包点：全图 func_bomb_target 白色 3D 体积框（即 m_bInBombZone 判定边界），只受 debug 总控，不按事项门控。
 //   - M9 (Fetch): 抢包花名册 T 胸膛连掉落 C4，黄色波浪光束（粗 3.0，振幅 12.0）；
-//   - M10 (Defuse): 首席拆包 CT 胸膛连已安放 C4，蓝色波浪光束（粗 3.0，振幅 12.0）。
+//   - M10 (Defuse): 拆包花名册 CT 胸膛连已安放 C4，蓝色波浪光束（粗 3.0，振幅 12.0）。
 //========================================================================================
 
 static int g_iLaserBeam = -1;
@@ -526,21 +526,26 @@ public Action Timer_RenderVisualsFast(Handle timer)
     }
 
     //------------------------------------------------------------------------------------
-    // [M10] 首席拆包 CT 直连安放 C4 激光
+    // [M10] 拆包花名册 CT 直连安放 C4 激光
     //------------------------------------------------------------------------------------
     if (Item_IsArmed(ITEM_M10_DEFUSE))
     {
+        int roster[DEFUSE_ROSTER_SIZE];
         float c4Pos[3];
-        int chief = Module10_GetChiefDefuser(c4Pos);
+        int count = Module10_GetDefuseRoster(roster, c4Pos);
 
-        if (chief > 0)
+        if (count > 0)
         {
-            // C4 不画光环，粗 3.0、振幅 12.0，与 M9 一致
+            // C4 不画光环，花名册 CT 胸膛射出波浪光束连 C4（粗 3.0、振幅 12.0，与 M9 一致）
             static const int colorM10Beam[4] = {30, 120, 255, 255}; // 蓝色波浪光束
 
-            float chiefChest[3];
-            GetBotChestPosition(chief, chiefChest);
-            DrawBeam(chiefChest, c4Pos, colorM10Beam, 3.0, 12.0, 0.25);
+            for (int j = 0; j < count; j++)
+            {
+                int bot = roster[j];
+                float botChest[3];
+                GetBotChestPosition(bot, botChest);
+                DrawBeam(botChest, c4Pos, colorM10Beam, 3.0, 12.0, 0.25);
+            }
         }
     }
 

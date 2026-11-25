@@ -77,7 +77,8 @@
 //          CT 按拆包任务档（DEFUSE_BOMB 硬、其他软）；CT 下包前放行。
 //      注: 包匪硬豁免的 `m_bInBombZone` 由 func_bomb_target 仅对持包者置位，
 //          天然等价"持包者已进入包点触区"；CT 硬豁免以拆包任务为准——
-//          M10 开启时仅首席持有该任务，M10 关闭/FAILED 时全员原生持有，这是原生任务语义，
+//          M10 开启时仅 Top-3 拆包名册成员（及尚未进 750 码的远端 CT）持有该任务，
+//          M10 关闭/FAILED 时全员原生持有，这是原生任务语义，
 //          不是 M10 fail-open（例外：bot_defer_to_human 开且队内有活人时 bot 可能拿不到该任务，
 //          回落软豁免）。
 //
@@ -715,8 +716,9 @@ public MRESReturn Hook_AttackState_OnUpdate_Pre(Address pThis, DHookParam hParam
     else
     {
         // CT 拆包使命：DEFUSE_BOMB 任务即硬豁免
-        // 注：M10 开启时仅首席持有该任务；M10 关闭/FAILED 时全员原生持有 DEFUSE_BOMB，
-        //     这是原生任务语义（非 M10 fail-open），不会出现"无首席即无硬豁免"的真空
+        // 注：M10 开启时仅 Top-3 拆包名册成员（及尚未进 750 码的远端 CT）持有该任务；
+        //     M10 关闭/FAILED 时全员原生持有 DEFUSE_BOMB，
+        //     这是原生任务语义（非 M10 fail-open），不会出现"无名册即无硬豁免"的真空
         if (g_iOffset_Task > 0
             && LoadFromAddress(pBot + view_as<Address>(g_iOffset_Task), NumberType_Int32) == BOT_TASK_DEFUSE_BOMB)
         {

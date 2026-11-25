@@ -63,7 +63,7 @@ static Handle g_hLooseDetour = null;
 static Handle g_hFetchGuardDetour = null;
 static Handle g_hAttackFetchGuardDetour = null; // AttackState::OnUpdate 交火期兜底载体
 static int g_iFetchRoster[FETCH_ROSTER_SIZE] = {-1, -1, -1};
-static bool g_bHasRoster = false;
+static bool g_bFetchHasRoster = false;
 static float g_fDropPos[3];
 
 // 遥测统计计数器
@@ -314,10 +314,15 @@ void RestoreModule9_Fetch()
 /**
  * 事项 M9 抢包花名册的名单查询（模块 5 后撤档位裁决复用）
  *
- * -1 槽位跳过；纯内存判断。
+ * 无效索引（client <= 0）直接返回 false；纯内存判断。
  */
 bool Module9_IsInRoster(int client)
 {
+    if (client <= 0)
+    {
+        return false;
+    }
+
     for (int i = 0; i < FETCH_ROSTER_SIZE; i++)
     {
         if (g_iFetchRoster[i] == client)
@@ -336,7 +341,7 @@ int Module9_GetRosterCount()
     int count = 0;
     for (int i = 0; i < FETCH_ROSTER_SIZE; i++)
     {
-        if (g_iFetchRoster[i] != -1 && IsBot(g_iFetchRoster[i], true))
+        if (g_iFetchRoster[i] > 0 && IsTeamBot(g_iFetchRoster[i], 2, true))
         {
             count++;
         }
@@ -387,7 +392,7 @@ int Module9_GetTotalFetchGuarded()
  */
 int Module9_GetFetchRoster(int roster[FETCH_ROSTER_SIZE], float c4Pos[3])
 {
-    if (!g_bHasRoster)
+    if (!g_bFetchHasRoster)
     {
         return 0;
     }
@@ -476,7 +481,7 @@ void Module9_OnItemPickup(int client, const char[] item)
         return;
     }
 
-    if (!g_bHasRoster)
+    if (!g_bFetchHasRoster)
     {
         return;
     }
@@ -525,7 +530,7 @@ static void Fetch_ClearRoster()
     {
         g_iFetchRoster[i] = -1;
     }
-    g_bHasRoster = false;
+    g_bFetchHasRoster = false;
 }
 
 /**
@@ -733,7 +738,7 @@ static void Fetch_ElectRoster()
         return;
     }
 
-    g_bHasRoster = true;
+    g_bFetchHasRoster = true;
     g_iTotalFetchElections++;
     DebugLog("[BotRouteFix] [Module 9] Elected fetch roster: %N / %N / %N",
         g_iFetchRoster[0],
@@ -759,7 +764,7 @@ static void Fetch_ElectRoster()
  */
 static void Fetch_RemoveAndBackfill(int client, const char[] reason)
 {
-    if (!g_bHasRoster || !Module9_IsInRoster(client))
+    if (!g_bFetchHasRoster || !Module9_IsInRoster(client))
     {
         return;
     }
@@ -853,7 +858,7 @@ public MRESReturn Hook_NoticeLooseBomb_Pre(int client, DHookParam hParams)
         return MRES_Supercede;
     }
 
-    if (!g_bHasRoster || Module9_IsInRoster(client))
+    if (!g_bFetchHasRoster || Module9_IsInRoster(client))
     {
         return MRES_Ignored;
     }

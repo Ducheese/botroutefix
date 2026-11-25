@@ -79,7 +79,7 @@
     - 其他 T：残血 / 一打多源 → 放行；**狙击威胁源 → 软**（下包前所有 T 一律短蹲，包点内包匪除外——已被上面的硬豁免拦下）。
   - **下包后（CT 有使命）**：
     - `Task == DEFUSE_BOMB` → 硬；其他 CT → 软（三源同构）；全 T：放行。
-    - 该判定跟随原生任务语义：模块 10 开启时仅首席持有 `DEFUSE_BOMB`；模块 10 关闭/FAILED（钩子不可用）时全员原生持有，硬豁免自动覆盖所有 CT，不会出现"无首席即无硬豁免"的真空（例外：`bot_defer_to_human` 开启且队内有活人时，bot 可能拿不到该任务，回落软豁免）。
+    - 该判定跟随原生任务语义：模块 10 开启时仅 Top-3 拆包名册成员（及尚未进入 750 码半径的远端 CT）持有 `DEFUSE_BOMB`；模块 10 关闭/FAILED（钩子不可用）时全员原生持有，硬豁免自动覆盖所有 CT，不会出现"无名册即无硬豁免"的真空（例外：`bot_defer_to_human` 开启且队内有活人时，bot 可能拿不到该任务，回落软豁免）。
   - 注：`m_bInBombZone` 仅在持包者进入 bomb target 触发区时置位（`func_bomb_target.cpp:50-52`），天然等价"下一拍下包"；CT 无 C4 该标记恒 false，故 CT 改用拆包任务判定。
   - 消除包点内下包临界态的折返跑死循环；包点外的包匪仍保留短蹲后撤的保命机动。
 - **孤身一打多强制后撤 (Outnumbered Forced Retreat via SDKCall)**：
@@ -139,13 +139,13 @@
   - **蹲守者解蹲 (Camp Unstick)**：当选/回补时 task==19（`MOVE_TO_SNIPER_SPOT`，蹲守承诺态）的强制 `Hunt()` 一次——蹲坑 Hide 里到不了 `NoticeLooseBomb`（Idle 的 loose 检查排在狙击手守点/架枪掷骰之后，M12 再把 task-19 的 Hide 留守），不踢名册就是摆设；Hunt 落 `SEEK_AND_DESTROY`，M12 不认，交接干净。`Hunt` SDKCall 缺失则跳过（名册照转被动门禁）。残血等其他 task 的长蹲 task 看不出来（Hide 不改 task），靠 Hide 到期自愈， observed 了再补 M15 蹲守时长表。
   - **名册抢包手 OPPO 守卫（Fetch OPPO Guard）**：M9 限制了抢包人手，必须保证人手质量；在 `CCSBot::SetState` Post 钩子处通过指针地址比对确认处于 `FetchBombState`，补写 `DISP_OPPORTUNITY`，杜绝选出的抢包手跟丢敌人后蹲死；遥测更新为 `%d/%d roster | total %d elected, %d gated, %d oppo-guarded` 进 status M09 行。
 
-### 模块 10：CT 首席拆包员 (Chief Defuser)
-- **原生全员撞包 (Swarm on Planted Bomb)**：
-  - 下包后在首人读条前，`IsDoingScenario()` 为真的 CT 全员拿 `DEFUSE_BOMB` 往雷包上撞，撞墙窗口等于全员旅行时间（`cs_bot_idle.cpp:250-281`）。
-- **Scenario 门控 + 首席选举 (Scenario Gate & Chief Election)**：
-  - 本模块 Pre 钩 `CCSBot::IsDoingScenario()`：下包后非首席一律回 false，掉进原生"不让拆就守包点"分支（`GUARD_BOMB_ZONE` + 包点掩体 + 自由开火），掩护组由引擎自建；首席直通原生拿 `DEFUSE_BOMB`，读上条后引擎再把众人翻成 `GUARD_BOMB_DEFUSER`。字面"提前转守拆包员"不可行（`HideState` 在无人读条时每拍弹回，会自旋），故掩护组拿 ZONE 等价任务。
-   - 首席选举：下包瞬间对存活 CT 无损实测到 `planted_c4` 的真实地面行走距离（同 M9 测量器），最低者 − 持钳 500（钳子 5 秒读条差的等效让分）当选；寻路不可达跳过不参评，全员不可达/测距未就绪则无首席、全员直通回原生（不断谁的 scenario 逻辑）；首席阵亡/掉线按缓存包坐标立即重选；拆掉/炸掉/开局/换图即清。
-  - 与真人玩家的关系：选举不数真人玩家（`IsBot` 限定），出动尊重原生 `bot_defer_to_human`——默认开且 CT 有活人时首席坐板凳、bot 全员掩护；真人玩家死光原生翻 true，首席自动上，无需重选；defer 置 0 则全程按设计走，真人玩家抢拆时首席在原生让路逻辑下搁置，不打架。
+### 模块 10：CT Top-3 拆包花名册 (Defuse Roster)
+- **原生全员涌包 (Swarm Before Defuse Begins)**：
+  - 下包后在首人读条前，`IsDoingScenario()` 为真的 CT 全员拿 `DEFUSE_BOMB` 沿最速路线往同一雷包坐标推进（直到第一个人读上条后其余才在 `MoveTo:170` / `Idle:257` 翻成 `GUARD_BOMB_DEFUSER`）。
+- **Scenario 门控 + Top-3 花名册 (Scenario Gate & Top-3 Roster)**：
+  - 本模块 Pre 钩 `CCSBot::IsDoingScenario()`：下包后近端（距包 `<= 750` 码）的非名册成员一律回 false，掉进原生"不让拆就守包点"分支（`GUARD_BOMB_ZONE` + 包点 750 码内真掩体 + `OPPORTUNITY_FIRE`），掩护组由引擎自建；远端（距包 `> 750` 码）非名册 CT 与名册内 Top-3 成员直通原生（`> 750` 码必须放行，否则 `HideState:147` 无法唤醒他处蹲守 CT，且 `GUARD_BOMB_ZONE` 到期后会在 `HideState:284` 按 `GetClosestZone(myOrigin)` 锁死在原半区继续蹲）。名册第 1 人读上条后其余 2 人由引擎原生转为 `GUARD_BOMB_DEFUSER`，而前锋受阻时 2/3 号无需等待即可直接接力拆包。
+  - 花名册选举：下包瞬间对存活 CT 无损实测到 `planted_c4` 的真实地面行走距离（同 M9 测量器），按 `walk - 500*(持钳)`（钳子 5 秒读条差的等效让分）取前 3 名存活可达 CT bot；不可达跳过，全员不可达 / 测距未就绪则空名册全员直通回原生（不断谁的 scenario 逻辑）；名册成员阵亡/掉线按缓存包坐标立即就近递补，刚补入的原 `GUARD_BOMB_ZONE` 成员会在下一帧由 `HideState:147` 原生唤醒转入 `Idle()->DEFUSE_BOMB`（名册全灭同样解散回原生）；拆掉/炸掉/开局/换图即清。
+  - 与真人玩家的关系：选举只计存活 CT bot（`IsTeamBot` 限定），出动尊重原生 `bot_defer_to_human`——默认开且 CT 有活人时名册成员原生同样返回 false 坐板凳、真人玩家死光后原生自动翻 true 立即接管，无需重选；defer 置 0 时若真人玩家抢拆，名册成员也会在原生让路逻辑下搁置，不打架。
 
 ### 模块 11：狙击手威慑与走廊加压 (Sniper Deterrence & Corridor Danger)
 - **原生缺陷 (Sniper Peeking & Retreat Lockout)**：
@@ -168,7 +168,7 @@
   - 遍历沿途最多前 20 步 (SNIPER_MAX_STEPS) NavArea 节点（从 Bot 当前/最后已知 NavArea 起步），严格遵守 `1.0 / 120.0s` 自然衰减沉降契约，各钉刺 `+0.8f` 危险度（封顶 `2.5f`）并同步刷新时间戳，迫使后续全队寻路 A* 天然规避该交火走廊。
 - **撤退请求 (Retreat Request)**：
   - 只调用 `Module5_RequestSniperRetreat(spotter)`（带 2 秒 TTL），不碎路径、不同步切换状态。
-  - 真正撤退时 `Hide` 内部会自行 `DestroyPath` / `ComputePath`；硬豁免目标（包匪下包临界、CT 首席）不会被本模块打断使命动作，是否真撤与撤多久由模块 5 统一裁决。
+  - 真正撤退时 `Hide` 内部会自行 `DestroyPath` / `ComputePath`；硬豁免目标（包匪下包临界、CT 拆包任务者）不会被本模块打断使命动作，是否真撤与撤多久由模块 5 统一裁决。
   - **归属**：撤退事项归 M5；M11 只统计已发出的 `requests`。走廊事项因 nav 缺失 FAILED 时，只要 Detour 仍在，请求照发，M5 自己决定退不退。
 
 ### 模块 12：狙击手 Camp 门禁与高士气前压 (Sniper Camp & Morale Rush)
@@ -299,7 +299,7 @@
 
 ### 调试可视化
 
-可视化按**数据源**而不是模块 active 决定是否绘制。M2 的下包延时光圈读引擎原生 `m_earliestBombPlantTimestamp`，M6 的接战腰环读缓存偏移 `m_disposition`——即使模块关闭/FAILED 也应显示；M2 的包点指引线在锁事项武装时连锁定包点，未锁定时连原生最近包点（M2 关闭也能看原生选点）。M4 的 Hunt 选区线走只读观察：规则关闭但后端就绪时仅 Post 钩子保持挂载做只读记录（Pre 无观测逻辑不启用），不写内存、不计数，画的是原生选区；后端缺失时钩子彻底不挂载。卸载时先彻底脱钩再释放 Detour 句柄。依赖模块自己写入状态的可视化（M5 后撤原因、M7 保镖、M8 堵路、M9 名册、M10 首席）才随事项停运。
+可视化按**数据源**而不是模块 active 决定是否绘制。M2 的下包延时光圈读引擎原生 `m_earliestBombPlantTimestamp`，M6 的接战腰环读缓存偏移 `m_disposition`——即使模块关闭/FAILED 也应显示；M2 的包点指引线在锁事项武装时连锁定包点，未锁定时连原生最近包点（M2 关闭也能看原生选点）。M4 的 Hunt 选区线走只读观察：规则关闭但后端就绪时仅 Post 钩子保持挂载做只读记录（Pre 无观测逻辑不启用），不写内存、不计数，画的是原生选区；后端缺失时钩子彻底不挂载。卸载时先彻底脱钩再释放 Detour 句柄。依赖模块自己写入状态的可视化（M5 后撤原因、M7 保镖、M8 堵路、M9 名册、M10 拆包名册）才随事项停运。
 
 ---
 
@@ -430,7 +430,7 @@ addons\sourcemod\
         ├── module7_escort.inc        [模块 7] T 包匪贴身保镖花名册 (Carrier Escort Roster)
         ├── module8_queue.inc         [模块 8] 门口礼貌排队打碎与死锁强切 Hunt (Polite Queue Breaker & Deadlock Hunt Transition)
         ├── module9_loosefetch.inc    [模块 9] T 掉包 Top3 抢包花名册 + 抢包 OPPO 守卫 (Loose-Bomb Fetch Roster + Fetch OPPO Guard)
-        ├── module10_defuse.inc       [模块 10] CT 首席拆包员 (Chief Defuser)
+        ├── module10_defuse.inc       [模块 10] CT Top-3 拆包花名册 (Defuse Roster)
         ├── module11_sniper.inc       [模块 11] 狙击手威慑与走廊加压 (Sniper Deterrence & Corridor Danger)
         ├── module12_snipercamp.inc   [模块 12] 狙击 camp 概率重构 (60-10*M, OnEnter 重骰门)
         ├── module13_sniperbuy.inc    [模块 13] 随机买狙概率重构 (50+10*M, 汇编补丁)
@@ -537,7 +537,7 @@ addons\sourcemod\
 - **M11 → M5**：模块 11 只钉走廊 danger 并调用 `Module5_RequestSniperRetreat(client)`，请求带 2 秒 TTL；命中后模块 5 穿透残血门控与节流阀，再按矩阵决定档位。
 - **M5 → M15**：软豁免时模块 5 调用 `Module15_RequestShortHide(client)`（一次性 + 2 秒 TTL），模块 15 在 `HideState::OnEnter` Post 中优先消费，写 1 秒并跳过士气缩放。
 - **M5 → M7/M9（只读）**：`Module7_IsBodyguard()` / `Module9_IsInRoster()` 是名册内的常数级小循环；M5 同一判定还包括一次 `GetC4Carrier()` 的 O(MaxClients) 持包扫描。后撤判定内不做寻路。
-- **失效行为**：模块 10 未就绪/无首席时，CT 通常全员原生持有 `DEFUSE_BOMB`，下包后硬豁免自动覆盖所有 CT（这是原生任务语义，不是 M10 fail-open）；M10 自身状态为 FAILED。M15 规则关闭或事项 FAILED（含 morale 缺失）时，短蹲与缩放一起停，M5 软豁免退化为普通后撤（`TryToRetreat` 默认 3~15 秒，而非守包 Hide 的 30~60 秒）。M12 借钩只保持宿主 Detour 挂载，不恢复 M15 的短蹲/缩放代码路径。
+- **失效行为**：模块 10 未就绪/空名册时，CT 通常全员原生持有 `DEFUSE_BOMB`，下包后硬豁免自动覆盖所有 CT（这是原生任务语义，不是 M10 fail-open）；M10 自身状态为 FAILED。M15 规则关闭或事项 FAILED（含 morale 缺失）时，短蹲与缩放一起停，M5 软豁免退化为普通后撤（`TryToRetreat` 默认 3~15 秒，而非守包 Hide 的 30~60 秒）。M12 借钩只保持宿主 Detour 挂载，不恢复 M15 的短蹲/缩放代码路径。
 
 ### 事项状态机与 DHook 收敛 (Item State Machine & Detour Sync)
 - **事项态（唯一状态源）**：`items.inc` 维护 21 件事项的 `Ready`（后端是否可用）与 `Armed`（规则开启且已武装）。状态行只读这张表：`INACTIVE / ACTIVE / DEGRADED / FAILED`。
@@ -547,7 +547,7 @@ addons\sourcemod\
 - **补丁基线保留**：`MemoryPatch::Init()` 在同一目标重入时保留原始字节备份与生效旗标，避免 `Enable -> Disable -> Enable` 后自家补丁被误判为外来补丁、`Restore()` 被零写入熔断拦截而永久卡死。
 
 ### 掉线自愈与残局热重载说明 (Disconnect & Mid-Round Hot-Reload Parity)
-- **掉线机制**：`OnClientDisconnect` 直调三家花名册——模块 7（包匪掉线全放、保镖掉线除名递补）、模块 9（队员掉线按掉包点回补）、模块 10（首席掉线按包坐标接力）。开局持包者意外掉线时，引擎原生还会将 C4 强制掉落触发 `bomb_dropped`，模块 2 藉此换人自愈并恢复原生就近选点，双保险。
+- **掉线机制**：`OnClientDisconnect` 直调三家花名册——模块 7（包匪掉线全放、保镖掉线除名递补）、模块 9（队员掉线按掉包点回补）、模块 10（名册成员掉线按包坐标回补）。开局持包者意外掉线时，引擎原生还会将 C4 强制掉落触发 `bomb_dropped`，模块 2 藉此换人自愈并恢复原生就近选点，双保险。
 - **残局热重载状态同步（已显式移除）**：旧版曾在 `OnPluginStart` 中使用 `SyncMidRoundState` 探查当前残局下包与地面 C4 状态。模块化重构时已正式移除该复杂检测。若管理员在下包残局中途热重载插件，新插件实例不会在中途补发决策状态，将在下一回合 `round_start` 时完全自然自愈。
 
 ### 模块启动与事项解析策略 (Soft Startup & Item Resolution)
