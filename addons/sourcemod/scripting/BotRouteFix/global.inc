@@ -53,7 +53,6 @@ int g_iOffset_Morale = -1;
 int g_iOffset_Task = -1;
 int g_iOffset_Disposition = -1;
 int g_iOffset_State = -1;
-int g_iOffset_FetchBombState = -1;
 
 // 全局单例指针引用（跨模块共享）
 Address g_pTheCSBotsPtr;

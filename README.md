@@ -137,7 +137,7 @@
   - 本模块 Pre 钩上述查询函数：CT 一律回 false 实施纵深防御兜底（视力 `CanSeeLooseBomb` 与捡包听觉不受影响）；T 非名册成员直接回 false 并计入拦截（遥测 `gated`）；运行时无候选（全员不可达/无人存活）则放行，这是运行时无对象，不是后端 fail-open。
   - 掉包事件递延一帧（等 C4 归属落定，当场查恒为"人手里"）后，以无主 `weapon_c4` 坐标为圆心、无损实测（`BotNavWalkDistance`：备份移动状态→解 repath 节流→`ComputePath` 实测→逐段累加→全量还原，调用方零副作用）真实地面行走距离取最近 3 存活 T，不可达跳过；测距未就绪时 M9 事项 FAILED，钩子不挂载，行为回原生。成员阵亡/掉线按掉包点真实距离回补，全灭则解散回原生（防"包烂地上没人捡"死锁）；有人捡包/回合开始/换图即清。
   - **蹲守者解蹲 (Camp Unstick)**：当选/回补时 task==19（`MOVE_TO_SNIPER_SPOT`，蹲守承诺态）的强制 `Hunt()` 一次——蹲坑 Hide 里到不了 `NoticeLooseBomb`（Idle 的 loose 检查排在狙击手守点/架枪掷骰之后，M12 再把 task-19 的 Hide 留守），不踢名册就是摆设；Hunt 落 `SEEK_AND_DESTROY`，M12 不认，交接干净。`Hunt` SDKCall 缺失则跳过（名册照转被动门禁）。残血等其他 task 的长蹲 task 看不出来（Hide 不改 task），靠 Hide 到期自愈， observed 了再补 M15 蹲守时长表。
-  - **名册抢包手 OPPO 守卫（Fetch OPPO Guard）**：M9 限制了抢包人手，必须保证人手质量；在 `CCSBot::SetState` Post 钩子处通过指针地址比对确认处于 `FetchBombState`，补写 `DISP_OPPORTUNITY`，杜绝选出的抢包手跟丢敌人后蹲死；遥测更新为 `%d/%d roster | total %d elected, %d gated, %d oppo-guarded` 进 status M09 行。
+  - **名册抢包手 OPPO 守卫（Fetch OPPO Guard）**：M9 限制了抢包人手，必须保证人手质量；由 `CCSBot::SetState` Post、`AttackState::OnUpdate` Pre 与选举/递补入口直接按 `Module9_IsInRoster` 身份守护（直接内存覆写 `m_disposition` 为 `DISP_OPPORTUNITY`，不经 `CCSBot::SetDisposition`，完整保留 `m_ignoreEnemiesTimer` 撤退/换弹掩护计时，无需排除 `HideState`），杜绝抢包手在途、交火脱视或非退避藏身途中听声分心与蹲伏伏击；遥测 `%d/%d roster | total %d elected, %d gated, %d oppo-guarded` 进 status M09 行。
 
 ### 模块 10：CT Top-3 拆包花名册 (Defuse Roster)
 - **原生全员涌包 (Swarm Before Defuse Begins)**：
@@ -488,7 +488,7 @@ addons\sourcemod\
   - 门禁口径：业务写入必守卫（首行或分支入口均可）；纯观测（如 M4 visual 数组）或跨模块信号（如 M11 侦察向 M5 发撤退请求）走消费方门禁；多租户共享宿主钩子（如 M15 借钩宿主）按各租户业务分支分别守卫，杜绝为字面形式强加首行粗暴短路；
   - 运行期日志：前缀统一 `[BotRouteFix] [Module N]`；`DebugLog` 只记离散事件/状态变化（选举/拾取/安放/重定向/放行/认领），不记每 tick 求值——M4 的 `HuntState::OnUpdate` pre/post 刻意零输出（高频 tick），它的可观测面是 status 的 `total claims` 计数器；`LogError` 只用于不变量破坏（如 M7 非法名册数），普通业务分支一律 `DebugLog`；新增 Hook 回调必须带一行说明决策的 `DebugLog`，不留注释掉的死代码。
 - **准备期与运行期的门禁分界**：准备期输出（Prep/Mount/Apply/Restore/Enable 内的句柄创建、签名绑定、基线备份、补丁落子、`verified`/`Resolved` 确认行）走 Init 口径，**无条件输出，不受 `sm_brf_debug` 约束**；运行期离散事件（Hook 回调/事件响应内的逐条决策，如持包人变更、锁落子/还原、士气处置切换）**必须走 `DebugLog`，受 debug 约束**。M2 锁落子/还原与 M6 逐条拦截/放行的 `DebugLog` 属后者（运行期逐 noise 事件），不是准备期，门控正确。
-- **各模块检查点清单**：M1 守点/反冲各 1 个写入点；M2 单例指针 + 时钟偏移 + 锁写入点；M3 危险度偏移 + nav 解析 + 状态重置；M4 随机旁路写入点 + 搜寻偏移；M5 reload 写入点 + 闪避偏移 + 后撤后端；M6 士气/噪声/Task/Disp 偏移 + SetDisposition SDKCall + 双 Detour；M7 Follow/StopFollowing SDKCalls + 士气偏移 + FollowMeme ret 补丁；M8 排队偏移 + 死锁 SDKCall；M9 State/Fetch/Disp 偏移 + SetDisposition SDKCall + NavMeasure + 双 Detour；M10 无（纯 hook/名册）；M11 走廊对抗偏移；M12 蹲守偏移 + 6 个 bypass 点；M13 rewrite/cave 二选一（按架构）；M14 4 站点 + 1 常量池；M15 隐藏时长偏移；M16 EquipKnife 签名 + EquipBestWeapon SDKCall + 1 自有 Detour。
+- **各模块检查点清单**：M1 守点/反冲各 1 个写入点；M2 单例指针 + 时钟偏移 + 锁写入点；M3 危险度偏移 + nav 解析 + 状态重置；M4 随机旁路写入点 + 搜寻偏移；M5 reload 写入点 + 闪避偏移 + 后撤后端；M6 士气/噪声/Task/Disp 偏移 + 三 Detour；M7 Follow/StopFollowing SDKCalls + 士气偏移 + FollowMeme ret 补丁；M8 排队偏移 + 死锁 SDKCall；M9 State/Disp 偏移 + NavMeasure + 三 Detour；M10 无（纯 hook/名册）；M11 走廊对抗偏移；M12 蹲守偏移 + 6 个 bypass 点；M13 rewrite/cave 二选一（按架构）；M14 4 站点 + 1 常量池；M15 隐藏时长偏移；M16 EquipKnife 签名 + EquipBestWeapon SDKCall + 1 自有 Detour。
 
 ---
 

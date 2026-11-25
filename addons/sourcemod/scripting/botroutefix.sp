@@ -107,7 +107,6 @@ public void OnPluginStart()
     g_iOffset_Task        = GameConfGetOffset(g_hGameConf, "CCSBot_Task_Offset");
     g_iOffset_Disposition = GameConfGetOffset(g_hGameConf, "CCSBot_Disposition_Offset");
     g_iOffset_State         = GameConfGetOffset(g_hGameConf, "CCSBot_State_Offset");
-    g_iOffset_FetchBombState = GameConfGetOffset(g_hGameConf, "CCSBot_FetchBombState_Offset");
 
     // 3. Register console commands and events hub
     InitCommands();

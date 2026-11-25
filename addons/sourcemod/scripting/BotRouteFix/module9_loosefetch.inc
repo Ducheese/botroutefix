@@ -28,13 +28,14 @@
 //    - item_pickup(c4) / round_start / OnMapStart：清（FetchBombState:58 有人抢包自己散伙；换图重置）。
 // 4. 空名册放行原则：钩子只会把 true 掐成 false，且仅在名册有效时掐；名册空即原生 no-op。
 // 全程事件驱动，无 timer 轮询。
-// 5. 名册抢包 OPPO 守卫（SetState Post + AttackState OnUpdate 双面，事项 ITEM_M9_FETCH 的第二钩子）：
-//    只给名册内 Bot、只在 m_state == FetchBombState 且当前非 OPPO 时补写
-//    OPPORTUNITY_FIRE；原生 FetchBombState 不设 OPPO，名册成员跟丢敌人会落入
-//    ENGAGE 或 Ambush Hide 而蹲死（既要减少抢包人手，也要保证抢包人手的质量）。
-//    AttackState 战斗面封堵：引擎 Attack() 并发直入 m_attackState.OnEnter（不经 SetState，
-//    cs_bot_statemachine.cpp），交火全程 SetState Post 面零执行；模块中途武装（名册已建、
-//    成员已在 FetchBombState 交战）时此面就地补写，不必等下一次状态迁移。
+// 5. 名册抢包 OPPO 守卫（SetState Post + AttackState OnUpdate 双面 + 选举/递补即时兜底，事项 ITEM_M9_FETCH 第二部分）：
+//    对当前在册成员（不再卡 m_state == FetchBombState），只要当前非 OPPO（仍为 ENGAGE），
+//    直接改写 m_disposition 为 OPPORTUNITY_FIRE，消除 Hunt/MoveTo/Follow 等在途与非退避 Hide 途中的
+//    听声分心与 0.1s 脱视 Ambush Hide 蹲死；不经 CCSBot::SetDisposition，完整保留 M5 后撤与
+//    近敌换弹携带的 m_ignoreEnemiesTimer（GetDisposition() 优先返回 IGNORE_ENEMIES，到期自然落回 OPPO）。
+//    AttackState 战斗面封堵：引擎 Attack() 并发直入 m_attackState.OnEnter（不走 SetState，
+//    cs_bot_statemachine.cpp），交火全程 SetState Post 面零执行；模块中途武装或名册在途
+//    带 ENGAGE 接战时由此面就地补写，不必等下一次状态迁移。
 //    只动抢包，不管下包（下包是 M6 的事）不管 GUARD；补写计入遥测。
 //========================================================================================
 
@@ -111,12 +112,11 @@ static bool PrepModule9_FetchBackend()
     }
     // NoticeLooseBomb(void)：无参数，this 即 bot 本体
 
-    // 守卫前置探测：state/fetch/disposition 偏移 + SetDisposition 直调缺一即事项 FAILED
+    // 守卫与解蹲前置探测：state/disposition 偏移缺一即事项 FAILED（Enforce 直写 m_disposition，不走 SetDisposition）
     //（Enforce 运行时的同条件自守是纵深防御，不代替此处的一次性探测结论）
-    if (g_iOffset_State <= 0 || g_iOffset_FetchBombState <= 0
-        || g_iOffset_Disposition <= 0 || g_hSDKCall_SetDisposition == null)
+    if (g_iOffset_State <= 0 || g_iOffset_Disposition <= 0)
     {
-        LogError("[BotRouteFix] [Module 9] State/fetch/disposition offsets or SetDisposition SDKCall missing; M9 fetch roster + OPPO guard item FAILED.");
+        LogError("[BotRouteFix] [Module 9] State/disposition offsets missing; M9 fetch roster + OPPO guard item FAILED.");
         if (g_hLooseDetour != null)
         {
             delete g_hLooseDetour;
@@ -189,7 +189,7 @@ static bool MountFetchGuardDetour()
  *
  * 引擎 Attack() 并发直入 m_attackState.OnEnter（不走 SetState，cs_bot_statemachine.cpp），
  * 交火全程 SetState Post 面零执行；此钩子在攻击 tick 内补位，模块中途武装或名册成员
- * 在 FetchBombState 交战时就地补写 OPPO，掐死脱视 0.1s 的 Ambush Hide 蹲死。
+ * 在途（Hunt/MoveTo 等）带 ENGAGE 接战时就地补写 OPPO，掐死脱视 0.1s 的 Ambush Hide 蹲死。
  * 与 M5 后撤、M6 下包守卫的 AttackState_OnUpdate 同目标同签名（gamedata 共条目），
  * detour 独立互不干扰（与 M6/M9 双 SetState 钩子同惯例）。
  *
@@ -745,7 +745,7 @@ static void Fetch_ElectRoster()
         (g_iFetchRoster[1] != -1) ? g_iFetchRoster[1] : g_iFetchRoster[0],
         (g_iFetchRoster[2] != -1) ? g_iFetchRoster[2] : g_iFetchRoster[0]);
 
-    // 蹲守者解蹲：名册里 task 19 的不踢出来就永远捡不了包 + 一切正处 Hide 的不限 task 全踢
+    // 蹲守者解蹲 + 立即切换名册 OPPO（未触发 BotHunt 者同样即刻从 ENGAGE 收拢为 OPPORTUNITY_FIRE）
     for (int i = 0; i < FETCH_ROSTER_SIZE; i++)
     {
         if (g_iFetchRoster[i] != -1)
@@ -754,6 +754,7 @@ static void Fetch_ElectRoster()
             {
                 Fetch_ForceHuntIfHiding(g_iFetchRoster[i]);
             }
+            Module9_EnforceFetchDisposition(g_iFetchRoster[i]);
         }
     }
 }
@@ -815,6 +816,7 @@ static void Fetch_RemoveAndBackfill(int client, const char[] reason)
         {
             Fetch_ForceHuntIfHiding(best);
         }
+        Module9_EnforceFetchDisposition(best);
     }
 
     // 全灭则解散回原生（no-op 放行）
@@ -872,8 +874,11 @@ public MRESReturn Hook_NoticeLooseBomb_Pre(int client, DHookParam hParams)
 /**
  * 事项 ITEM_M9_FETCH（M9 fetch roster + OPPO guard）的名册抢包质量守卫原语
  *
- * 只给名册内 Bot、只在 m_state == FetchBombState 且当前非 OPPO 时补写；
- * 原生 FetchBombState 不设 OPPO，名册成员跟丢敌人会落入 ENGAGE 或 Ambush Hide 而蹲死。
+ * 按名册身份（Module9_IsInRoster）统一守护，不卡状态机指针、也不排除 HideState：
+ * 只要当前 m_disposition 仍为 ENGAGE，直接内存覆写为 DISP_OPPORTUNITY（1），
+ * 不经 CCSBot::SetDisposition，确保 M5 后撤与近敌换弹携带的 m_ignoreEnemiesTimer
+ * （及队友阵亡 1s 切路保护）完全不被提前清零；计时到期自然落回 OPPO，
+ * 同时顺带兜住 Follow 停步/电台 Hold 等无 IgnoreEnemies 进 Hide 的在途段。
  * 只动抢包，不管下包不管 GUARD。
  *
  * 失败语义：本函数只做守卫补写、不判定事项成败；非名册/偏移缺失时直接返回。
@@ -891,15 +896,7 @@ static void Module9_EnforceFetchDisposition(int client)
         return;
     }
 
-    if (g_iOffset_State <= 0 || g_iOffset_FetchBombState <= 0
-        || g_iOffset_Disposition <= 0)
-    {
-        return;
-    }
-
-    Address state = LoadAddressFromAddress(pBot + view_as<Address>(g_iOffset_State));
-    Address fetchState = pBot + view_as<Address>(g_iOffset_FetchBombState);
-    if (state != fetchState)
+    if (g_iOffset_Disposition <= 0)
     {
         return;
     }
@@ -910,11 +907,10 @@ static void Module9_EnforceFetchDisposition(int client)
         return;
     }
 
-    if (BotSetDisposition(client, DISP_OPPORTUNITY))
-    {
-        g_iTotalFetchGuarded++;
-        DebugLog("[BotRouteFix] [Module 9] Bot %N fetch disposition -> OPPORTUNITY_FIRE", client);
-    }
+    // 直写 m_disposition，不动 m_ignoreEnemiesTimer（cs_bot.cpp:685-704）
+    StoreToAddress(pBot + view_as<Address>(g_iOffset_Disposition), DISP_OPPORTUNITY, NumberType_Int32);
+    g_iTotalFetchGuarded++;
+    DebugLog("[BotRouteFix] [Module 9] Bot %N fetch disposition -> OPPORTUNITY_FIRE", client);
 }
 
 /**
@@ -950,9 +946,9 @@ public MRESReturn Hook_SetState_Post_Fetch(Address pThis, DHookParam hParams)
  * （与 M5 后撤、M6 下包守卫的同目标钩子以后缀区分，各自 detour 独立回调）。
  *
  * 引擎 Attack() 并发直入 m_attackState.OnEnter（不经 SetState），交火全程
- * SetState Post 面零执行；此面在攻击 tick 内兜底，名册成员于 FetchBombState
- * 交战时就地补写 OPPO，掐死脱视 0.1s 的 Ambush Hide 蹲死。
- * 业务判定全部下沉 EnforceFetchDisposition（名册/状态/现行值三重自守）。
+ * SetState Post 面零执行；此面在攻击 tick 内兜底，名册成员无论处 FetchBombState
+ * 或在途状态交战时皆就地补写 OPPO，掐死脱视 0.1s 的 Ambush Hide 蹲死。
+ * 业务判定全部下沉 EnforceFetchDisposition（名册/现行值双重自守）。
  *
  * 失败语义：回调内不判定事项成败；未武装时首行自守，直接返回 MRES_Ignored。
  */

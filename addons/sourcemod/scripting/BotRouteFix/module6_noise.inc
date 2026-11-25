@@ -88,12 +88,12 @@ static int g_iOffset_NoiseTimestamp = -1;
  * 事项后端：噪声控制 + 下包 OPPO 守卫（三 dhook 载体）
  *
  * 条件 = morale/noise/task/disposition 偏移（上收 global.inc，OnPluginStart 一次解析，
- * 这里只做 > 0 门禁）+ SetDisposition 直调（InitSDKCalls 先行准备）+ 三 Detour 挂载。
- * 噪声路径纯入口拦截；下包守卫只在 PLANT_BOMB + ENGAGE 时补写 OPPO
+ * 这里只做 > 0 门禁）+ 三 Detour 挂载（OPPO 守卫直写 m_disposition 字段，不动 m_ignoreEnemiesTimer）。
+ * 噪声路径纯入口拦截；下包守卫只在目标处于 ENGAGE 时补写 OPPO
  * （可视化腰环仍经由 Module6_GetBotDisposition 只读引擎原生值，那是另一条只读链路）。
  *
- * 失败语义：任一条件（morale/noise/task/disposition 偏移、SetDisposition 直调、
- * 三 Detour）缺失返回 false，Init 置 Ready=false 即事项 FAILED。
+ * 失败语义：任一条件（morale/noise/task/disposition 偏移、三 Detour）缺失返回 false，
+ * Init 置 Ready=false 即事项 FAILED。
  *
  * @return              true = 三后端就绪
  */
@@ -108,12 +108,6 @@ static bool PrepModule6_NoiseBackend()
     if (!offsetsOk)
     {
         LogError("[BotRouteFix] [Module 6] Morale/noise/task/disposition offsets missing; M6 noise + OPPO guard item FAILED.");
-        return false;
-    }
-
-    if (g_hSDKCall_SetDisposition == null)
-    {
-        LogError("[BotRouteFix] [Module 6] SetDisposition SDKCall missing; M6 noise + OPPO guard item FAILED.");
         return false;
     }
 
@@ -581,12 +575,11 @@ static void Module6_EnforcePlantDisposition(int client)
         return;
     }
 
-    if (BotSetDisposition(client, DISP_OPPORTUNITY))
-    {
-        g_iTotalOppoGuarded++;
-        DebugLog("[BotRouteFix] [Module 6] Bot %N %s disposition -> OPPORTUNITY_FIRE",
-            client, isPointman ? "pointman" : "plant");
-    }
+    // 直写 m_disposition，不动 m_ignoreEnemiesTimer，避免在掩体撤退/换弹入口触发时顺手清掉 IgnoreEnemies 保护
+    StoreToAddress(pBot + view_as<Address>(g_iOffset_Disposition), DISP_OPPORTUNITY, NumberType_Int32);
+    g_iTotalOppoGuarded++;
+    DebugLog("[BotRouteFix] [Module 6] Bot %N %s disposition -> OPPORTUNITY_FIRE",
+        client, isPointman ? "pointman" : "plant");
 }
 
 /**

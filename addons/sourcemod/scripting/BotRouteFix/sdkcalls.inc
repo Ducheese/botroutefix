@@ -19,7 +19,6 @@ Handle g_hSDKCall_ComputePath      = null;
 Handle g_hSDKCall_IsOutnumbered    = null;
 Handle g_hSDKCall_Hunt             = null;
 Handle g_hSDKCall_ResetStuckMonitor = null;
-Handle g_hSDKCall_SetDisposition   = null;
 Handle g_hSDKCall_IsSniper         = null;
 Handle g_hSDKCall_EquipBestWeapon  = null;
 
@@ -168,23 +167,6 @@ static bool PrepSDKCall_ResetStuckMonitor()
 }
 
 /**
- * 事项 M6/M9 任务 Disposition 守卫的 SetDisposition 后端准备；缺失则相关守卫 FAILED。
- */
-static bool PrepSDKCall_SetDisposition()
-{
-    StartPrepSDKCall(SDKCall_Entity);
-    PrepSDKCall_SetFromConf(g_hGameConf, SDKConf_Signature, "CCSBot_SetDisposition");
-    PrepSDKCall_AddParameter(SDKType_PlainOldData, SDKPass_Plain);
-    g_hSDKCall_SetDisposition = EndPrepSDKCall();
-    if (g_hSDKCall_SetDisposition == null)
-    {
-        LogError("[BotRouteFix] [SDKCalls] CCSBot_SetDisposition unavailable (fetch/plant guards will FAIL).");
-        return false;
-    }
-    return true;
-}
-
-/**
  * 狙击手引擎真值后端准备（CCSBot::IsSniper，主武器槽类型判定；非事项后端）。
  * 缺失不影响任何事项：M12 名单回退为不过滤（与旧行为一致），M11 回退名册硬编码。
  */
@@ -238,13 +220,12 @@ bool InitSDKCalls()
     if (!PrepSDKCall_IsOutnumbered())  allReady = false;
     if (!PrepSDKCall_Hunt())           allReady = false;
     if (!PrepSDKCall_ResetStuckMonitor()) allReady = false;
-    if (!PrepSDKCall_SetDisposition()) allReady = false;
     if (!PrepSDKCall_IsSniper())       allReady = false;
     if (!PrepSDKCall_EquipBestWeapon()) allReady = false;
 
     if (allReady)
     {
-        LogMessage("[BotRouteFix] [SDKCalls] All SDKCall backends ready (Follow, StopFollowing, MoveTo, Idle, ComputePath, IsOutnumbered, Hunt, ResetStuckMonitor, SetDisposition, IsSniper)");
+        LogMessage("[BotRouteFix] [SDKCalls] All SDKCall backends ready (Follow, StopFollowing, MoveTo, Idle, ComputePath, IsOutnumbered, Hunt, ResetStuckMonitor, IsSniper, EquipBestWeapon)");
     }
 
     return allReady;
@@ -301,12 +282,6 @@ void CleanupSDKCalls()
     {
         delete g_hSDKCall_ResetStuckMonitor;
         g_hSDKCall_ResetStuckMonitor = null;
-    }
-
-    if (g_hSDKCall_SetDisposition != null)
-    {
-        delete g_hSDKCall_SetDisposition;
-        g_hSDKCall_SetDisposition = null;
     }
 
     if (g_hSDKCall_IsSniper != null)
@@ -459,24 +434,6 @@ stock bool BotResetStuckMonitor(int bot)
     }
 
     SDKCall(g_hSDKCall_ResetStuckMonitor, bot);
-    return true;
-}
-
-/**
- * 设置指定 Bot 的引擎 Disposition（CCSBot::SetDisposition，会同步失效 ignoreEnemies 计时）
- *
- * @param bot           Bot 客户端索引 (必须为存活有效 Bot)
- * @param disposition   0=ENGAGE_AND_INVESTIGATE, 1=OPPORTUNITY_FIRE, 2=SELF_DEFENSE, 3=IGNORE_ENEMIES
- * @return              是否成功发起 SDKCall
- */
-stock bool BotSetDisposition(int bot, int disposition)
-{
-    if (g_hSDKCall_SetDisposition == null || !IsBot(bot, true))
-    {
-        return false;
-    }
-
-    SDKCall(g_hSDKCall_SetDisposition, bot, disposition);
     return true;
 }
 
