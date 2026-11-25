@@ -232,6 +232,8 @@
   - 语义：后撤动作完整保留（跑向掩体、`IgnoreEnemies` 照给），抵达藏身点后蹲 1 秒即起，供模块 5 的软豁免身份（包匪/捡包名册/保镖/CT 掩护组等）使用。请求只绑定 client + 2 秒窗口：窗口内任意 `Hide` 都会消费它；超时未消费则作废，不跨窗口污染后续 Hide。
   - **短蹲与缩放同属 M15 一件事**：M15 亲手写 `m_duration`，所以 M15 规则关闭或事项 FAILED（含 morale 偏移缺失）时，短蹲与缩放一起停，M5 的软豁免退化为普通后撤。M12 借钩只让宿主 Detour 保持挂载，不恢复 M15 的短蹲/缩放代码路径。
   - 无待消费请求时，换弹掩体的 `Hide(*spot, 0.0f)` 保持原生 0 秒；若 2 秒窗口内存在请求，换弹/守包等任意 Hide 会被压成 1 秒（已知的弱身份绑定）。士气缩放对 0.0 亦为 no-op。
+- **下包前先锋与到期包匪 `Hide(-1)` 短蹲 (Pre+Post Infinite Hide Short Hide)**：
+  - 利用 SourceMod / CS:S 主循环单线程且 `HideState::OnEnter` 内不递归状态切换的特性，`HideState::OnEnter` Pre 捕获原始 `m_duration < 0.0`（`-1.0f` 无限期掩体占坑重寻，原生随后会在函数体将其归一化为 `RandomFloat(30.0, 60.0)`）并做瞬时标记；Post 入口第一时间读取并清零该标记，经 M12 狙击重骰与 M5 短蹲优先消费后，在 `!g_bBombPlanted` 期间若命中与 M6 下包 OPPO 守卫同口径的身份判定（M7 开路先锋 `Module7_GetPointman()`、`plantDelay` 到期后 `GetGameTime() >= earliest` 的 C4 携带者，或提前踩点触发 `task == PLANT_BOMB` 的兜底者），则跳过士气缩放并把 `m_duration` 直接写成 1 秒。有限时长蹲（`0.0s` 换弹、`1.0s` 躲雷、`3~15s` 撤退与埋伏）以及下包后（`g_bBombPlanted == true`）Guard 守包 `Hide(-1)` 与 `plantDelay` 到期前的顺风控图期均不拦截，按正常士气缩放或短蹲执行。
 - **承载模块 12 宿主钩与短路保护 (Host Detour for Module 12 & Short-Circuit)**：
   - 模块 15 的 `HideState_OnEnter_Post` 钩子作为单一归口，在缩放时长前首先调用 `Module12_SniperCamp(client)`；
   - 若模块 12 判定狙击手高士气前压重定向至 `Hunt`，则立即短路返回 `MRES_Ignored`，跳过无意义的时长缩放计算与内存覆写。
@@ -531,7 +533,7 @@ addons\sourcemod\
 - **全成或全败**：M12 唯一事项 = 6 处补丁 + 宿主钩子 + Hunt SDK + morale。宿主不可用时不武装 6 处补丁；补丁任一站点失败立即全部回滚 → M12 FAILED，绝不出现“补丁驻留但门禁不工作”的半态。
 
 ### 后撤三档制跨模块契约 (Retreat Tier Contract: M5 × M11 × M15)
-- **唯一裁决点**：残血 / 孤身一打多 / 狙击威慑三大触发源的"硬豁免 / 短蹲 / 放行"全部由模块 5 的 `AttackState::OnUpdate` Pre 钩子裁决；模块 11 与 15 不感知身份矩阵。
+- **唯一裁决点**：残血 / 孤身一打多 / 狙击威慑三大触发源的"硬豁免 / 短蹲 / 放行"全部由模块 5 的 `AttackState::OnUpdate` Pre 钩子裁决；模块 11 与 15 不感知 M5 的三档撤退身份矩阵（M15 仅在自身武装后，借助 Pre+Post 标记把下包前 M7 先锋、`plantDelay` 到期后的持包者及 `task == PLANT_BOMB` 的 `Hide(-1)` 时长压到 1 秒）。
 - **M11 → M5**：模块 11 只钉走廊 danger 并调用 `Module5_RequestSniperRetreat(client)`，请求带 2 秒 TTL；命中后模块 5 穿透残血门控与节流阀，再按矩阵决定档位。
 - **M5 → M15**：软豁免时模块 5 调用 `Module15_RequestShortHide(client)`（一次性 + 2 秒 TTL），模块 15 在 `HideState::OnEnter` Post 中优先消费，写 1 秒并跳过士气缩放。
 - **M5 → M7/M9（只读）**：`Module7_IsBodyguard()` / `Module9_IsInRoster()` 是名册内的常数级小循环；M5 同一判定还包括一次 `GetC4Carrier()` 的 O(MaxClients) 持包扫描。后撤判定内不做寻路。

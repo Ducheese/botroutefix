@@ -19,12 +19,23 @@
 //      士气 +3: 0.55x（蹲 60s → 33s，多动）
 //      士气  0: 1.00x（原样）
 //      士气 -3: 1.45x（蹲 60s → 87s，少动）
-//    除 M5 紧急短蹲请求（1 秒覆写）外不做额外钳制；其余 Hide 一律按士气缩放。
+//    除 M5 紧急短蹲请求（1 秒覆写）与下包前先锋/到期包匪的无限期掩体（Hide(-1)）短蹲外，其余 Hide 一律按士气缩放。
 //
 //    ★ 模块 12 宿主与短路协同 (M12 Co-Detour & Short-Circuit):
-//    本 Detour 同时兼任 [模块 12] 狙击 Camp 门禁的借钩宿主。进入时优先经由 Module12_SniperCamp(client)
+//    本 Detour 同时兼任 [模块 12] 狙击 Camp 门禁的借钩宿主。Post 进入时优先经由 Module12_SniperCamp(client)
 //    进行 task 19 重骰；若判定前压转入 Hunt，则直接 short-circuit（提前返回 MRES_Ignored，
 //    跳过时长缩放且不累加计数器），实现双模块高效共用单个 Detour 拦截点。
+//    Pre 钩子由 M15 独占启停；-15 关闭 M15 时 Pre 完全卸载，Post 仍可按 M9/M12 需求继续挂载。
+//
+//    ★ 下包前先锋与到期包匪 Hide(-1) 短蹲（Pre+Post 单线程标记）:
+//    HideState::OnEnter 在进入时会立刻把 m_duration < 0.0 (-1.0f) 归一化为 RandomFloat(30.0, 60.0)。
+//    利用 SourceMod/CS:S 主循环单线程且 OnEnter 内不递归状态切换的特性，M15 在 Pre 读取原始
+//    m_duration < 0.0 并记录 (pThis, client)；Post 入口第一时间读取并清空该标记，确认未被 M12/M5 优先消费后，
+//    在 !g_bBombPlanted 期间沿用与 M6 下包 OPPO 守卫同口径判定（M7 开路先锋 Module7_GetPointman()、
+//    plantDelay 到期后 GetGameTime() >= earliest 的 C4 携带者，或提前踩进包点拿到 BOT_TASK_PLANT_BOMB 者）：
+//      - 仅当本次确实为 Hide(-1) 时把 m_duration 写成 1.0 秒并跳过士气缩放，不改状态机；
+//      - 有限时长蹲（0.0s 换弹掩体、1.0s 躲雷、3~15s 撤退/埋伏、M5 短蹲）以及下包后（g_bBombPlanted == true）
+//        Guard 守包 Hide(-1) 均不受此拦截，正常走士气缩放或短蹲逻辑。
 //
 //    ★ 模块 5 紧急短蹲入口 (M5 Soft-Exemption Short Hide, 2026-10-31):
 //    M5 在焊门时调用 Module15_RequestShortHide(client)，本模块在 Post 中优先消费该请求，
@@ -67,8 +78,14 @@ static int g_iTotalHideRescaled = 0;
 static float g_flShortHideUntil[MAXPLAYERS + 1];
 static int g_iTotalShortHides = 0;
 
+// 单线程 HideState::OnEnter Pre -> Post 瞬时传递：识别原始 m_duration < 0.0 的 Hide(-1)
+// 默认零即 Address_Null（全仓 Address 全局量惯例：global.inc 裸声明，不写显式初始化器）
+static Address g_pPreInfiniteHideState;
+static int g_iPreInfiniteHideClient = 0;
+
 // 模块启用缓存（= Item_IsArmed(ITEM_M15_HIDE)，Enable 幂等短路）
 static bool g_bModule15_Active = false;
+static bool g_bHideDurationPreHooked = false;
 static bool g_bHideDurationHooked = false;
 
 //========================================================================================
@@ -78,8 +95,8 @@ static bool g_bHideDurationHooked = false;
 /**
  * 事项后端：Hide 时长修改（ITEM_M15_HIDE）
  *
- * 只读偏移、挂载 HideState::OnEnter Post Detour，不启用钩子（启用由 Apply 执行）。
- * 任一后端失败返回 false，Init 会把事项标记为 FAILED。
+ * 先挂载共享宿主 HideState::OnEnter Detour（避免 M15 独占依赖缺失时连带饿死 M9/M12 借钩宿主），
+ * 再校验 M15 所需偏移，均不提前启用钩子（启用由 Apply 执行）。
  * 失败语义：任一依赖缺失返回 false，Init 将事项标记 FAILED。
  *
  * @return              true = Hide 时长事项后端就绪
@@ -89,6 +106,12 @@ static bool PrepModule15_HideBackend()
     if (g_hGameConf == null)
     {
         LogError("[BotRouteFix] [Module 15] Gamedata missing; hide duration item FAILED.");
+        return false;
+    }
+
+    // 先挂载共享宿主 Detour，避免 M15 独占依赖缺失时饿死 M9/M12 借钩宿主
+    if (!MountHideDurationDetour())
+    {
         return false;
     }
 
@@ -106,7 +129,7 @@ static bool PrepModule15_HideBackend()
     }
 
     LogMessage("[BotRouteFix] [Module 15] Hide duration offset verified (%d).", g_iOffset_HideDuration);
-    return MountHideDurationDetour();
+    return true;
 }
 
 /**
@@ -204,9 +227,14 @@ void RestoreModule15_HideDuration()
 {
     EnableModule15_HideDuration(false);
 
+    g_pPreInfiniteHideState = Address_Null;
+    g_iPreInfiniteHideClient = 0;
+
     if (g_hHideDurationDetour != null)
     {
-        // 卸载路径不看借钩方意愿，直接强制 Disable 后再释放句柄
+        // 卸载路径不看借钩方意愿，直接强制 Disable Pre/Post 后再释放句柄
+        SyncDetourEnabled(g_hHideDurationDetour, g_bHideDurationPreHooked,
+            false, Hook_HideState_OnEnter_Pre, false, "Module 15 Pre");
         SyncDetourEnabled(g_hHideDurationDetour, g_bHideDurationHooked,
             true, Hook_HideState_OnEnter_Post, false, "Module 15");
         delete g_hHideDurationDetour;
@@ -274,6 +302,9 @@ int Module15_GetTotalShortHides()
  */
 void Module15_OnRoundStart()
 {
+    g_pPreInfiniteHideState = Address_Null;
+    g_iPreInfiniteHideClient = 0;
+
     for (int i = 0; i <= MaxClients; i++)
     {
         g_flShortHideUntil[i] = 0.0;
@@ -297,6 +328,11 @@ void Module15_OnClientDisconnect(int client)
     if (client > 0 && client <= MaxClients)
     {
         g_flShortHideUntil[client] = 0.0;
+        if (g_iPreInfiniteHideClient == client)
+        {
+            g_pPreInfiniteHideState = Address_Null;
+            g_iPreInfiniteHideClient = 0;
+        }
     }
 }
 
@@ -305,9 +341,45 @@ void Module15_OnClientDisconnect(int client)
 //========================================================================================
 
 /**
- * HideState::OnEnter Post：M12 camp 重骰 → M5 短蹲 → M15 士气缩放（事项 ITEM_M15_HIDE 的执行入口，兼 M9/M12 借用宿主）。
+ * HideState::OnEnter Pre：捕获原始 m_duration < 0.0（Hide(-1)）并做单线程瞬时标记。
  *
- * 失败语义：回调内不判定事项成败；本钩子恒返回 MRES_Ignored（只做条件写入与重定向，不拦截原生）。
+ * HideState::OnEnter 内部会把 m_duration < 0.0 归一化为 RandomFloat(30.0, 60.0)，
+ * 且不触发任何嵌套状态切换；因此可在 Pre 记下 (pThis, client) 并在紧随其后的 Post 第一时间消费并清零。
+ *
+ * @param pThis         HideState 指针
+ * @param hParams       DHook 参数
+ * @return              MRES_Ignored
+ */
+public MRESReturn Hook_HideState_OnEnter_Pre(Address pThis, DHookParam hParams)
+{
+    g_pPreInfiniteHideState = Address_Null;
+    g_iPreInfiniteHideClient = 0;
+
+    if (!Item_IsArmed(ITEM_M15_HIDE) || pThis == Address_Null || g_iOffset_HideDuration <= 0)
+    {
+        return MRES_Ignored;
+    }
+
+    int client = hParams.Get(1);
+    if (!IsBot(client, true))
+    {
+        return MRES_Ignored;
+    }
+
+    float rawDuration = view_as<float>(LoadFromAddress(pThis + view_as<Address>(g_iOffset_HideDuration), NumberType_Int32));
+    if (rawDuration < 0.0)
+    {
+        g_pPreInfiniteHideState = pThis;
+        g_iPreInfiniteHideClient = client;
+    }
+
+    return MRES_Ignored;
+}
+
+/**
+ * HideState::OnEnter Post：M12 camp 重骰 → M5 短蹲 → M15 先锋/包匪 Hide(-1) 短蹲 & 士气缩放（事项 ITEM_M15_HIDE 的执行入口，兼 M9/M12 借用宿主）。
+ *
+ * 失败语义：回调内不判定事项成败；本钩子恒返回 MRES_Ignored（只做条件写入，不拦截原生）。
  *
  * @param pThis         HideState 指针
  * @param hParams       DHook 参数
@@ -315,6 +387,11 @@ void Module15_OnClientDisconnect(int client)
  */
 public MRESReturn Hook_HideState_OnEnter_Post(Address pThis, DHookParam hParams)
 {
+    Address preState = g_pPreInfiniteHideState;
+    int preClient = g_iPreInfiniteHideClient;
+    g_pPreInfiniteHideState = Address_Null;
+    g_iPreInfiniteHideClient = 0;
+
     if (pThis == Address_Null)
     {
         return MRES_Ignored;
@@ -325,6 +402,8 @@ public MRESReturn Hook_HideState_OnEnter_Post(Address pThis, DHookParam hParams)
     {
         return MRES_Ignored;
     }
+
+    bool isInfiniteHide = (preState == pThis && preClient == client);
 
     // 虚表指纹捕获（M9 名册 Hide 真值门禁共用）：HideState 对象即 pThis，首址即虚表。
     // 放 M12 门禁与 M15 武装检查之前——借钩独占（M15 关/M12 开）时也要捕获；只记一次。
@@ -372,6 +451,51 @@ public MRESReturn Hook_HideState_OnEnter_Post(Address pThis, DHookParam hParams)
     // 提示：引擎在随后的 HideState::OnUpdate 判定到达目标点（range < 20.0f）时才会正式调用 m_hideTimer.Start(m_duration)
     // 因此在 OnEnter Post 中修改 duration 绝对及时且全局生效
     float duration = view_as<float>(LoadFromAddress(pThis + view_as<Address>(g_iOffset_HideDuration), NumberType_Int32));
+
+    // 下包前 M7 先锋与 plantDelay 到期后的持包者（及提前进点拿 PLANT_BOMB 者）命中 Hide(-1) 时改为短蹲：
+    // 仅拦截 Pre 阶段捕获的原始 m_duration < 0.0（-1.0f 掩体占坑重寻），有限时长蹲（0s 换弹 / 1s 躲雷 /
+    // 3~15s 撤退与埋伏）与下包后 Guard 守包 Hide(-1) 均不受此拦截，正常走士气缩放。
+    if (isInfiniteHide && !g_bBombPlanted)
+    {
+        float earliest = Module2_GetEarliestPlantTime();
+        bool plantOpen = (earliest <= 0.0 || GetGameTime() >= earliest);
+
+        int pointman = Module7_GetPointman();
+        int carrier = GetC4Carrier();
+        bool isTarget = false;
+        bool isPointman = false;
+
+        if (pointman > 0 && client == pointman)
+        {
+            isTarget = true;
+            isPointman = true;
+        }
+        else if (carrier > 0 && client == carrier && plantOpen)
+        {
+            isTarget = true;
+        }
+        else if (g_iOffset_Task > 0)
+        {
+            // plantDelay 未到但包匪自己踩进包点（Idle:166 会提前开下）时仍保底
+            Address pBot = GetEntityAddress(client);
+            if (pBot != Address_Null
+                && LoadFromAddress(pBot + view_as<Address>(g_iOffset_Task), NumberType_Int32) == BOT_TASK_PLANT_BOMB)
+            {
+                isTarget = true;
+            }
+        }
+
+        if (isTarget)
+        {
+            StoreToAddress(pThis + view_as<Address>(g_iOffset_HideDuration),
+                view_as<int>(HIDE_SHORT_DURATION), NumberType_Int32);
+            g_iTotalShortHides++;
+            DebugLog("[BotRouteFix] [Module 15] Bot %N (%s) Hide(-1) -> %.1fs short hide (normalized %.1fs)",
+                client, isPointman ? "pointman" : "carrier", HIDE_SHORT_DURATION, duration);
+            return MRES_Ignored;
+        }
+    }
+
     int morale = GetBotMorale(client);
     float scaled = duration * (HIDE_DURATION_SCALE_BASE - HIDE_DURATION_SCALE_STEP * float(morale));
     StoreToAddress(pThis + view_as<Address>(g_iOffset_HideDuration), view_as<int>(scaled), NumberType_Int32);
@@ -414,9 +538,17 @@ void Module15_RequestShortHide(int client)
  */
 static bool ApplyModule15_HideBackend()
 {
+    g_pPreInfiniteHideState = Address_Null;
+    g_iPreInfiniteHideClient = 0;
+
     if (!Item_IsReady(ITEM_M15_HIDE) || g_hHideDurationDetour == null)
     {
         Item_SetArmed(ITEM_M15_HIDE, false);
+        if (g_hHideDurationDetour != null)
+        {
+            SyncDetourEnabled(g_hHideDurationDetour, g_bHideDurationPreHooked,
+                false, Hook_HideState_OnEnter_Pre, false, "Module 15 Pre");
+        }
         // 即使本事项不可用，也让宿主态与借钩方需求收敛（M12 可能仍在等钩子）
         SyncHideDurationDetourState();
         return false;
@@ -424,8 +556,18 @@ static bool ApplyModule15_HideBackend()
 
     // 先临时置位再同步：宿主开关按双方事项态判定，不置位会形成循环依赖
     Item_SetArmed(ITEM_M15_HIDE, true);
+    if (!SyncDetourEnabled(g_hHideDurationDetour, g_bHideDurationPreHooked,
+        false, Hook_HideState_OnEnter_Pre, true, "Module 15 Pre"))
+    {
+        Item_SetArmed(ITEM_M15_HIDE, false);
+        SyncHideDurationDetourState();
+        return false;
+    }
+
     if (!SyncHideDurationDetourState())
     {
+        SyncDetourEnabled(g_hHideDurationDetour, g_bHideDurationPreHooked,
+            false, Hook_HideState_OnEnter_Pre, false, "Module 15 Pre");
         Item_SetArmed(ITEM_M15_HIDE, false);
         return false;
     }
@@ -436,10 +578,19 @@ static bool ApplyModule15_HideBackend()
 /**
  * 还原 Hide 时长事项（ITEM_M15_HIDE）：解除武装并按借钩双方需求收敛宿主钩子。
  *
- * 失败语义：无（幂等；解除武装 + 宿主收敛）。
+ * 失败语义：无（幂等；解除武装 + 卸载独占 Pre + Post 宿主收敛）。
  */
 static void RestoreModule15_HideBackend()
 {
     Item_SetArmed(ITEM_M15_HIDE, false);
+    g_pPreInfiniteHideState = Address_Null;
+    g_iPreInfiniteHideClient = 0;
+
+    if (g_hHideDurationDetour != null)
+    {
+        SyncDetourEnabled(g_hHideDurationDetour, g_bHideDurationPreHooked,
+            false, Hook_HideState_OnEnter_Pre, false, "Module 15 Pre");
+    }
+
     SyncHideDurationDetourState();
 }
