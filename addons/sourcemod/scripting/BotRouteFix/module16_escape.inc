@@ -206,7 +206,7 @@ bool InitModule16_Escape()
 
     Item_SetReady(ITEM_M16_ESCAPE, PrepModule16_EscapeBackend());
     EnableModule16_Escape(true);
-    if (!Item_IsArmed(ITEM_M16_ESCAPE))
+    if (!g_bModule16_Active)
     {
         LogModuleAllFailed(16);
         return false;

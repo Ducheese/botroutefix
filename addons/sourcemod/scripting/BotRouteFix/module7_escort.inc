@@ -345,7 +345,7 @@ bool InitModule7_Escort()
     Item_SetReady(ITEM_M7_ESCORT, escortReady);
 
     EnableModule7_Escort(true);
-    if (!Item_IsArmed(ITEM_M7_ESCORT))
+    if (!g_bModule7_Active)
     {
         LogModuleAllFailed(7);
         return false;

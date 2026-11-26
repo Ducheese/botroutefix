@@ -268,7 +268,7 @@ bool InitModule4_Hunt()
     Item_SetReady(ITEM_M4_HUNT, huntReady);
 
     EnableModule4_Hunt(true);
-    if (!Item_IsArmed(ITEM_M4_NOP) && !Item_IsArmed(ITEM_M4_HUNT))
+    if (!g_bModule4_Active)
     {
         LogModuleAllFailed(4);
         return false;

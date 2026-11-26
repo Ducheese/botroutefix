@@ -254,7 +254,7 @@ bool InitModule3_Danger()
     Item_SetReady(ITEM_M3_DECAY, decayReady);
 
     EnableModule3_Danger(true);
-    if (!Item_IsArmed(ITEM_M3_DECAY))
+    if (!g_bModule3_Active)
     {
         LogModuleAllFailed(3);
         return false;

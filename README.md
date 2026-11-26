@@ -165,7 +165,7 @@
 - **走廊加压 (Corridor Danger)**：
   - 定位到狙击手后，通过 `BotNavProbePathAreas()` 临时探测目击者直面狙击手的视线走廊：内部仍是 `CCSBot::ComputePath`，但先快照路径数组、路径下标、梯子指针、阻挡旗、当前/最后已知区域、目标坐标、repath 时间戳与区域进入时间，读取走廊 NavArea 后还原；**爬梯中直接跳过探测**（梯子子状态不在快照范围）。spot 遭遇点、初始遭遇区等次级状态未纳入快照，属低频可自愈的残留。
   - 该设计是必需而非优化：`CCSBot::ComputePath` 本体先 `DestroyPath()` 再写入新路径（`cs_bot_pathfind.cpp:1877-1891`），直接调用会当场篡改 spotter 当前行进路径；硬豁免目标（包匪下包临界、CT 拆包任务）不会经 M5 后撤重建路径，会被带向狙击手。
-  - 遍历沿途最多前 20 步 (SNIPER_MAX_STEPS) NavArea 节点（从 Bot 当前/最后已知 NavArea 起步），严格遵守 `1.0 / 120.0s` 自然衰减沉降契约，各钉刺 `+0.8f` 危险度（封顶 `2.5f`）并同步刷新时间戳，迫使后续全队寻路 A* 天然规避该交火走廊。
+  - 遍历沿途最多前 64 步 (SNIPER_MAX_STEPS) NavArea 节点（从 Bot 当前/最后已知 NavArea 起步），严格遵守 `1.0 / 120.0s` 自然衰减沉降契约，各钉刺 `+0.8f` 危险度（封顶 `2.5f`）并同步刷新时间戳，迫使后续全队寻路 A* 天然规避该交火走廊。
 - **撤退请求 (Retreat Request)**：
   - 只调用 `Module5_RequestSniperRetreat(spotter)`（带 2 秒 TTL），不碎路径、不同步切换状态。
   - 真正撤退时 `Hide` 内部会自行 `DestroyPath` / `ComputePath`；硬豁免目标（包匪下包临界、CT 拆包任务者）不会被本模块打断使命动作，是否真撤与撤多久由模块 5 统一裁决。
@@ -235,7 +235,7 @@
 - **下包前先锋与到期包匪 `Hide(-1)` 短蹲 (Pre+Post Infinite Hide Short Hide)**：
   - 利用 SourceMod / CS:S 主循环单线程且 `HideState::OnEnter` 内不递归状态切换的特性，`HideState::OnEnter` Pre 捕获原始 `m_duration < 0.0`（`-1.0f` 无限期掩体占坑重寻，原生随后会在函数体将其归一化为 `RandomFloat(30.0, 60.0)`）并做瞬时标记；Post 入口第一时间读取并清零该标记，经 M12 狙击重骰与 M5 短蹲优先消费后，在 `!g_bBombPlanted` 期间若命中与 M6 下包 OPPO 守卫同口径的身份判定（M7 开路先锋 `Module7_GetPointman()`、`plantDelay` 到期后 `GetGameTime() >= earliest` 的 C4 携带者，或提前踩点触发 `task == PLANT_BOMB` 的兜底者），则跳过士气缩放并把 `m_duration` 直接写成 1 秒。有限时长蹲（`0.0s` 换弹、`1.0s` 躲雷、`3~15s` 撤退与埋伏）以及下包后（`g_bBombPlanted == true`）Guard 守包 `Hide(-1)` 与 `plantDelay` 到期前的顺风控图期均不拦截，按正常士气缩放或短蹲执行。
 - **承载模块 12 宿主钩与短路保护 (Host Detour for Module 12 & Short-Circuit)**：
-  - 模块 15 的 `HideState_OnEnter_Post` 钩子作为单一归口，在缩放时长前首先调用 `Module12_SniperCamp(client)`；
+  - 模块 15 的 `HideState_OnEnter_Post` 钩子作为单一归口，在缩放时长前首先调用 `Module12_HandleSniperCamp(client)`；
   - 若模块 12 判定狙击手高士气前压重定向至 `Hunt`，则立即短路返回 `MRES_Ignored`，跳过无意义的时长缩放计算与内存覆写。
 
 ---
@@ -528,7 +528,7 @@ addons\sourcemod\
 
 ### 模块 12 借用模块 15 单 Detour 协作契约 (Module 12 Detour Borrowing Contract)
 - 模块 12（狙击 Camp 门禁）与模块 15（Hide 蹲守时长缩放）在底层均需要拦截 `HideState::OnEnter`。为杜绝在同一虚函数/函数签名上挂载双重 Detour 导致的钩子递归重入、执行顺序不确定及调用栈消耗，模块 12 不单独注册 Detour，而是直接借用模块 15 的 Post Detour 作为执行宿主。
-- 协作契约：在模块 15 Detour 入口首先调用 `Module12_SniperCamp(client)`；若模块 12 判定为高士气前压并递延重定向至 `Hunt`，则返回 `true`，模块 15 随即短路返回，跳过无意义的时长缩放计算，各模块职责清晰解耦。
+- 协作契约：在模块 15 Detour 入口首先调用 `Module12_HandleSniperCamp(client)`；若模块 12 判定为高士气前压并递延重定向至 `Hunt`，则返回 `true`，模块 15 随即短路返回，跳过无意义的时长缩放计算，各模块职责清晰解耦。
 - **底层启用态协同（`SyncHideDurationDetourState`）**：底层钩子只要任一借钩方（M9 / M12 / M15）规则开启就必须保持启用，只有全部关闭才真正 Disable。模块 12 的 `EnableModule12_SniperCamp()` 与模块 15 的业务态变更都会调用该同步函数。
 - **全成或全败**：M12 唯一事项 = 6 处补丁 + 宿主钩子 + Hunt SDK + morale。宿主不可用时不武装 6 处补丁；补丁任一站点失败立即全部回滚 → M12 FAILED，绝不出现“补丁驻留但门禁不工作”的半态。
 

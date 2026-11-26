@@ -397,7 +397,7 @@ bool InitModule13_SniperBuy()
 
     Item_SetReady(ITEM_M13_BUY, PrepModule13_BuyBackend());
     EnableModule13_SniperBuy(true);
-    if (!Item_IsArmed(ITEM_M13_BUY))
+    if (!g_bModule13_Active)
     {
         LogModuleAllFailed(13);
         return false;

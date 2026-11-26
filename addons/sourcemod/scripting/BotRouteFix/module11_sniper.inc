@@ -37,8 +37,8 @@
 //   - SpottedSniper Detour 是通知载体（模块级资源），不是事项后端：
 //     规则开启且签名可用即挂载，保证 nav 缺失、走廊事项 FAILED 时请求仍能转发
 //     （README M11 特例 / items.inc 归属原则）。
-//   - 走廊钉刺只在 ITEM_M11_CORRIDOR 武装时写入；只有载体挂载时本钩子才可能被调用，
-//     因此 g_bModule11_Active 同时充当"通知是否放行"的规则开关。
+//   - 走廊钉刺只在 ITEM_M11_CORRIDOR 武装时写入；只要模块 11 规则开启且载体挂载，
+//     本钩子即转发 M5 撤退请求，规则关闭时载体随 EnableModule11_Sniper(false) 立即摘钩。
 //========================================================================================
 
 //========================================================================================
@@ -53,7 +53,7 @@
 // 贴脸无效化距离（units）：距狙小于此值视为步枪，不钉 danger、不碎路径、不请求撤退
 #define SNIPER_NO_RETREAT_DIST  265.0
 
-// 模块启用缓存（= Item_IsArmed(ITEM_M11_CORRIDOR)，Enable 幂等短路）
+// 模块内部启用缓存（严格等于 OR(Armed) = Item_IsArmed(ITEM_M11_CORRIDOR)；非事项通知载体由 g_bSpottedSniperHooked 单独跟踪）
 static bool g_bModule11_Active = false;
 static bool g_bSpottedSniperHooked = false;
 static Handle g_hSpottedSniperDetour = null;
@@ -85,6 +85,41 @@ static int g_iOffset_EnemyQueueIndex = -1;
 //========================================================================================
 // MODULE 11 ITEM BACKENDS (called by Init)
 //========================================================================================
+
+/**
+ * 挂载 BotChatterInterface::SpottedSniper Post Detour（模块级通知载体，非事项后端）
+ *
+ * 载体不是事项后端：它只负责把"看见狙击手"这个事件送进回调，
+ * 走廊钉刺与撤退请求都在回调里按各自门禁执行；由 Init 先于走廊事项调用。
+ * 失败语义：创建/绑定失败返回 false（载体挂载失败不连带走廊事项，Init 直接丢弃其返回值，
+ * 由 PrepModule11_CorridorBackend 检查句柄为空后按本事项 FAILED 处理）。
+ *
+ * @return              true = Detour 句柄已创建并绑定签名
+ */
+static bool MountSpottedSniperDetour()
+{
+    if (g_hSpottedSniperDetour != null)
+    {
+        return true;
+    }
+
+    g_hSpottedSniperDetour = DHookCreateDetour(Address_Null, CallConv_THISCALL, ReturnType_Void, ThisPointer_Address);
+    if (g_hSpottedSniperDetour == null)
+    {
+        LogError("[BotRouteFix] [Module 11] Failed to create DHook detour instance for SpottedSniper!");
+        return false;
+    }
+
+    if (!DHookSetFromConf(g_hSpottedSniperDetour, g_hGameConf, SDKConf_Signature, "BotChatterInterface_SpottedSniper"))
+    {
+        LogError("[BotRouteFix] [Module 11] SpottedSniper signature missing; corridor and retreat requests unavailable.");
+        delete g_hSpottedSniperDetour;
+        g_hSpottedSniperDetour = null;
+        return false;
+    }
+
+    return true;
+}
 
 /**
  * 事项后端：走廊 danger（ITEM_M11_CORRIDOR）
@@ -140,40 +175,6 @@ static bool PrepModule11_CorridorBackend()
     return true;
 }
 
-/**
- * 通知载体：挂载 BotChatterInterface::SpottedSniper Post Detour
- *
- * 载体不是事项后端：它只负责把"看见狙击手"这个事件送进回调，
- * 走廊钉刺与撤退请求都在回调里按各自门禁执行。
- * 失败语义：创建/绑定失败返回 false（载体挂载失败不连带走廊事项，Init 直接丢弃其返回值）。
- *
- * @return              true = Detour 句柄已创建并绑定签名
- */
-static bool PrepModule11_NotificationTransport()
-{
-    if (g_hSpottedSniperDetour != null)
-    {
-        return true;
-    }
-
-    g_hSpottedSniperDetour = DHookCreateDetour(Address_Null, CallConv_THISCALL, ReturnType_Void, ThisPointer_Address);
-    if (g_hSpottedSniperDetour == null)
-    {
-        LogError("[BotRouteFix] [Module 11] Failed to create DHook detour instance for SpottedSniper!");
-        return false;
-    }
-
-    if (!DHookSetFromConf(g_hSpottedSniperDetour, g_hGameConf, SDKConf_Signature, "BotChatterInterface_SpottedSniper"))
-    {
-        LogError("[BotRouteFix] [Module 11] SpottedSniper signature missing; corridor and retreat requests unavailable.");
-        delete g_hSpottedSniperDetour;
-        g_hSpottedSniperDetour = null;
-        return false;
-    }
-
-    return true;
-}
-
 //========================================================================================
 // MODULE 11 LIFECYCLE
 //========================================================================================
@@ -196,11 +197,11 @@ bool InitModule11_Sniper()
         return false;
     }
 
-    PrepModule11_NotificationTransport();
+    MountSpottedSniperDetour();
     Item_SetReady(ITEM_M11_CORRIDOR, PrepModule11_CorridorBackend());
 
     EnableModule11_Sniper(true);
-    if (!Item_IsArmed(ITEM_M11_CORRIDOR))
+    if (!g_bModule11_Active)
     {
         LogModuleAllFailed(11);
         return false;
@@ -214,29 +215,36 @@ bool InitModule11_Sniper()
  * 动态启用或停用模块 11（幂等）
  *
  * 载体随模块规则开关；走廊事项按后端就绪独立武装。
- * 失败语义：只做调度，无返回值；载体与事项各自按 Apply 结果落定，互不连带。
+ * g_bModule11_Active 严格保持 OR(Armed)（= Item_IsArmed(ITEM_M11_CORRIDOR)），
+ * 停用入口额外校验 g_bSpottedSniperHooked，避免走廊 FAILED 时短路漏摘载体钩子。
+ * 失败语义：只做调度，无返回值；载体与事项各自按结果落定，互不连带。
  *
  * @param enable        true = 挂载体并按 Ready 武装；false = 摘钩并解除武装
  */
 void EnableModule11_Sniper(bool enable)
 {
-    if (enable == g_bModule11_Active)
+    if (enable)
+    {
+        if (g_bModule11_Active)
+        {
+            return;
+        }
+
+        // 载体是模块级资源：规则开启且签名可用即挂载，不依赖走廊事项 Ready
+        SyncSpottedSniperTransport(true);
+        ApplyModule11_CorridorBackend();
+
+        g_bModule11_Active = Item_IsArmed(ITEM_M11_CORRIDOR);
+        return;
+    }
+
+    if (!g_bModule11_Active && !g_bSpottedSniperHooked)
     {
         return;
     }
 
-    if (!enable)
-    {
-        RestoreModule11_CorridorBackend();
-        g_bModule11_Active = false;
-        return;
-    }
-
-    // 载体是模块级资源：规则开启且签名可用即挂载，不依赖走廊事项 Ready
-    ApplyModule11_Transport();
-    ApplyModule11_CorridorBackend();
-
-    g_bModule11_Active = Item_IsArmed(ITEM_M11_CORRIDOR);
+    RestoreModule11_CorridorBackend();
+    g_bModule11_Active = false;
 }
 
 /**
@@ -265,7 +273,11 @@ void RestoreModule11_Sniper()
 //========================================================================================
 
 /**
- * 查询累计发出的狙击撤退请求数（每命中一次威慑事件计一次）
+ * 事项 M11 走廊威慑的通知转发遥测出口：查询累计发出的狙击撤退请求数（每命中一次威慑事件计一次）。
+ *
+ * 跨模块只读 getter，统计载体发向 M5 的请求次数（不参与 ITEM_M11_CORRIDOR 事项状态）。
+ * 失败语义：尚未触发时返回 0（自插件加载起单调递增，换图不清零）。
+ * 门禁：无（读侧解耦）。
  *
  * @return              自插件加载以来的累计请求数
  */
@@ -608,10 +620,10 @@ static void RecordPressurizedCorridor(Address pArea, float expireTime)
  *
  * 载体只在模块启用时挂载；走廊钉刺按事项武装门控，
  * 撤退请求是跨模块通知（归 M5），载体在就照发。
+ * 【例外：ITEM_M11_CORRIDOR 未武装时仍允许转发 M5 撤退请求；只有走廊 danger 写入受该事项门控】
  * 失败语义：回调内不判定事项成败；条件不符一律 MRES_Ignored，不拦截原生。
  *
  * @param pThis         BotChatterInterface 指针
- * @param hParams       DHook 参数
  * @return              MRES_Ignored
  */
 public MRESReturn Hook_SpottedSniper_Post(Address pThis)
@@ -706,17 +718,19 @@ public MRESReturn Hook_SpottedSniper_Post(Address pThis)
 //========================================================================================
 
 /**
- * 应用通知载体：规则开启且签名可用即挂载（模块级资源，不参与事项状态）
+ * 同步 SpottedSniper 通知载体的启停态（模块级资源，不参与事项状态）
  *
- * 走廊事项 FAILED 时载体仍需保持挂载，撤退请求才能继续转发（M11 特例）。
- * 失败语义：载体挂不上时走廊事项必然 FAILED，请求也无法转发。
+ * 走廊事项 FAILED 时只要模块规则仍开启，载体保持挂载以转发 M5 撤退请求；
+ * 规则关闭或卸载时摘钩。
+ * 失败语义：载体启用失败时走廊事项必然 FAILED，请求也无法转发。
  *
- * @return              true = 载体处于启用态
+ * @param enable        true = 挂载载体；false = 摘除载体
+ * @return              true = 调用后载体处于目标启停态（或已处于目标态）
  */
-static bool ApplyModule11_Transport()
+static bool SyncSpottedSniperTransport(bool enable)
 {
     return SyncDetourEnabled(g_hSpottedSniperDetour, g_bSpottedSniperHooked,
-        true, Hook_SpottedSniper_Post, true, "Module 11");
+        true, Hook_SpottedSniper_Post, enable, "Module 11");
 }
 
 /**
@@ -737,7 +751,7 @@ static bool ApplyModule11_CorridorBackend()
 }
 
 /**
- * 还原走廊事项：解除武装并摘除通知载体
+ * 还原走廊事项：解除武装、清空可视化残留名单并摘除通知载体
  *
  * 载体归模块所有，停用即一并关闭；下次启用重新 Sync。
  * 失败语义：无（尽力还原；幂等）。
@@ -745,6 +759,7 @@ static bool ApplyModule11_CorridorBackend()
 static void RestoreModule11_CorridorBackend()
 {
     Item_SetArmed(ITEM_M11_CORRIDOR, false);
-    SyncDetourEnabled(g_hSpottedSniperDetour, g_bSpottedSniperHooked,
-        true, Hook_SpottedSniper_Post, false, "Module 11");
+    g_iSniperPairCount = 0;
+    g_iPressurizedAreaCount = 0;
+    SyncSpottedSniperTransport(false);
 }

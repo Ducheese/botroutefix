@@ -22,7 +22,7 @@
 //    除 M5 紧急短蹲请求（1 秒覆写）与下包前先锋/到期包匪的无限期掩体（Hide(-1)）短蹲外，其余 Hide 一律按士气缩放。
 //
 //    ★ 模块 12 宿主与短路协同 (M12 Co-Detour & Short-Circuit):
-//    本 Detour 同时兼任 [模块 12] 狙击 Camp 门禁的借钩宿主。Post 进入时优先经由 Module12_SniperCamp(client)
+//    本 Detour 同时兼任 [模块 12] 狙击 Camp 门禁的借钩宿主。Post 进入时优先经由 Module12_HandleSniperCamp(client)
 //    进行 task 19 重骰；若判定前压转入 Hunt，则直接 short-circuit（提前返回 MRES_Ignored，
 //    跳过时长缩放且不累加计数器），实现双模块高效共用单个 Detour 拦截点。
 //    Pre 钩子由 M15 独占启停；-15 关闭 M15 时 Pre 完全卸载，Post 仍可按 M9/M12 需求继续挂载。
@@ -183,7 +183,7 @@ bool InitModule15_HideDuration()
 
     Item_SetReady(ITEM_M15_HIDE, PrepModule15_HideBackend());
     EnableModule15_HideDuration(true);
-    if (!Item_IsArmed(ITEM_M15_HIDE))
+    if (!g_bModule15_Active)
     {
         LogModuleAllFailed(15);
         return false;
@@ -413,7 +413,7 @@ public MRESReturn Hook_HideState_OnEnter_Post(Address pThis, DHookParam hParams)
     }
 
     // M12 camp 门禁：task 19 的 Hide 在此重骰；被重定向去 Hunt 的直接返回，不再缩放
-    if (Module12_SniperCamp(client))
+    if (Module12_HandleSniperCamp(client))
     {
         return MRES_Ignored;
     }

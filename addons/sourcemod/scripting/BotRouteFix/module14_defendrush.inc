@@ -335,7 +335,7 @@ bool InitModule14_DefendRush()
 
     Item_SetReady(ITEM_M14_DEFEND, PrepModule14_DefendBackend());
     EnableModule14_DefendRush(true);
-    if (!Item_IsArmed(ITEM_M14_DEFEND))
+    if (!g_bModule14_Active)
     {
         LogModuleAllFailed(14);
         return false;

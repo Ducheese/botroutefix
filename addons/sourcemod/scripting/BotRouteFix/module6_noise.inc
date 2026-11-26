@@ -266,7 +266,7 @@ bool InitModule6_Noise()
     Item_SetReady(ITEM_M6_NOISE, noiseReady);
 
     EnableModule6_Noise(true);
-    if (!Item_IsArmed(ITEM_M6_NOISE))
+    if (!g_bModule6_Active)
     {
         LogModuleAllFailed(6);
         return false;

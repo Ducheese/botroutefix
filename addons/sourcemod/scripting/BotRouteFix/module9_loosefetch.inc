@@ -240,7 +240,7 @@ bool InitModule9_Fetch()
 
     Item_SetReady(ITEM_M9_FETCH, PrepModule9_FetchBackend());
     EnableModule9_Fetch(true);
-    if (!Item_IsArmed(ITEM_M9_FETCH))
+    if (!g_bModule9_Active)
     {
         LogModuleAllFailed(9);
         return false;

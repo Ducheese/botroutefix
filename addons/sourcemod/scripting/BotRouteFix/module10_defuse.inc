@@ -125,7 +125,7 @@ bool InitModule10_Defuse()
 
     Item_SetReady(ITEM_M10_DEFUSE, PrepModule10_DefuseBackend());
     EnableModule10_Defuse(true);
-    if (!Item_IsArmed(ITEM_M10_DEFUSE))
+    if (!g_bModule10_Active)
     {
         LogModuleAllFailed(10);
         return false;

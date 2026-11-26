@@ -16,7 +16,7 @@
 //    六处二进制形状各异（jbe/jb/ja 短长不一、跳向 skip 还是跳向 camp 也不同），
 //    逐处公式重写需 18 个 cave，64 位又无处落 cave（最长连续 CC 仅 21B），不可行。
 //
-// 2. 等价重构方案（与原生逐条对照，差异见 §4）：
+// 2. 等价重构方案（与原生逐条对照，差异见 §3）：
 //      a) 六处骰子 jcc 全部旁路（指向 skip 的 NOP 掉，指向 camp 的改无条件 jmp），
 //         狙击手必进 Hide，task 照常置 19；
 //      b) 复用模块 15 的 HideState::OnEnter post 钩：task == 19 的 Hide 即 camp 分支，
@@ -68,6 +68,7 @@ static MemoryPatch g_PatchSniperCampSites[6];
 static int g_SniperCampPatchBytes[6][6];    // 预先构造的旁路字节（Prep 构造 / Apply 原样写入）
 // Task/Disposition 上收 global.inc 共享（OnPluginStart 一次解析），本文件只用不存
 static bool g_bModule12_Active = false; // 模块规则开启态（Enable 幂等缓存）
+static bool g_bSniperCampNeedsReprobe = false; // 物理写入失败或显式停用未就绪事项后置 true，避免 Init/Config 重复探测
 static int g_iTotalSniperCampRedirected = 0;
 
 // 站点表：0=O1 1=O2 2=O3 3=D1 4=D2 5=D3；O2/O3 为 ja/jb-to-camp，需 E9 转换，其余 NOP
@@ -89,17 +90,26 @@ static const char g_sSniperCamp12_OffNames[6][32] =
 /**
  * 事项后端：camp 门禁（ITEM_M12_SNIPERCAMP）
  *
- * 校验 Hunt SDKCall、task/disposition 偏移，并逐站点定位/校验/备份/构造旁路字节；
- * 不写入任何代码段（写入由 Apply 执行）。任一后端失败返回 false，Init 标记事项 FAILED。
- * 失败语义：任一依赖缺失返回 false，Init 将事项标记 FAILED。
+ * 校验宿主 HideState::OnEnter 句柄、Hunt SDKCall、task/disposition/morale 偏移，
+ * 并逐站点定位/校验/备份/构造旁路字节；不写入任何代码段（写入由 Apply 执行）。
+ * 任一后端失败返回 false，Init 标记事项 FAILED。
+ * 失败语义：任一依赖缺失返回 false，Init/重探将事项标记 FAILED（Ready=false）。
  *
- * @return              true = 六站点与门禁偏移全部就绪
+ * @return              true = 宿主、偏移与六站点全部就绪
  */
 static bool PrepModule12_SniperCampBackend()
 {
     if (g_hGameConf == null)
     {
         LogError("[BotRouteFix] [Module 12] Gamedata missing; camp item FAILED.");
+        return false;
+    }
+
+    // 宿主先行断言：HideState::OnEnter 钩子归 M15 所有（sp 初始化顺序 15 → 12），
+    // M12 只借用；宿主柄缺失说明宿主 Prep 没过，直接置 Ready=false，不进站点扫描。
+    if (!Module15_IsHideHostReady())
+    {
+        LogError("[BotRouteFix] [Module 12] Hide host detour missing; camp item FAILED.");
         return false;
     }
 
@@ -127,7 +137,7 @@ static bool PrepModule12_SniperCampBackend()
 
     for (int i = 0; i < 6; i++)
     {
-        if (!PrepModule12_Site(i))
+        if (!PrepareSniperCampSite(i))
         {
             return false;
         }
@@ -146,7 +156,7 @@ static bool PrepModule12_SniperCampBackend()
  * @param siteIndex     0..5
  * @return              true = 该站点后端就绪
  */
-static bool PrepModule12_Site(int siteIndex)
+static bool PrepareSniperCampSite(int siteIndex)
 {
     Address sigAddr = GameConfGetAddress(g_hGameConf, g_sSniperCamp12_SigNames[siteIndex]);
     if (sigAddr == Address_Null)
@@ -168,7 +178,7 @@ static bool PrepModule12_Site(int siteIndex)
     char patchName[32];
     Format(patchName, sizeof(patchName), "SniperCamp_S%d", siteIndex);
 
-    // 站点固定宽度：O1/D2/D3 = 6 字节远跳；D1 = 2 字节短跳（两种架构一致）
+    // 站点固定宽度：O1/O2/O3/D2/D3 = 6 字节远跳；D1 = 2 字节短跳（两种架构一致）
     int patchSize = (siteIndex == 3) ? 2 : 6;
 
     int b0 = LoadFromAddress(jccAddr, NumberType_Int8);
@@ -193,7 +203,7 @@ static bool PrepModule12_Site(int siteIndex)
     }
     else
     {
-        if (!PrepModule12_ValidateSite(siteIndex, isConvert, jccAddr, b0, b1))
+        if (!ValidateSniperCampSite(siteIndex, isConvert, jccAddr, b0, b1))
         {
             return false;
         }
@@ -244,7 +254,7 @@ static bool PrepModule12_Site(int siteIndex)
  * @param b1            jcc 次字节
  * @return              true = 模板与语义锚点全部匹配
  */
-static bool PrepModule12_ValidateSite(int siteIndex, bool isConvert, Address jccAddr, int b0, int b1)
+static bool ValidateSniperCampSite(int siteIndex, bool isConvert, Address jccAddr, int b0, int b1)
 {
     if (!isConvert)
     {
@@ -369,19 +379,10 @@ bool InitModule12_SniperCamp()
         return false;
     }
 
-    // 宿主先行断言：HideState::OnEnter 钩子归 M15 所有（sp 初始化顺序 15 → 12 不可调），
-    // M12 只借用；宿主柄缺失说明宿主 Prep 没过，本事项直接 FAILED，不进 Prep 做无用功。
-    // 宿主柄是 M15 私有 static，经 Module15_IsHideHostReady 探针查询，不直读。
-    if (!Module15_IsHideHostReady())
-    {
-        Item_SetReady(ITEM_M12_SNIPERCAMP, false);
-        LogError("[BotRouteFix] [Module 12] Hide host detour missing; camp item FAILED.");
-        return false;
-    }
-
+    g_bSniperCampNeedsReprobe = false;
     Item_SetReady(ITEM_M12_SNIPERCAMP, PrepModule12_SniperCampBackend());
     EnableModule12_SniperCamp(true);
-    if (!Item_IsArmed(ITEM_M12_SNIPERCAMP))
+    if (!g_bModule12_Active)
     {
         LogModuleAllFailed(12);
         return false;
@@ -394,13 +395,19 @@ bool InitModule12_SniperCamp()
 /**
  * 动态启用或停用模块 12（事项 ITEM_M12_SNIPERCAMP 的调度入口；幂等；停用即写回六处 jcc 并解除武装）
  *
- * 只做调度：只武装 Ready 的事项；单事项故 Active == Armed。
- * 失败语义：无返回值；Apply 内部失败只清 Armed 并就地 LogError。
+ * 只做调度：物理写失败或显式停用后重新启用时重跑一次事项 Prep，再按 Ready 武装；单事项故 Active == Armed。
+ * 失败语义：Apply 写入失败会清 Ready 并回滚；后续重新启用或 -12 后重开时重新探测，挂钩失败只清 Armed。
  *
  * @param enable        true = 按事项后端就绪情况武装；false = 还原并解除武装
  */
 void EnableModule12_SniperCamp(bool enable)
 {
+    // 显式关闭且当前处于未就绪态时，为下次重新开启保留一次重探机会（必须在早退之前记录）
+    if (!enable && !Item_IsReady(ITEM_M12_SNIPERCAMP))
+    {
+        g_bSniperCampNeedsReprobe = true;
+    }
+
     if (enable == g_bModule12_Active)
     {
         return;
@@ -413,6 +420,13 @@ void EnableModule12_SniperCamp(bool enable)
         // 借钩宿主：模块 15 若仍在工作，钩子必须保持启用
         SyncHideDurationDetourState();
         return;
+    }
+
+    // 仅在物理写入失败或显式停用未就绪事项后置标时重探，避免 Init/Config 期连续重复跑 Prep。
+    if (!Item_IsReady(ITEM_M12_SNIPERCAMP) && g_bSniperCampNeedsReprobe)
+    {
+        g_bSniperCampNeedsReprobe = false;
+        Item_SetReady(ITEM_M12_SNIPERCAMP, PrepModule12_SniperCampBackend());
     }
 
     bool armed = ApplyModule12_SniperCampBackend();
@@ -437,7 +451,13 @@ void RestoreModule12_SniperCamp()
 //========================================================================================
 
 /**
- * 累积重定向次数（骰子未过转 Hunt；只在事项武装时累加，自加载起单调递增）
+ * 事项 M12 camp 门禁的遥测读取出口：查询累计重定向去 Hunt 的次数
+ * （涵盖重骰未过与 M9 名册拒收两条路径；跨模块只读，不参与事项状态）。
+ *
+ * 失败语义：尚未触发时返回 0（自插件加载起单调递增，换图不清零）。
+ * 门禁：无（读侧解耦）。
+ *
+ * @return              累计 Hunt 重定向次数
  */
 int Module12_GetTotalSniperCampRedirected()
 {
@@ -471,13 +491,15 @@ float Module12_CalculateSniperCampChance(int morale)
 //========================================================================================
 
 /**
- * camp 门禁：挂在 HideState::OnEnter post（模块 15 同钩），task 19 即重骰
+ * 事项 M12 SniperCamp 门禁：挂在 HideState::OnEnter post（模块 15 同钩），task 19 即重骰。
  *
- * 调用方（模块 15 宿主）只在需要时调用；本函数自行把关事项武装态。
+ * 供模块 15 宿主跨文件调用的公开门禁入口（不可标 static）；本函数自行把关事项武装态。
+ * 失败语义：事项未武装、Bot 无效、非 task 19 或留守骰命中时返回 false，不改变原生 Hide；
+ *             名册/骰子未通过时递延 Hunt 并返回 true，由宿主短路后续 M15 缩放。
  *
  * @return              true = 已重定向去 Hunt（调用方跳过 M15 缩放）；false = 放行
  */
-bool Module12_SniperCamp(int client)
+bool Module12_HandleSniperCamp(int client)
 {
     if (!Item_IsArmed(ITEM_M12_SNIPERCAMP))
     {
@@ -525,7 +547,9 @@ bool Module12_SniperCamp(int client)
 }
 
 /**
- * 递延一帧转 Hunt（帧外切状态才安全）+ disposition 双保险
+ * 事项 M12 SniperCamp 门禁的 SourceMod RequestFrame 回调：递延一帧转 Hunt（帧外切状态才安全）
+ * + disposition 双保险。
+ * 失败语义：事项停用或客户端无效时直接返回，不改变 Bot 状态；有效时执行一次 Hunt 重定向。
  */
 public void Module12_FrameHunt(any data)
 {
@@ -542,7 +566,12 @@ public void Module12_FrameHunt(any data)
     }
 
     BotHunt(client);
-    if (g_iOffset_Disposition > 0)
+    // 避开在册抢包手、开路先锋与持包人：BotHunt 内部触发的 SetState Post 已为他们写入 OPPO，
+    // 这里若再无条件写回 ENGAGE(0) 会当场冲掉 M9/M6 守卫。
+    if (g_iOffset_Disposition > 0
+        && !Module9_IsInRoster(client)
+        && client != Module7_GetPointman()
+        && client != GetC4Carrier())
     {
         SetEntData(client, g_iOffset_Disposition, 0, 4, true); // ENGAGE_AND_INVESTIGATE
     }
@@ -558,7 +587,7 @@ public void Module12_FrameHunt(any data)
  * 应用 camp 门禁事项（ITEM_M12_SNIPERCAMP）：六站点全成或全败
  *
  * 物理写入失败证伪了 Prep 的模板校验，必须同步清 Ready 并回滚已写站点。
- * 失败语义：写入失败同步清 Ready 并回滚已写站点，事项 FAILED。
+ * 失败语义：写入失败同步清 Ready、置重探旗标并回滚已写站点，事项 FAILED。
  *
  * @return              true = 六处旁路全部驻留
  */
@@ -579,6 +608,7 @@ static bool ApplyModule12_SniperCampBackend()
                 g_PatchSniperCampSites[j].Restore();
             }
             Item_SetReady(ITEM_M12_SNIPERCAMP, false);
+            g_bSniperCampNeedsReprobe = true;
             Item_SetArmed(ITEM_M12_SNIPERCAMP, false);
             LogError("[BotRouteFix] [Module 12] Site %d write failed; all bypasses rolled back, camp item FAILED.", i);
             return false;
@@ -617,5 +647,4 @@ static void RestoreModule12_SniperCampBackend()
     }
     Item_SetArmed(ITEM_M12_SNIPERCAMP, false);
 }
-
 

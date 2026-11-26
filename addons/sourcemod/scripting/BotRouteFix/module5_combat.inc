@@ -388,7 +388,7 @@ bool InitModule5_Combat()
 
     // 4. 套用业务态（三个事项独立武装）
     EnableModule5_Combat(true);
-    if (!Item_IsArmed(ITEM_M5_RELOAD) && !Item_IsArmed(ITEM_M5_DODGE) && !Item_IsArmed(ITEM_M5_RETREAT))
+    if (!g_bModule5_Active)
     {
         LogModuleAllFailed(5);
         return false;
