@@ -242,7 +242,7 @@ void EnableModule16_Escape(bool enable)
 }
 
 /**
- * 还原模块 16（事项 ITEM_M16_ESCAPE；插件卸载/规则关闭）：摘钩、解除武装、销毁自有 Detour 句柄。
+ * 还原模块 16（事项 ITEM_M16_ESCAPE；插件卸载/规则关闭）：停用钩子、解除武装并销毁自有 Detour 句柄。
  *
  * 失败语义：无（尽力还原；句柄销毁后置 null，下次启用以 Prep 重建）。
  */
@@ -252,18 +252,12 @@ void RestoreModule16_Escape()
 
     if (g_hEquipKnifeDetour != null)
     {
-        // 卸载路径无条件摘钩，不依赖 per-hook 缓存
-        SyncDetourEnabled(g_hEquipKnifeDetour, g_bModule16Hooked,
-            false, Hook_EquipKnife_Pre, false, "Module 16");
         delete g_hEquipKnifeDetour;
         g_hEquipKnifeDetour = null;
     }
 
     if (g_hAttackEnterDetour != null)
     {
-        // 卸载路径无条件摘钩，不依赖 per-hook 缓存
-        SyncDetourEnabled(g_hAttackEnterDetour, g_bModule16AttackHooked,
-            true, Hook_AttackOnEnter_Escape_Post, false, "Module 16");
         delete g_hAttackEnterDetour;
         g_hAttackEnterDetour = null;
     }
@@ -551,11 +545,7 @@ static bool ApplyModule16_EscapeBackend()
 
     if (!knifeOk || !contactOk)
     {
-        SyncDetourEnabled(g_hEquipKnifeDetour, g_bModule16Hooked,
-            false, Hook_EquipKnife_Pre, false, "Module 16");
-        SyncDetourEnabled(g_hAttackEnterDetour, g_bModule16AttackHooked,
-            true, Hook_AttackOnEnter_Escape_Post, false, "Module 16");
-        Item_SetArmed(ITEM_M16_ESCAPE, false);
+        RestoreModule16_EscapeBackend();
         LogError("[BotRouteFix] [Module 16] Escape item unarmed: detour enable failed (knife=%d, contact=%d).",
             knifeOk, contactOk);
         return false;

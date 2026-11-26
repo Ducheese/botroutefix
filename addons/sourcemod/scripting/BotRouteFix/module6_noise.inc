@@ -54,12 +54,7 @@
 // 士气门限宏定义
 #define MORALE_HOLD_THRESHOLD   -1      // 保守拦截士气阈值 (<= -1 一律不调查)
 
-// 下包 OPPO 守卫宏（引擎 DispositionType 原值；下包任务值见 global.inc；DISP_OPPORTUNITY 与 module9
-// 共用值（同为 1），两边都用 #if !defined 守卫防重定义，改值时两处同步）
-#define DISP_ENGAGE               0       // ENGAGE_AND_INVESTIGATE
-#if !defined DISP_OPPORTUNITY
-#define DISP_OPPORTUNITY          1       // OPPORTUNITY_FIRE
-#endif
+// 下包任务与接战策略枚举（BOT_TASK_PLANT_BOMB / DISP_ENGAGE / DISP_OPPORTUNITY）上收 global.inc 统一定义，本文件只消费不定义
 
 // 模块 Detour 句柄与统计
 // 注：本模块不读 g_bBombPlanted（g_bBombPlanted 仍由 events.inc 维护，供 M5/M7/M10 消费）。
@@ -692,13 +687,7 @@ static bool ApplyModule6_NoiseBackend()
 
     if (!noiseOk || !stateOk || !attackOk)
     {
-        SyncDetourEnabled(g_hInvestigateNoiseDetour, g_bNoiseHooked,
-            false, Hook_InvestigateNoise_Pre, false, "Module 6");
-        SyncDetourEnabled(g_hSetStateDetour, g_bSetStateHooked,
-            true, Hook_SetState_Post_Plant, false, "Module 6");
-        SyncDetourEnabled(g_hAttackGuardDetour, g_bAttackGuardHooked,
-            false, Hook_AttackState_OnUpdate_Pre_Plant, false, "Module 6");
-        Item_SetArmed(ITEM_M6_NOISE, false);
+        RestoreModule6_NoiseBackend();
         LogError("[BotRouteFix] [Module 6] Detour enable failed; M6 noise + OPPO guard item unarmed.");
         return false;
     }

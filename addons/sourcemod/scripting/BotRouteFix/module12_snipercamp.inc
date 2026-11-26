@@ -573,7 +573,7 @@ public void Module12_FrameHunt(any data)
         && client != Module7_GetPointman()
         && client != GetC4Carrier())
     {
-        SetEntData(client, g_iOffset_Disposition, 0, 4, true); // ENGAGE_AND_INVESTIGATE
+        SetEntData(client, g_iOffset_Disposition, DISP_ENGAGE, 4, true); // ENGAGE_AND_INVESTIGATE
     }
     DebugLog("[BotRouteFix] [Module 12] Bot %N camp redirect executed (deferred Hunt now)", client);
     g_iTotalSniperCampRedirected++;
@@ -603,13 +603,9 @@ static bool ApplyModule12_SniperCampBackend()
     {
         if (!g_PatchSniperCampSites[i].Apply(g_SniperCampPatchBytes[i]))
         {
-            for (int j = 0; j < 6; j++)
-            {
-                g_PatchSniperCampSites[j].Restore();
-            }
+            RestoreModule12_SniperCampBackend();
             Item_SetReady(ITEM_M12_SNIPERCAMP, false);
             g_bSniperCampNeedsReprobe = true;
-            Item_SetArmed(ITEM_M12_SNIPERCAMP, false);
             LogError("[BotRouteFix] [Module 12] Site %d write failed; all bypasses rolled back, camp item FAILED.", i);
             return false;
         }
@@ -621,12 +617,8 @@ static bool ApplyModule12_SniperCampBackend()
     Item_SetArmed(ITEM_M12_SNIPERCAMP, true);
     if (!SyncHideDurationDetourState())
     {
-        for (int j = 0; j < 6; j++)
-        {
-            g_PatchSniperCampSites[j].Restore();
-        }
-        // 宿主缺失属挂钩类失败：只清 Armed，保留 Ready 供下次 Enable 重试
-        Item_SetArmed(ITEM_M12_SNIPERCAMP, false);
+        // 宿主缺失属挂钩类失败：回滚六站点并只清 Armed，保留 Ready 供下次 Enable 重试
+        RestoreModule12_SniperCampBackend();
         LogError("[BotRouteFix] [Module 12] Hook host unavailable; dice bypasses rolled back, camp item unarmed.");
         return false;
     }

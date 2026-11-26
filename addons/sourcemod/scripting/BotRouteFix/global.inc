@@ -22,13 +22,18 @@
 // 沉降契约的唯一出处：模块 3(软衰减) / 模块 8(排队钉刺) / 模块 11(走廊钉刺) 共用
 #define DANGER_DECAY_RATE_SEC       120.0
 
-// 引擎 CCSBot 任务枚举原值（cs_bot.h TaskType）：任务常量唯一出处，M5/M6/M12/M16 共用；
+// 引擎 CCSBot 任务枚举原值（cs_bot.h TaskType）：任务常量唯一出处，M5/M6/M9/M12/M15/M16 共用；
 // 各模块只消费不定义，Prep 亦不校验它（原值永真）
 #define BOT_TASK_PLANT_BOMB           1       // 引擎原生任务枚举：PLANT_BOMB (下包任务)
 #define BOT_TASK_DEFUSE_BOMB          3       // 引擎原生任务枚举：DEFUSE_BOMB (拆包任务)
 #define BOT_TASK_MOVE_TO_SNIPER_SPOT  19      // 引擎原生任务枚举：MOVE_TO_SNIPER_SPOT (狙击手前往架枪点)
 #define BOT_TASK_ESCAPE_FROM_BOMB     9       // 引擎原生任务枚举：ESCAPE_FROM_BOMB (逃离炸弹)
 #define BOT_TASK_FOLLOW               11      // 引擎原生任务枚举：FOLLOW (跟随任务)
+
+// 引擎 CCSBot 接战策略枚举原值（cs_bot.h DispositionType）：策略常量唯一出处，M6/M9/M12/visuals 共用；
+// 各模块只消费不定义，Prep 亦不校验它（原值永真）
+#define DISP_ENGAGE                   0       // 引擎原生策略枚举：ENGAGE_AND_INVESTIGATE
+#define DISP_OPPORTUNITY              1       // 引擎原生策略枚举：OPPORTUNITY_FIRE
 
 //========================================================================================
 // HANDLES & GLOBAL VARIABLES

@@ -45,15 +45,7 @@
 
 #define FETCH_ROSTER_SIZE 3
 
-// 蹲守承诺任务（与 module12 的 BOT_TASK_MOVE_TO_SNIPER_SPOT 同值 19；module9 先于
-// module12 被 include，不能复用它的宏，只能本地再定一遍，改值时两处同步）
-#define FETCH_CAMP_TASK 19
-
-// 抢包 OPPO 守卫值（与 module6 的 DISP_OPPORTUNITY 同值（同为 1）：同编译单元
-// 重复 #define 会报错，两边都用 #if !defined 守卫，改值时两处同步）
-#if !defined DISP_OPPORTUNITY
-#define DISP_OPPORTUNITY          1       // OPPORTUNITY_FIRE
-#endif
+// 蹲守任务与接战策略枚举（BOT_TASK_MOVE_TO_SNIPER_SPOT / DISP_ENGAGE / DISP_OPPORTUNITY）上收 global.inc 统一定义，本文件只消费不定义
 
 // 本模块私有状态（static，名册与句柄不出本文件）
 static bool g_bModule9_Active = false;      // 业务开启态
@@ -575,7 +567,7 @@ static bool Fetch_IsCampCommitted(int bot)
         return false;
     }
 
-    return LoadFromAddress(pBot + view_as<Address>(g_iOffset_Task), NumberType_Int32) == FETCH_CAMP_TASK;
+    return LoadFromAddress(pBot + view_as<Address>(g_iOffset_Task), NumberType_Int32) == BOT_TASK_MOVE_TO_SNIPER_SPOT;
 }
 
 /**
@@ -1001,14 +993,8 @@ static bool ApplyModule9_FetchBackend()
 
     if (!looseOk || !fetchOk || !attackOk)
     {
-        // 挂钩失败属动态环境抖动，不证伪探测结论：只清 Armed 保留 Ready，下次 Enable 重试
-        SyncDetourEnabled(g_hLooseDetour, g_bLooseHooked,
-            false, Hook_NoticeLooseBomb_Pre, false, "Module 9");
-        SyncDetourEnabled(g_hFetchGuardDetour, g_bFetchGuardHooked,
-            true, Hook_SetState_Post_Fetch, false, "Module 9");
-        SyncDetourEnabled(g_hAttackFetchGuardDetour, g_bAttackFetchGuardHooked,
-            false, Hook_AttackState_OnUpdate_Pre_Fetch, false, "Module 9");
-        Item_SetArmed(ITEM_M9_FETCH, false);
+        // 挂钩失败属动态环境抖动，不证伪探测结论：回滚摘钩并清 Armed，保留 Ready 供下次 Enable 重试
+        RestoreModule9_FetchBackend();
         LogError("[BotRouteFix] [Module 9] Fetch detour enable failed; M9 fetch roster + OPPO guard item unarmed.");
         return false;
     }

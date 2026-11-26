@@ -1879,11 +1879,7 @@ static bool ApplyModule7_EscortBackend()
 
     if (!idleOk || !moveToOk || !attackOk)
     {
-        SyncDetourEnabled(g_hIdleDetour, g_bIdleHooked, false, Hook_CCSBotIdle_Pre, false, "Module 7");
-        SyncDetourEnabled(g_hMoveToDetour, g_bMoveToHooked, false, Hook_MoveToState_OnUpdate_Pre, false, "Module 7");
-        SyncDetourEnabled(g_hAttackDetour, g_bAttackHooked, false, Hook_AttackState_OnUpdate_Pre_Escort, false, "Module 7");
-        g_PatchFollowMeme.Restore();
-        Item_SetArmed(ITEM_M7_ESCORT, false);
+        RestoreModule7_EscortBackend();
         LogError("[BotRouteFix] [Module 7] Detour enable failed (idle=%d, moveTo=%d, attack=%d); escort item FAILED.",
             idleOk, moveToOk, attackOk);
         return false;

@@ -398,14 +398,14 @@ public Action Timer_RenderVisualsFast(Handle timer)
             }
 
             int disp = Module6_GetBotDisposition(i);
-            if (disp == 1) // OPPORTUNITY_FIRE
+            if (disp == DISP_OPPORTUNITY)
             {
                 float pos[3];
                 GetClientAbsOrigin(i, pos);
                 pos[2] += 28.0; // 腰部高度
                 DrawRing(pos, 26.0, 28.0, colorM6_OppFire, 3.0, 0.25, 0); // speed = 0 静止紧身
             }
-            else if (disp == 0) // ENGAGE_AND_INVESTIGATE
+            else if (disp == DISP_ENGAGE)
             {
                 float pos[3];
                 GetClientAbsOrigin(i, pos);

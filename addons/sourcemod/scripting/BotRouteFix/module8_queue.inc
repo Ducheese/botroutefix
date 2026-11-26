@@ -125,22 +125,33 @@ static bool PrepModule8_QueueBackend()
 /**
  * 事项后端：死锁强切（ITEM_M8_DEADLOCK）
  *
- * 只校验 Hunt SDKCall 句柄。死锁事项复用排队事项的 Post 钩子做等待检测，
- * 强切本身走 SDKCall，因此本 Prep 不挂载任何钩子。
- * 失败返回 false，Init 会把死锁事项标记为 FAILED，排队事项不受影响。
- * 失败语义：任一依赖缺失返回 false，Init 将事项标记 FAILED。
+ * 死锁事项依赖"排队/寻路前置链（ITEM_M8_QUEUE Ready）"与 "Hunt SDKCall 句柄"两项条件；
+ * 复用排队事项的 Post 钩子做等待检测，强切本身走 SDKCall，因此本 Prep 不挂载任何钩子。
+ * 失败语义：前置 path 链或 Hunt SDKCall 任一缺失返回 false（DEADLOCK Ready=false / FAILED）；
+ * Hunt 缺失不影响排队事项，前置 path 链缺失则两者均未就绪（0/2 ready）。
  *
- * @return              true = 死锁事项后端就绪
+ * @return              true = 死锁事项后端与前置链全部就绪
  */
 static bool PrepModule8_DeadlockBackend()
 {
+    bool ok = true;
+    if (!Item_IsReady(ITEM_M8_QUEUE))
+    {
+        LogError("[BotRouteFix] [Module 8] Queue/path precondition missing; deadlock item FAILED.");
+        ok = false;
+    }
+
     if (g_hSDKCall_Hunt == null)
     {
         LogError("[BotRouteFix] [Module 8] Hunt SDKCall missing; deadlock item FAILED.");
-        return false;
+        ok = false;
     }
-    LogMessage("[BotRouteFix] [Module 8] Deadlock Hunt SDKCall verified.");
-    return true;
+
+    if (ok)
+    {
+        LogMessage("[BotRouteFix] [Module 8] Deadlock Hunt SDKCall verified.");
+    }
+    return ok;
 }
 
 
@@ -164,7 +175,7 @@ bool InitModule8_Queue()
         return false;
     }
 
-    // 排队打碎与死锁 Hunt 是两个事项：任一 Prep 失败只熔断自身事项。
+    // 排队看 path 链，死锁同时看 path 链与 Hunt：Hunt 缺失只熔断死锁；path 缺失两者同 FAIL。
     Item_SetReady(ITEM_M8_QUEUE, PrepModule8_QueueBackend());
     Item_SetReady(ITEM_M8_DEADLOCK, PrepModule8_DeadlockBackend());
 

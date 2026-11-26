@@ -583,14 +583,10 @@ static bool ApplyModule4_HuntBackend()
     bool postOk = SyncDetourEnabled(g_hHuntStateDetour, g_bHuntPostHooked, true,
         Hook_HuntState_OnUpdate_Post, true, "Module 4");
 
-    // 全成或全败：任一钩子失败立即回滚，绝不留半挂载态
+    // 全成或全败：任一钩子失败立即回滚，绝不留半挂载态（与 RestoreBackend 同构，调它）
     if (!preOk || !postOk)
     {
-        SyncDetourEnabled(g_hHuntStateDetour, g_bHuntPreHooked, false,
-            Hook_HuntState_OnUpdate_Pre, false, "Module 4");
-        SyncDetourEnabled(g_hHuntStateDetour, g_bHuntPostHooked, true,
-            Hook_HuntState_OnUpdate_Post, false, "Module 4");
-        Item_SetArmed(ITEM_M4_HUNT, false);
+        RestoreModule4_HuntBackend();
         LogError("[BotRouteFix] [Module 4] HuntState hook item FAILED (pre=%d, post=%d).", preOk, postOk);
         return false;
     }

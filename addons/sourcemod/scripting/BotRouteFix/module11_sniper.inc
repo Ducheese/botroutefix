@@ -751,7 +751,7 @@ static bool ApplyModule11_CorridorBackend()
 }
 
 /**
- * 还原走廊事项：解除武装、清空可视化残留名单并摘除通知载体
+ * 还原走廊事项：解除武装、摘除通知载体
  *
  * 载体归模块所有，停用即一并关闭；下次启用重新 Sync。
  * 失败语义：无（尽力还原；幂等）。
@@ -759,7 +759,5 @@ static bool ApplyModule11_CorridorBackend()
 static void RestoreModule11_CorridorBackend()
 {
     Item_SetArmed(ITEM_M11_CORRIDOR, false);
-    g_iSniperPairCount = 0;
-    g_iPressurizedAreaCount = 0;
     SyncSpottedSniperTransport(false);
 }
