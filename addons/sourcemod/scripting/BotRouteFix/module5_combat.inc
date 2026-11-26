@@ -516,6 +516,24 @@ int Module5_GetRetreatReason(int client)
     return RETREAT_REASON_NONE;
 }
 
+/**
+ * 事项 M5 后撤的跨模块请求入口：登记狙击手强制撤退请求（带 TTL）
+ *
+ * 只登记请求，不改变本模块事项状态；请求是否生效由后撤 Pre 钩子在 TTL 窗口内消费时判定。
+ * 未武装时后撤钩子不启用，请求自然不会被消费，无需在此另行门控。
+ *
+ * @param client        目标 Bot 客户端索引
+ */
+void Module5_RequestSniperRetreat(int client)
+{
+    if (client > 0 && client <= MaxClients)
+    {
+        g_bSniperRetreatWanted[client] = true;
+        g_flSniperRetreatUntil[client] = GetGameTime() + SNIPER_RETREAT_REQUEST_TTL;
+        g_flNextForcedRetreat[client] = 0.0;
+    }
+}
+
 //========================================================================================
 // MODULE 5 EVENT HANDLERS
 //========================================================================================
@@ -830,24 +848,6 @@ public MRESReturn Hook_AttackState_OnUpdate_Pre(Address pThis, DHookParam hParam
 //========================================================================================
 // MODULE 5 ITEM APPLY / RESTORE BACKENDS
 //========================================================================================
-
-/**
- * 事项 M5 后撤的跨模块请求入口：登记狙击手强制撤退请求（带 TTL）
- *
- * 只登记请求，不改变本模块事项状态；请求是否生效由后撤 Pre 钩子在 TTL 窗口内消费时判定。
- * 未武装时后撤钩子不启用，请求自然不会被消费，无需在此另行门控。
- *
- * @param client        目标 Bot 客户端索引
- */
-void Module5_RequestSniperRetreat(int client)
-{
-    if (client > 0 && client <= MaxClients)
-    {
-        g_bSniperRetreatWanted[client] = true;
-        g_flSniperRetreatUntil[client] = GetGameTime() + SNIPER_RETREAT_REQUEST_TTL;
-        g_flNextForcedRetreat[client] = 0.0;
-    }
-}
 
 /**
  * 应用换弹掩体 NOP 事项：只有 Prep 已就绪才写入 NOP

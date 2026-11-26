@@ -1000,6 +1000,9 @@ static bool ApplyModule9_FetchBackend()
     }
 
     Item_SetArmed(ITEM_M9_FETCH, true);
+    // 武装瞬间补选一次：中途开规则且雷已掉在地上时，不等下一次掉包事件；
+    // 地上无雷则 FindDropPos 失败即 no-op；此上下文实体状态已落定，无需像掉包事件那样递延一帧。
+    Fetch_ElectRoster();
     return true;
 }
 

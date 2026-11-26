@@ -283,13 +283,10 @@ void EnableModule3_Danger(bool enable)
     g_bModule3_Active = Item_IsArmed(ITEM_M3_DECAY);
 }
 
-//========================================================================================
-// MODULE 3 ITEM APPLY / RESTORE BACKENDS
-//========================================================================================
-
 /**
  * 还原模块 3（事项 ITEM_M3_DECAY；插件卸载：无持久补丁，只复位业务态）。
  *
+ * 本模块无常驻补丁与钩子，故无 Apply/RestoreBackend，Enable 即直写 Armed。
  * 失败语义：无（尽力还原；幂等）。
  */
 void RestoreModule3_Danger()

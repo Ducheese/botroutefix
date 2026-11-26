@@ -305,7 +305,7 @@
 
 ## 模块代码习惯 (Module Code Conventions)
 
-> M1–M4 重构定稿。M5–M15 迁移时照此执行；本节是风格契约，不是建议。
+> M1–M16 现行一致；本节是风格契约，不是建议。新增规则必须能指认违反它的旧代码反例，否则不进本节。
 
 ### 分区横幅
 
@@ -322,7 +322,9 @@ MODULE X ... PRIMITIVES / DETOUR & HOOKS / ITEM APPLY / RESTORE BACKENDS
 
 调用顺序从上往下可读：`Prep → Mount → Lifecycle → Public → Events → Hooks → Apply/Restore → Validation`。被调用者尽量出现在调用者附近（如 M4 的 `MountHuntStateDetour` 紧跟 `PrepModule4_HuntBackend`），而不是扔在文件尾。原语靠近其调用者即可，位置不限（新模块按模板放在钩子之前）。
 
-- **引擎级常量上收 `global.inc`**：任务枚举等引擎原值只在 `global.inc` 的 DEFINES 区定义一次并注明共用方（如任务常量唯一出处，M5/M6/M12/M16 共用）；模块只消费不定义，更不得直接复用他模块文件的 `#define`（include 顺序不可靠，换序即 `undefined symbol`）。模块私有阈值留在本文件。
+- **引擎级常量上收 `global.inc`**：任务/策略枚举等引擎原值只在 `global.inc` 的 DEFINES 区定义一次并注明共用方（如任务常量唯一出处 M5/M6/M9/M12/M15/M16 共用，策略常量 M6/M9/M12/visuals 共用）；模块只消费不定义，更不得直接复用他模块文件的 `#define`（include 顺序不可靠，换序即 `undefined symbol`）。模块私有阈值留在本文件。
+- **跨模块公共入口归 GETTERS 区**：非 `static` 的 `ModuleX_*` 对外 API（请求入口/只读查询）一律放 `PUBLIC GETTERS` 区，`APPLY/RESTORE` 区只放 `static` 后端（M5/M15 前车：跨模块请求函数曾误放后端区）。
+- **`RestoreModuleX` 归 LIFECYCLE 区**：模块级还原是生命周期函数，跟 `Init/Enable` 放一块；`APPLY/RESTORE` 区只放分事项 `Backend`（M3 前车：`RestoreModule` 曾误挂后端横幅下）。
 
 ### 函数命名
 
@@ -380,6 +382,42 @@ Enable(false) / Restore:
 4. **`Enable` 只做调度**：重探（如需）→ `Apply` → `Armed` → `Active = OR` → 部分成功打 Partial 日志。`Enable` 内部不得内联注入逻辑。
 5. **按回合 / 事件生灭的资源**（如 M2 包点锁）注入点在所属事件里但必须同样以 `Armed` 为门禁等价于 `Apply`；事件里的战术写操作一律按 `Armed` 门控只读 getter 不参与。
 
+### Apply 失败回滚（按钩子数）
+
+- **单钩 / 单原子写**：失败只清 `Armed`（探测证伪才同步清 `Ready`），无可滚，不调 `Backend`（M5 Dodge/Retreat、M8 Queue、M10；单补丁 M1/M4-NOP/M13/M14 同理）。
+- **多钩**：任一失败必须调各自 `RestoreBackend()` 全滚，不手写第二遍 `Sync`（M4/M6/M7/M9/M12/M16）；补丁多写（M7 meme、M13 双段、M14 五处、M12 六处）失败手写全量回滚 + 清 `Ready`，与“调 `Backend()` + 补 `Ready=false`”等价，两种写法都认。
+- 钩失败保 `Ready`（环境抖动，下次 `Enable` 重试）；写失败清 `Ready`（探测证伪；M12 另置重探旗）。
+
+### RestoreModule 去重规则
+
+- `RestoreModule = Enable(false) + delete 自有句柄 + log`，`Module` 层不再重复 `Sync`（`SyncDetourEnabled` 幂等，重复无害但掩盖意图）。
+- 唯三例外（必须写注释说明豁免理由）：M4 观察 `Post`（`Enable(false)` 回挂，`Module` 第二遍 `Backend` 是唯一摘钩口，早退时更是）；M11 载体（`Module` 强制摘钩兜底）；M15 宿主（无视借方强制摘 Pre/Post + 再清 Pre 态，防已停用早退）。
+
+### 借钩宿主与先置位再同步
+
+- 宿主（M15）归集句柄，借方（M9/M12）只调 `SyncHideDurationDetourState()` 收敛，不建不删；`want = Armed(M15)||Armed(M12)||Armed(M9)`。
+- 依赖宿主判定的 `Apply` 必须先临时 `Armed(true)` 再同步（M12/M15 同形），顺序反了宿主永远不开机。
+
+### 载体与事项分离（M11）
+
+- 通知载体随规则（`Enable`），不随事项（`Ready/Armed`）：规则开但走廊 FAILED（典型 nav 缺失）时载体保持挂载，M5 撤退照常转发；`Active==Armed` 与 `Hooked` 分开记。
+- 无自有钩/补丁的事项（M11 走廊、M8 死锁）`Apply` 退化成纯门禁：只查前置 + 置 `Armed`，失败只清 `Armed` 不碰 `Ready`。
+
+### 名册纪律
+
+- 业务名册（M7/M9/M10）：`disable` 必解散/清空，`Apply` 失败回滚必带（`disarmed ⇒ 名册空`；读侧 `IsInRoster/GetPointman` 无门禁，残留会被跨模块误信）。
+- 可视化名册（M11 目击连线/加压走廊）：不过 `Restore`，靠过期自灭 + `round_start` 清；`Apply` 没写过的东西 `Restore` 不碰。
+- `Apply` 尾补建：事件/递延覆盖不到武装瞬间的，用尾调用补（M7 `Refresh` 必需；M9 `Elect` 补中途开规则时包已掉地）；删掉补建必须留注释说明缺口已知（M6 扫盘前车）。
+
+### 观察模式（M4）
+
+- `Post` 一分二：上半只读（无门禁，记自家缓存供可视化），下半写操作（`Armed` 门禁）；`Pre` 全程 `Armed` 门禁。观察态 = `Pre` 关 + `Post` 开，零引擎写入。
+- `Enable(false)` 回挂 `Post` 做原生选区记录；`RestoreModule` 第二遍 `Backend` 是唯一摘钩口（早退时更是）。
+
+### 跨回调瞬时标记（Hide(-1) 范式）
+
+- Pre/Post 配对传递的单次标记：生产者进门先清、确认再记；消费者快照后立刻清；`round_start`/掉线/`Apply`/`Backend`/`Module` 边界全清（防野指针与槽位复用）。
+
 ### 事件门控
 
 以 `events.inc` 接收方契约为准：
@@ -396,7 +434,7 @@ c) 换图必须执行的底层重建（如 M3 重解导航容器）【不得】�
 ### 日志用词
 
 - `[ModuleRules]` 只说规则意图：`Rule-enabled modules` / `Rule-disabled modules`，不说 Active/Inactive。
-- 事项失败用 `LogError`，必须带模块号和事项名（如 `[Module 4] ... HuntState item FAILED`）。
+- 事项失败用 `LogError`，必须带模块号和事项名（如 `[Module 4] ... HuntState item FAILED`）；`Apply` 每个失败出口都必须打，全库无哑巴 `Apply`，措辞按 `Ready` 是否保留走 `unarmed/FAILED`（保 `Ready` 用 `unarmed`，清 `Ready` 用 `FAILED`）。
 - `status` 行：`INACTIVE` 显示 `disabled by rule`；`FAILED` 显示 `items x/y armed (x/y ready) | failed: <事项名>`，不拼宣传性 detail；`DEGRADED` 才追加活跃事项的实时 detail。
 
 ---

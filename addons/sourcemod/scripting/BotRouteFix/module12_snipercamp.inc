@@ -611,9 +611,10 @@ static bool ApplyModule12_SniperCampBackend()
         }
     }
 
-    // 借钩宿主必须在线：没有 OnEnter 钩子，六处骰子已旁路却无人重骰，
-    // 会退化成"狙击手必 camp"的错误行为，必须回滚。
-    // 先临时置位再同步：宿主开关按 M12 Armed 判定借钩需求，不置位会形成循环依赖。
+    // 六处骰子已经旁路了，接替掷骰子的人（宿主 OnEnter 钩子）必须在场：
+    // 没人重骰，狙击手就永远蹲着不动，等于把 camp 写死了，只能全滚回去。
+    // 先举手再点名：宿主看“有没有已武装的事项要用我”才决定开不开机，
+    // M12 必须先把 Armed 置上再同步，顺序反了宿主就永远不开机。
     Item_SetArmed(ITEM_M12_SNIPERCAMP, true);
     if (!SyncHideDurationDetourState())
     {

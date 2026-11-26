@@ -432,13 +432,8 @@ static bool ApplyModule14_DefendBackend()
 
         if (!g_PatchDefendRush_Lea[i].Apply(oneByte))
         {
-            for (int j = 0; j < 4; j++)
-            {
-                g_PatchDefendRush_Lea[j].Restore();
-            }
-            g_PatchDefendRush_Float.Restore();
+            RestoreModule14_DefendBackend();
             Item_SetReady(ITEM_M14_DEFEND, false);
-            Item_SetArmed(ITEM_M14_DEFEND, false);
             LogError("[BotRouteFix] [Module 14] Site %d write failed; all patches rolled back, defend-rush item FAILED.", i + 1);
             return false;
         }
@@ -447,13 +442,8 @@ static bool ApplyModule14_DefendBackend()
     if (!g_PatchDefendRush_Float.Apply(g_DefendRushFloatBytes))
     {
         // 已驻留的 lea 必须回滚，否则与旧 float 组成 -17*(M-4) 错公式半态驻留
-        for (int j = 0; j < 4; j++)
-        {
-            g_PatchDefendRush_Lea[j].Restore();
-        }
-        g_PatchDefendRush_Float.Restore();
+        RestoreModule14_DefendBackend();
         Item_SetReady(ITEM_M14_DEFEND, false);
-        Item_SetArmed(ITEM_M14_DEFEND, false);
         LogError("[BotRouteFix] [Module 14] Shared float write failed; all patches rolled back, defend-rush item FAILED.");
         return false;
     }

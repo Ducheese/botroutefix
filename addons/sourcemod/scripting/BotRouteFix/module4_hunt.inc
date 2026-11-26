@@ -330,6 +330,9 @@ void EnableModule4_Hunt(bool enable)
  * 还原模块 4（事项 ITEM_M4_NOP / ITEM_M4_HUNT；插件卸载）
  *
  * 彻底退出观察模式并脱钩，确保两个钩子先安全停用后再释放 Detour 句柄。
+ * 注意：此处必须显式再调一次 HuntBackend —— Enable(false) 关业务后会把 Post
+ * 重新挂回只读观察模式（且已停用时 Enable 直接早退），这里是卸载前唯一的摘钩口，
+ * 否则观察 Post 挂着就 delete 句柄即漏摘。Nop 补丁写回一次即够，不必双调。
  * 失败语义：无（尽力还原；幂等）。
  */
 void RestoreModule4_Hunt()

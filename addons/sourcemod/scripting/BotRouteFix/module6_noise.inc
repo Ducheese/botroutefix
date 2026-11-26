@@ -631,29 +631,6 @@ public MRESReturn Hook_AttackState_OnUpdate_Pre_Plant(Address pThis, DHookParam 
     return MRES_Ignored;
 }
 
-/**
- * 事项 ITEM_M6_NOISE（M6 noise + OPPO guard）启用时的一次性补写
- *
- * 纯事件驱动之外的唯一一次扫描，不建 timer；只在 Apply 武装成功后调用。
- *
- * 失败语义：逐个尽力补写，不影响事项 Armed。
- */
-static void Module6_SweepPlantDisposition()
-{
-    if (!Item_IsArmed(ITEM_M6_NOISE))
-    {
-        return;
-    }
-
-    for (int i = 1; i <= MaxClients; i++)
-    {
-        if (IsBot(i, true))
-        {
-            Module6_EnforcePlantDisposition(i);
-        }
-    }
-}
-
 //========================================================================================
 // MODULE 6 ITEM APPLY / RESTORE BACKENDS
 //========================================================================================
@@ -664,7 +641,6 @@ static void Module6_SweepPlantDisposition()
  * 事项 ITEM_M6_NOISE 的应用入口；不做 Detour 创建与签名绑定（那是 Prep 的职责）。
  * 三个钩子同属一个事项：任一失败都回滚，避免只开半边；失败只清 Armed 保留 Ready。
  * 失败语义：任一钩子启用失败则回滚已启用的，只清 Armed 保留 Ready，事项待下次 Enable 重试。
- * 武装成功后单次扫盘（热重载时把已在下包任务的持包人一次性补齐）。
  *
  * @return              true = 三钩子已驻留
  */
@@ -693,7 +669,7 @@ static bool ApplyModule6_NoiseBackend()
     }
 
     Item_SetArmed(ITEM_M6_NOISE, true);
-    Module6_SweepPlantDisposition();
+    // 故意：武装时已在下包任务中的存量持包人不做一次性补写，缺口留待下一次状态变迁由钩子覆盖。
     return true;
 }
 

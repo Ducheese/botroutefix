@@ -293,6 +293,25 @@ int Module15_GetTotalShortHides()
     return g_iTotalShortHides;
 }
 
+/**
+ * 事项 M15 隐藏时长的跨模块请求入口：M5 焊门时下发紧急短蹲
+ *
+ * 只登记请求，不改变本模块事项状态；HideState::OnEnter Post 在 TTL 窗口内消费一次。
+ * 与士气缩放互斥：命中请求直接写 1 秒并跳过缩放，不进缩放计数。
+ * 已知弱身份：TryToRetreat 找不到掩体后，窗口内的换弹/守包 Hide 可能被误压成 1 秒。
+ *
+ * @param client        客户端索引
+ */
+void Module15_RequestShortHide(int client)
+{
+    if (client <= 0 || client > MaxClients)
+    {
+        return;
+    }
+
+    g_flShortHideUntil[client] = GetGameTime() + HIDE_SHORT_REQUEST_TTL;
+}
+
 //========================================================================================
 // MODULE 15 EVENT HANDLERS
 //========================================================================================
@@ -510,29 +529,9 @@ public MRESReturn Hook_HideState_OnEnter_Post(Address pThis, DHookParam hParams)
 //========================================================================================
 
 /**
- * 事项 M15 隐藏时长的跨模块请求入口：M5 焊门时下发紧急短蹲
- *
- * 只登记请求，不改变本模块事项状态；HideState::OnEnter Post 在 TTL 窗口内消费一次。
- * 与士气缩放互斥：命中请求直接写 1 秒并跳过缩放，不进缩放计数。
- * 已知弱身份：TryToRetreat 找不到掩体后，窗口内的换弹/守包 Hide 可能被误压成 1 秒。
- *
- * @param client        客户端索引
- */
-void Module15_RequestShortHide(int client)
-{
-    if (client <= 0 || client > MaxClients)
-    {
-        return;
-    }
-
-    g_flShortHideUntil[client] = GetGameTime() + HIDE_SHORT_REQUEST_TTL;
-}
-
-/**
  * 应用 Hide 时长事项（ITEM_M15_HIDE）：同步宿主钩子并按真实启用态武装
  *
- * 挂钩失败属动态环境抖动，不证伪探测结论：只清 Armed 保留 Ready，下次 Enable 重试。
- * 失败语义：挂钩失败只清 Armed 保留 Ready，事项待下次 Enable 重试。
+ * 失败语义：挂钩失败属动态环境抖动，不证伪探测结论，只清 Armed 保留 Ready，事项待下次 Enable 重试。
  *
  * @return              true = 事项已武装且宿主钩子在线
  */
@@ -551,6 +550,8 @@ static bool ApplyModule15_HideBackend()
         }
         // 即使本事项不可用，也让宿主态与借钩方需求收敛（M12 可能仍在等钩子）
         SyncHideDurationDetourState();
+        LogError("[BotRouteFix] [Module 15] Hide backend unavailable (ready=%d, detour=%d); hide item unarmed.",
+            Item_IsReady(ITEM_M15_HIDE), g_hHideDurationDetour != null);
         return false;
     }
 
@@ -561,6 +562,7 @@ static bool ApplyModule15_HideBackend()
     {
         Item_SetArmed(ITEM_M15_HIDE, false);
         SyncHideDurationDetourState();
+        LogError("[BotRouteFix] [Module 15] Hide Pre hook enable failed; hide item unarmed.");
         return false;
     }
 
@@ -569,6 +571,7 @@ static bool ApplyModule15_HideBackend()
         SyncDetourEnabled(g_hHideDurationDetour, g_bHideDurationPreHooked,
             false, Hook_HideState_OnEnter_Pre, false, "Module 15 Pre");
         Item_SetArmed(ITEM_M15_HIDE, false);
+        LogError("[BotRouteFix] [Module 15] Hide host converge failed; hide item unarmed.");
         return false;
     }
 

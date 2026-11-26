@@ -1886,6 +1886,8 @@ static bool ApplyModule7_EscortBackend()
     }
 
     Item_SetArmed(ITEM_M7_ESCORT, true);
+    // 武装瞬间唯一同步建队点：其余触发全是事件/递延（freeze_end/拾包/定时器），
+    // 中途开规则不用它，链子就空到下一次事件；Init 时多调一次无害（无包匪即解散 no-op）。
     Escort_Refresh();
     return true;
 }

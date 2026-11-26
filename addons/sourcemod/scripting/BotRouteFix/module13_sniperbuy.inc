@@ -63,7 +63,11 @@ static MemoryPatch g_PatchSniperBuy_Cave;
 // Prep 构造、Apply 原样写入的机器码缓冲
 static int g_BuyMainBytes[66];
 static int g_BuyCaveBytes[25];
-static bool g_bBuyUseCave = false;    // true = 64 位 jmp-in + cave 双段
+// 双路径开关（Prep 按架构一次选定，Apply 照此分支写入）：
+//   true  = 64 位 jmp-in + cave 双段（Steam x64；RIP 相对寻址整窗重写代价太大，
+//             只盖 7B comiss 写 E9 跳 cave 算完跳回）；
+//   false = 32 位 66 字节整窗重写（v91/v92；绝对寻址为主，有整块重写空间）。
+static bool g_bBuyUseCave = false;
 
 // 模块规则开启态（Enable 幂等缓存；业务判据统一用 Item_IsArmed）
 static bool g_bModule13_Active = false;
@@ -487,9 +491,11 @@ static bool ApplyModule13_BuyBackend()
         return false;
     }
 
+    // 双路径写入（与 Prep 选路一致，g_bBuyUseCave = g_bIsWin64）：
+    // cave 路径先写 cave 再挂 jmp-in，避免 jmp 指向未初始化 cave 的窗口，jmp 失败回滚 cave；
+    // rewrite 路径单段原子写，失败无驻留、无需回滚。
     if (g_bBuyUseCave)
     {
-        // 先写 cave 再挂 jmp-in，避免 jmp 指向未初始化 cave 的窗口
         if (!g_PatchSniperBuy_Cave.Apply(g_BuyCaveBytes))
         {
             Item_SetReady(ITEM_M13_BUY, false);
