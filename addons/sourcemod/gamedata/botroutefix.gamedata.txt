@@ -208,12 +208,6 @@
 				"windows"	"\x55\x8B\xEC\x8B\x45\x2A\x89\x81\x2A\x2A\x2A\x2A\x83\xF8\x03"
 				"windows64"	"\x89\x91\x2A\x2A\x2A\x2A\x83\xFA\x03"
 			}
-			"CCSBot_SetState"
-			{
-				"library"	"server"
-				"windows"	"\x55\x8B\xEC\x53\x56\x8B\xF1\x57\x8B\x8E\x2A\x2A\x2A\x2A\x85\xC9"
-				"windows64"	"\x48\x89\x5C\x24\x2A\x48\x89\x74\x24\x2A\x57\x48\x83\xEC\x30\x48\x8B\xD9\x48\x8B\xFA"
-			}
 			"SniperCamp12_O1"
 			{
 				"library"	"server"
@@ -566,6 +560,11 @@
 			{
 				"windows"	"28"
 				"windows64"	"36"
+			}
+			"HideState_HoldPosition_Offset"
+			{
+				"windows"	"44"
+				"windows64"	"56"
 			}
 			"SniperCamp12_O1_Jcc"
 			{

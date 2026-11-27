@@ -241,16 +241,16 @@ public Action Command_Status(int client, int args)
     PrintModuleState(client, 3, "NavArea Danger Soft-Decay");
     PrintModuleState(client, 4, "Hunt Target Claim / 45s Bypass");
     PrintModuleState(client, 5, "Combat Dodge / Reload Hide / Retreat");
-    PrintModuleState(client, 6, "Noise Interception & OPPO Guard (M<0/500/1000/2000/3000)");
+    PrintModuleState(client, 6, "Noise Interception Gradient (M<0/500/1000/2000/3000)");
     PrintModuleState(client, 7, "T Carrier Escort & Pointman (3-M)");
     PrintModuleState(client, 8, "Polite Queue Breaker / Deadlock Hunt");
-    PrintModuleState(client, 9, "T Loose-Bomb Fetch Roster & OPPO Guard");
+    PrintModuleState(client, 9, "T Loose-Bomb Fetch Roster");
     PrintModuleState(client, 10, "CT Defuse Roster");
     PrintModuleState(client, 11, "Sniper Corridor Deterrence");
     PrintModuleState(client, 12, "Sniper Camp (60-10*M)");
     PrintModuleState(client, 13, "Sniper Buy Chance (50+10*M)");
     PrintModuleState(client, 14, "Defend Rush Chance (40-10*M)");
-    PrintModuleState(client, 15, "Hide Duration Scaling x(1-0.15*M)");
+    PrintModuleState(client, 15, "Hide Duration x(1-0.15*M) & Hide(-1) & Ambush");
     PrintModuleState(client, 16, "Escape Knife-to-Gun on Contact");
 
     // Live 分隔行与上分隔行等长（总长 74）：前缀 + 27×- + " Live " + 27×-。
@@ -441,9 +441,8 @@ public Action Command_Status(int client, int args)
     // M06：只放聚合计数器，per-bot 拦截/放行是逐行日志的事，不进 live。
     if (ModuleHasLive(6))
     {
-        Format(live, sizeof(live), "total %d blocked, %d allowed, %d oppo-guarded",
-            Module6_GetTotalNoiseIntercepted(), Module6_GetTotalNoiseAllowed(),
-            Module6_GetTotalOppoGuarded());
+        Format(live, sizeof(live), "total %d blocked, %d allowed",
+            Module6_GetTotalNoiseIntercepted(), Module6_GetTotalNoiseAllowed());
         ReplyToCommand(client, "[BotRouteFix] [Live] M06 | %s", live);
     }
 
@@ -500,10 +499,9 @@ public Action Command_Status(int client, int args)
 
     if (ModuleHasLive(9))
     {
-        Format(live, sizeof(live), "%d/%d roster | total %d elected, %d gated, %d oppo-guarded",
+        Format(live, sizeof(live), "%d/%d roster | total %d elected, %d gated",
             Module9_GetRosterCount(), Module9_GetRosterSize(),
-            Module9_GetTotalElections(), Module9_GetTotalGated(),
-            Module9_GetTotalFetchGuarded());
+            Module9_GetTotalElections(), Module9_GetTotalGated());
         ReplyToCommand(client, "[BotRouteFix] [Live] M09 | %s", live);
     }
 
@@ -547,8 +545,9 @@ public Action Command_Status(int client, int args)
     // M15：只放聚合计数器；per-bot 时长缩放是逐行日志的事，不进 live。
     if (ModuleHasLive(15))
     {
-        Format(live, sizeof(live), "total %d rescaled, %d short",
-            Module15_GetTotalHideRescaled(), Module15_GetTotalShortHides());
+        Format(live, sizeof(live), "total %d rescaled, %d short, %d ambush-kicked",
+            Module15_GetTotalHideRescaled(), Module15_GetTotalShortHides(),
+            Module15_GetTotalAmbushKicked());
         ReplyToCommand(client, "[BotRouteFix] [Live] M15 | %s", live);
     }
 

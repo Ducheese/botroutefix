@@ -15,16 +15,16 @@
 //   - BotRouteFix/module3_danger.inc  : [模块 3] CNavArea 危险度开局软衰减 (NavArea Danger Soft-Decay)
 //   - BotRouteFix/module4_hunt.inc    : [模块 4] HuntState 搜敌机制重构 (45秒老家破除、时间戳认领与随机覆盖 NOP)
 //   - BotRouteFix/module5_combat.inc  : [模块 5] 战斗决策重构 (AttackState 闪避/换弹、残血、一打多强制后撤)
-//   - BotRouteFix/module6_noise.inc   : [模块 6] 噪声出击统一梯度 (Noise Interception)
+//   - BotRouteFix/module6_noise.inc   : [模块 6] 噪声出击统一梯度 (Noise Interception Gradient)
 //   - BotRouteFix/module7_escort.inc  : [模块 7] T 包匪贴身保镖花名册 (Carrier Escort Roster)
 //   - BotRouteFix/module8_queue.inc   : [模块 8] 礼貌排队打碎与死锁强切 Hunt (Queue Breaker & Deadlock Hunt Transition)
-//   - BotRouteFix/module9_loosefetch.inc : [模块 9] T 掉包 Top3 抢包花名册 (Loose Fetch Roster, NoticeLooseBomb Pre)
+//   - BotRouteFix/module9_loosefetch.inc : [模块 9] T 掉包 Top3 抢包花名册 (Loose-Bomb Fetch Roster, 750 码门控)
 //   - BotRouteFix/module10_defuse.inc : [模块 10] CT Top-3 拆包花名册 (Defuse Roster, IsDoingScenario Pre)
 //   - BotRouteFix/module11_sniper.inc : [模块 11] 狙击手威慑与走廊加压 (Sniper Deterrence & Corridor Danger)
 //   - BotRouteFix/module12_snipercamp.inc : [模块 12] 狙击 camp 概率重构 (60-10*M, NOP+DHook重骰)
 //   - BotRouteFix/module13_sniperbuy.inc : [模块 13] 随机买狙概率重构 (50-10*M, sniperRifleChance)
 //   - BotRouteFix/module14_defendrush.inc : [模块 14] 开局前沿架枪概率重构 (40-10*M, defendRushChance)
-//   - BotRouteFix/module15_hideduration.inc : [模块 15] Hide 蹲守时长士气缩放 (m_duration *= 1-0.15*M)
+//   - BotRouteFix/module15_hideduration.inc : [模块 15] Hide 时长缩放、Hide(-1) 短蹲与 Ambush 踢出 (m_duration *= 1-0.15*M, Hide(-1) & Ambush)
 //   - BotRouteFix/module16_escape.inc : [模块 16] 逃跑切枪纪律 (Escape Knife-to-Gun on Contact)
 //========================================================================================
 
@@ -107,6 +107,7 @@ public void OnPluginStart()
     g_iOffset_Task        = GameConfGetOffset(g_hGameConf, "CCSBot_Task_Offset");
     g_iOffset_Disposition = GameConfGetOffset(g_hGameConf, "CCSBot_Disposition_Offset");
     g_iOffset_State         = GameConfGetOffset(g_hGameConf, "CCSBot_State_Offset");
+    g_iOffset_HideHoldPosition = GameConfGetOffset(g_hGameConf, "HideState_HoldPosition_Offset");
 
     // 3. Register console commands and events hub
     InitCommands();
@@ -133,12 +134,12 @@ public void OnPluginStart()
     InitModule6_Noise();
     InitModule7_Escort();
     InitModule8_Queue();
+    // 借钩宿主先于借用方：M9 与 M12 复用 M15 的 HideState::OnEnter Detour，
+    // 宿主先挂载可避免启动期一次"宿主不可用"的回滚误报。
+    InitModule15_HideDuration();
     InitModule9_Fetch();
     InitModule10_Defuse();
     InitModule11_Sniper();
-    // 借钩宿主先于借用方：M12 的 camp 门禁复用 M15 的 OnEnter Detour，
-    // 宿主先挂载可避免启动期一次"宿主不可用"的回滚误报。
-    InitModule15_HideDuration();
     InitModule12_SniperCamp();
     InitModule13_SniperBuy();
     InitModule14_DefendRush();
@@ -169,15 +170,15 @@ public void OnConfigsExecuted()
 public void OnPluginEnd()
 {
     // Safely restore business modules in reverse order
-    // 借钩宿主原则：M12 借用 M15 的 OnEnter 钩子，必须借用方 M12 先还（还原内存补丁与借用态），宿主 M15 后退（销毁 Detour 句柄）
+    // 借钩宿主原则：M9 与 M12 借用 M15 的 OnEnter 钩子，必须借用方先还（M12 还原内存补丁与借用态、M9 还原名册与门禁钩），宿主 M15 最后后退（销毁 Detour 句柄）
     RestoreModule16_Escape();
     RestoreModule12_SniperCamp();
-    RestoreModule15_HideDuration();
     RestoreModule14_DefendRush();
     RestoreModule13_SniperBuy();
     RestoreModule11_Sniper();
     RestoreModule10_Defuse();
     RestoreModule9_Fetch();
+    RestoreModule15_HideDuration();
     RestoreModule8_Queue();
     RestoreModule7_Escort();
     RestoreModule6_Noise();

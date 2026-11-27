@@ -88,6 +88,7 @@ public void Event_RoundFreezeEnd(Event event, const char[] name, bool dontBroadc
     // 冻结时间结束，Bot 决策树正式激活
     Module2_OnRoundFreezeEnd();
     Module7_OnRoundFreezeEnd();
+    Module9_OnRoundFreezeEnd();
 }
 
 public void Event_ItemPickup(Event event, const char[] name, bool dontBroadcast)

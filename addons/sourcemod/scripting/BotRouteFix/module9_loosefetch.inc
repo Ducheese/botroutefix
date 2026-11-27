@@ -4,77 +4,67 @@
 #define _botroutefix_module9_loosefetch_included
 
 //========================================================================================
-// MODULE 9: LOOSE-BOMB TOP3 FETCH ROSTER + OPPO GUARD
-// (NoticeLooseBomb pre-hook / CCSBot::SetState post-hook / AttackState::OnUpdate pre-hook)
+// MODULE 9: LOOSE-BOMB TOP3 FETCH ROSTER
+// (NoticeLooseBomb Pre Hook)
 //
 // 业务背景与引擎逆向分析：
 //
 // 1. 机制分析 (cs_bot.cpp:428-444):
-//    NoticeLooseBomb() = GetLooseBomb() != NULL 即返回 true，注释写 "for T's only"
-//    原生虽在现有调用点做了阵营包裹，但 NoticeLooseBomb 查询原语本身缺少阵营限制。
-//    两个调用点（IdleState:228、HuntState:74）。
-// 2. 卡门：只钩这一个查询函数，两条路全堵；本钩顺带补齐阵营门控作为纵深防御兜底：CT 一律 Supercede + false。
-//    CT 剩余感知（视力 CanSeeLooseBomb、抢包 1000 听觉）均在其它函数，不受影响。
-// 3. 花名册（与模块 7 同构，全事件驱动，无 timer）：
-//    - bomb_dropped：递延一帧（等归属落定）后以掉包点（无主 weapon_c4 实体坐标，零耦合不读模块 7）为圆心，
-//      真实地面行走距离（BotNavWalkDistance 无损实测）取最近 3 存活 T bot，不可达跳过；
-//      当选/回补时强制解蹲一次：task 19 蹲守承诺者必踢（蹲坑 Hide 里到不了 NoticeLooseBomb，
-//      Idle 的 loose 检查又排在狙击手守点/架枪掷骰之后，不踢就瘫痪），外加一切正处 HideState 者
-//      无论 task 皆踢（残血 Hide、换弹 Hide、跟丢 Ambush Hide 等——Hide 不改 task，task 判不全，
-//      真值以 m_state 虚表指纹为准，见 Fetch_IsHiding）；Hunt 落 SEEK_AND_DESTROY，M12 不认；
-//      选举失败（找不到掉包）或测距未就绪 → 空名册 = 全体放行回原生；
-//    - player_death / client_disconnect：除名 + 按掉包点就近回补（共用同一函数；名单有效时 C4 必躺掉包点，
-//      按掉包点招人即按 C4 位置招人）——必选项，否则减员到全灭即全员 false，包烂地上没人捡（比原版更糟的死锁）；
-//    - item_pickup(c4) / round_start / OnMapStart：清（FetchBombState:58 有人抢包自己散伙；换图重置）。
-// 4. 空名册放行原则：钩子只会把 true 掐成 false，且仅在名册有效时掐；名册空即原生 no-op。
-// 全程事件驱动，无 timer 轮询。
-// 5. 名册抢包 OPPO 守卫（SetState Post + AttackState OnUpdate 双面 + 选举/递补即时兜底，事项 ITEM_M9_FETCH 第二部分）：
-//    对当前在册成员（不再卡 m_state == FetchBombState），只要当前非 OPPO（仍为 ENGAGE），
-//    直接改写 m_disposition 为 OPPORTUNITY_FIRE，消除 Hunt/MoveTo/Follow 等在途与非退避 Hide 途中的
-//    听声分心与 0.1s 脱视 Ambush Hide 蹲死；不经 CCSBot::SetDisposition，完整保留 M5 后撤与
-//    近敌换弹携带的 m_ignoreEnemiesTimer（GetDisposition() 优先返回 IGNORE_ENEMIES，到期自然落回 OPPO）。
-//    AttackState 战斗面封堵：引擎 Attack() 并发直入 m_attackState.OnEnter（不走 SetState，
-//    cs_bot_statemachine.cpp），交火全程 SetState Post 面零执行；模块中途武装或名册在途
-//    带 ENGAGE 接战时由此面就地补写，不必等下一次状态迁移。
-//    只动抢包，不管下包（下包是 M6 的事）不管 GUARD；补写计入遥测。
+//    NoticeLooseBomb() 仅两个调用点：HuntState::OnUpdate (cs_bot_hunt.cpp:58,74)
+//    与 IdleState::OnUpdate (cs_bot_idle.cpp:116,228)，且原生调用方外层均有 TEAM_TERRORIST 包裹。
+//    不在此重复做无益的 CT 拦截，非存活 T 一律 MRES_Ignored 直通原生。
+// 2. 750 码距离门控 (与 M10 拆包名册对称)：
+//    - 名册为空（无候选/测距未就绪）或当选成员：NoticeLooseBomb 一律 MRES_Ignored 直通原生。
+//    - 远端非名册存活 T（距无主 C4 > 750.0 units）：放行 MRES_Ignored，使其能向掉包大方向靠近，
+//      途中若未被交敌打断留在 FetchBombState 顺手捡起亦无妨。
+//    - 近端非名册存活 T（距无主 C4 <= 750.0 units）：Intercept 为 false + MRES_Supercede；
+//      若在 750 码内因接敌/避险/换弹退出 FetchBombState 落回 Idle/Hunt，阻止其无脑再入抢包，
+//      继续正常 HuntState 搜索交战状态机。
+// 3. 花名册与冻结期对称性 (全事件驱动，无 timer)：
+//    - 测距路由统一采用 ROUTE_FASTEST：掉包点常伴随前一任包匪阵亡钉刺的危险度，避免避险罚分扭曲最近候选排序。
+//    - bomb_dropped：冻结期内直接跳过（交由 round_freeze_end 收尾）；常规对局递延一帧（等 C4 归属落定）
+//      后以无主 weapon_c4（g_iLooseBombRef 实时跟踪坐标，回退缓存 g_fDropPos）为圆心选举最近 3 存活可达 T。
+//    - round_freeze_end：若冻结期结束时地面仍存在无主 weapon_c4，立即补选一次。
+//    - item_pickup(c4)：只要当前有有效名册即散伙（无需冻结期早退守卫；!g_bFetchHasRoster 已O(1)短路开局发包）。
+//    - player_death / client_disconnect：名册减员后按实时掉落坐标就近回补，全灭则清名册回原生。
+// 4. 蹲守解蹲与 M15 Hide(-1)/Ambush 协同：
+//    - 当选/回补瞬间：task 19（MOVE_TO_SNIPER_SPOT）或正处 HideState（经 Module15_IsBotHiding 查指纹）者，
+//      直调 BotHunt() 踢出（HuntState::OnUpdate 首行即 NoticeLooseBomb()；IdleState 中 NoticeLooseBomb 排在狙击手 camp 后）。
+//    - 在途 Hide(-1) 短蹲与 Ambush Hide 踢出统一由 M15（module15_hideduration.inc）集中处理，本模块不再单独借 Pre 钩。
 //========================================================================================
 
 //========================================================================================
 // MODULE 9 DEFINES & GLOBALS
 //========================================================================================
 
-#define FETCH_ROSTER_SIZE 3
+#define FETCH_ROSTER_SIZE       3
+#define FETCH_GUARD_DISTANCE    750.0
 
-// 蹲守任务与接战策略枚举（BOT_TASK_MOVE_TO_SNIPER_SPOT / DISP_ENGAGE / DISP_OPPORTUNITY）上收 global.inc 统一定义，本文件只消费不定义
+// 蹲守任务枚举（BOT_TASK_MOVE_TO_SNIPER_SPOT）上收 global.inc 统一定义，本文件只消费不定义
 
 // 本模块私有状态（static，名册与句柄不出本文件）
 static bool g_bModule9_Active = false;      // 业务开启态
-static bool g_bLooseHooked = false;         // per-hook 真实启用态
-static bool g_bFetchGuardHooked = false;    // per-hook 真实启用态（SetState Post）
-static bool g_bAttackFetchGuardHooked = false;  // per-hook 真实启用态（AttackState OnUpdate Pre）
+static bool g_bLooseHooked = false;         // per-hook 真实启用态（NoticeLooseBomb Pre）
 static Handle g_hLooseDetour = null;
-static Handle g_hFetchGuardDetour = null;
-static Handle g_hAttackFetchGuardDetour = null; // AttackState::OnUpdate 交火期兜底载体
 static int g_iFetchRoster[FETCH_ROSTER_SIZE] = {-1, -1, -1};
 static bool g_bFetchHasRoster = false;
+static int g_iLooseBombRef = INVALID_ENT_REFERENCE;
 static float g_fDropPos[3];
 
 // 遥测统计计数器
 static int g_iTotalFetchGated = 0;
 static int g_iTotalFetchElections = 0;
-static int g_iTotalFetchGuarded = 0;
 
 //========================================================================================
 // MODULE 9 ITEM BACKENDS (called by Init)
 //========================================================================================
 
 /**
- * 事项后端：掉包抢包花名册 + 名册抢包 OPPO（ITEM_M9_FETCH）
+ * 事项后端：掉包抢包花名册（ITEM_M9_FETCH）
  *
- * 只创建 Detour、绑定签名、校验测距子系统、探测守卫偏移与直调后端，
- * 不启用钩子（启用由 Apply 执行）。
- * 任一后端失败返回 false，Init 会把抢包事项标记为 FAILED。
- * 失败语义：任一依赖缺失返回 false，Init 将事项标记 FAILED。
+ * 只创建 NoticeLooseBomb Detour、绑定签名，并核验测距/偏移/宿主指纹与 Hunt SDKCall，
+ * 不提前启用钩子（启用由 Apply 执行）。
+ * 失败语义：任一依赖缺失返回 false，Init 将事项标记 FAILED（全成或全败，不降级）。
  *
  * @return              true = 抢包事项后端就绪
  */
@@ -83,131 +73,53 @@ static bool PrepModule9_FetchBackend()
     g_hLooseDetour = DHookCreateDetour(Address_Null, CallConv_THISCALL, ReturnType_Bool, ThisPointer_CBaseEntity);
     if (g_hLooseDetour == null)
     {
-        LogError("[BotRouteFix] [Module 9] NoticeLooseBomb detour creation failed; M9 fetch roster + OPPO guard item FAILED.");
+        LogError("[BotRouteFix] [Module 9] NoticeLooseBomb detour creation failed; M9 fetch roster item FAILED.");
         return false;
     }
 
     if (!DHookSetFromConf(g_hLooseDetour, g_hGameConf, SDKConf_Signature, "CCSBot_NoticeLooseBomb"))
     {
-        LogError("[BotRouteFix] [Module 9] NoticeLooseBomb signature missing; M9 fetch roster + OPPO guard item FAILED.");
-        delete g_hLooseDetour;
-        g_hLooseDetour = null;
-        return false;
-    }
-
-    if (!BotNavReady())
-    {
-        LogError("[BotRouteFix] [Module 9] NavMeasure unavailable; M9 fetch roster + OPPO guard item FAILED (no fail-open roster).");
+        LogError("[BotRouteFix] [Module 9] NoticeLooseBomb signature missing; M9 fetch roster item FAILED.");
         delete g_hLooseDetour;
         g_hLooseDetour = null;
         return false;
     }
     // NoticeLooseBomb(void)：无参数，this 即 bot 本体
 
-    // 守卫与解蹲前置探测：state/disposition 偏移缺一即事项 FAILED（Enforce 直写 m_disposition，不走 SetDisposition）
-    //（Enforce 运行时的同条件自守是纵深防御，不代替此处的一次性探测结论）
-    if (g_iOffset_State <= 0 || g_iOffset_Disposition <= 0)
+    if (!BotNavReady())
     {
-        LogError("[BotRouteFix] [Module 9] State/disposition offsets missing; M9 fetch roster + OPPO guard item FAILED.");
-        if (g_hLooseDetour != null)
-        {
-            delete g_hLooseDetour;
-            g_hLooseDetour = null;
-        }
+        LogError("[BotRouteFix] [Module 9] NavMeasure unavailable; M9 fetch roster item FAILED.");
+        delete g_hLooseDetour;
+        g_hLooseDetour = null;
         return false;
     }
 
-    if (!MountFetchGuardDetour())
+    if (g_iOffset_State <= 0 || g_iOffset_Task <= 0)
     {
-        LogError("[BotRouteFix] [Module 9] SetState hook unavailable; M9 fetch roster + OPPO guard item FAILED.");
-        if (g_hLooseDetour != null)
-        {
-            delete g_hLooseDetour;
-            g_hLooseDetour = null;
-        }
+        LogError("[BotRouteFix] [Module 9] CCSBot state/task offsets missing; M9 fetch roster item FAILED.");
+        delete g_hLooseDetour;
+        g_hLooseDetour = null;
         return false;
     }
 
-    if (!MountAttackFetchGuardDetour())
+    if (!Module15_IsHideHostReady())
     {
-        LogError("[BotRouteFix] [Module 9] AttackState hook unavailable; M9 fetch roster + OPPO guard item FAILED.");
-        if (g_hLooseDetour != null)
-        {
-            delete g_hLooseDetour;
-            g_hLooseDetour = null;
-        }
-        if (g_hFetchGuardDetour != null)
-        {
-            delete g_hFetchGuardDetour;
-            g_hFetchGuardDetour = null;
-        }
+        LogError("[BotRouteFix] [Module 9] Shared HideState::OnEnter host detour unavailable; M9 fetch roster item FAILED.");
+        delete g_hLooseDetour;
+        g_hLooseDetour = null;
         return false;
     }
 
-    return true;
-}
-
-/**
- * 挂载 CCSBot::SetState Post Detour（事项 ITEM_M9_FETCH 的抢包守卫触发点）
- *
- * 失败语义：句柄创建或签名绑定失败返回 false，事项 ITEM_M9_FETCH（M9 fetch roster + OPPO guard）FAILED。
- *
- * @return              true = Detour 句柄已创建并绑定签名
- */
-static bool MountFetchGuardDetour()
-{
-    g_hFetchGuardDetour = DHookCreateDetour(Address_Null, CallConv_THISCALL, ReturnType_Void, ThisPointer_Address);
-    if (g_hFetchGuardDetour == null)
+    if (g_hSDKCall_Hunt == null)
     {
-        LogError("[BotRouteFix] [Module 9] Failed to create DHook detour instance for CCSBot_SetState!");
+        LogError("[BotRouteFix] [Module 9] CCSBot::Hunt SDKCall unavailable; M9 fetch roster item FAILED.");
+        delete g_hLooseDetour;
+        g_hLooseDetour = null;
         return false;
     }
 
-    if (!DHookSetFromConf(g_hFetchGuardDetour, g_hGameConf, SDKConf_Signature, "CCSBot_SetState"))
-    {
-        LogError("[BotRouteFix] [Module 9] Failed to set CCSBot_SetState signature from gamedata!");
-        delete g_hFetchGuardDetour;
-        g_hFetchGuardDetour = null;
-        return false;
-    }
-
-    // SetState(BotState*) 有一个指针参数；漏加参数会让 DHook trampoline 崩溃（c0000005）
-    DHookAddParam(g_hFetchGuardDetour, HookParamType_Int);
-    return true;
-}
-
-/**
- * 挂载 AttackState::OnUpdate Pre Detour（事项 ITEM_M9_FETCH 的抢包守卫交火期兜底载体）
- *
- * 引擎 Attack() 并发直入 m_attackState.OnEnter（不走 SetState，cs_bot_statemachine.cpp），
- * 交火全程 SetState Post 面零执行；此钩子在攻击 tick 内补位，模块中途武装或名册成员
- * 在途（Hunt/MoveTo 等）带 ENGAGE 接战时就地补写 OPPO，掐死脱视 0.1s 的 Ambush Hide 蹲死。
- * 与 M5 后撤、M6 下包守卫的 AttackState_OnUpdate 同目标同签名（gamedata 共条目），
- * detour 独立互不干扰（与 M6/M9 双 SetState 钩子同惯例）。
- *
- * 失败语义：句柄创建或签名绑定失败返回 false，事项 ITEM_M9_FETCH FAILED。
- *
- * @return              true = Detour 句柄已创建并绑定签名
- */
-static bool MountAttackFetchGuardDetour()
-{
-    g_hAttackFetchGuardDetour = DHookCreateDetour(Address_Null, CallConv_THISCALL, ReturnType_Void, ThisPointer_Address);
-    if (g_hAttackFetchGuardDetour == null)
-    {
-        LogError("[BotRouteFix] [Module 9] Failed to create DHook detour instance for AttackState_OnUpdate!");
-        return false;
-    }
-
-    if (!DHookSetFromConf(g_hAttackFetchGuardDetour, g_hGameConf, SDKConf_Signature, "AttackState_OnUpdate"))
-    {
-        LogError("[BotRouteFix] [Module 9] Failed to set AttackState_OnUpdate signature from gamedata!");
-        delete g_hAttackFetchGuardDetour;
-        g_hAttackFetchGuardDetour = null;
-        return false;
-    }
-
-    // AttackState::OnUpdate(CCSBot *me) 的 me 以 CBaseEntity 参数直取客户端索引
-    DHookAddParam(g_hAttackFetchGuardDetour, HookParamType_CBaseEntity);
+    LogMessage("[BotRouteFix] [Module 9] Loose-bomb fetch backend verified (gate=%.0f, size=%d).",
+        FETCH_GUARD_DISTANCE, FETCH_ROSTER_SIZE);
     return true;
 }
 
@@ -216,8 +128,7 @@ static bool MountAttackFetchGuardDetour()
 //========================================================================================
 
 /**
- * 初始化模块 9 的唯一事项：掉包抢包花名册（ITEM_M9_FETCH），挂 NoticeLooseBomb Pre + SetState Post + AttackState OnUpdate Pre。
- * 签名双架构现成，缺失即 fail-fast（与待机模块不同：这里缺 = gamedata 坏了）。
+ * 初始化模块 9 的唯一事项：T 掉包 Top3 抢包花名册（ITEM_M9_FETCH）
  *
  * 失败语义：任一后端缺失 → LogModuleAllFailed + return false（事项 FAILED，不静默降级）。
  */
@@ -225,7 +136,7 @@ bool InitModule9_Fetch()
 {
     if (g_hGameConf == null)
     {
-        LogError("[BotRouteFix] [Module 9] GameConf missing; M9 fetch roster + OPPO guard item FAILED.");
+        LogError("[BotRouteFix] [Module 9] GameConf missing; M9 fetch roster item FAILED.");
         Item_SetReady(ITEM_M9_FETCH, false);
         return false;
     }
@@ -259,14 +170,10 @@ void EnableModule9_Fetch(bool enable)
     {
         RestoreModule9_FetchBackend();
         g_bModule9_Active = false;
-        // 借钩宿主：Hide 虚表指纹依赖模块 15 的 OnEnter 钩子，本模块关闭也要重算宿主意愿
-        SyncHideDurationDetourState();
         return;
     }
 
     g_bModule9_Active = ApplyModule9_FetchBackend();
-    // 借钩宿主：武装后确保 OnEnter 宿主钩子处于启用态（虚表捕获的前提）
-    SyncHideDurationDetourState();
 }
 
 /**
@@ -284,18 +191,6 @@ void RestoreModule9_Fetch()
         g_hLooseDetour = null;
     }
 
-    if (g_hFetchGuardDetour != null)
-    {
-        delete g_hFetchGuardDetour;
-        g_hFetchGuardDetour = null;
-    }
-
-    if (g_hAttackFetchGuardDetour != null)
-    {
-        delete g_hAttackFetchGuardDetour;
-        g_hAttackFetchGuardDetour = null;
-    }
-
     LogMessage("[BotRouteFix] [Module 9] Fetch hooks safely restored.");
 }
 
@@ -304,7 +199,7 @@ void RestoreModule9_Fetch()
 //========================================================================================
 
 /**
- * 事项 M9 抢包花名册的名单查询（模块 5 后撤档位裁决复用）
+ * 事项 M9 抢包花名册的名单查询（模块 5 后撤档位裁决与 M12 camp 门禁复用）
  *
  * 无效索引（client <= 0）直接返回 false；纯内存判断。
  */
@@ -358,21 +253,11 @@ int Module9_GetTotalElections()
 }
 
 /**
- * 获取累计拦截非名册哄抢次数
+ * 获取累计拦截近端非名册哄抢次数
  */
 int Module9_GetTotalGated()
 {
     return g_iTotalFetchGated;
-}
-
-/**
- * 查询累计为名册抢包人补写的 OPPO 次数
- *
- * 跨模块只读 getter，不参与事项状态。
- */
-int Module9_GetTotalFetchGuarded()
-{
-    return g_iTotalFetchGuarded;
 }
 
 /**
@@ -389,7 +274,7 @@ int Module9_GetFetchRoster(int roster[FETCH_ROSTER_SIZE], float c4Pos[3])
         return 0;
     }
 
-    if (!Fetch_FindDropPos(c4Pos))
+    if (!Fetch_GetLiveDropPos(c4Pos))
     {
         return 0;
     }
@@ -411,7 +296,7 @@ int Module9_GetFetchRoster(int roster[FETCH_ROSTER_SIZE], float c4Pos[3])
 //========================================================================================
 
 /**
- * 掉包事件：递延一帧再选举（等 C4 归属落定，模块 7 FrameRefresh 同款；直接查必 miss）
+ * 掉包事件：冻结期内跳过（交由 round_freeze_end 补选）；常规回合递延一帧选举（等 C4 归属落定）
  */
 void Module9_OnBombDropped()
 {
@@ -420,7 +305,29 @@ void Module9_OnBombDropped()
         return;
     }
 
+    if (GameRules_GetProp("m_bFreezePeriod") != 0)
+    {
+        return;
+    }
+
     RequestFrame(Module9_FrameElect);
+}
+
+/**
+ * 冻结期结束：若冻结期结束时地上已有无主 weapon_c4，立即补选花名册
+ */
+void Module9_OnRoundFreezeEnd()
+{
+    if (!Item_IsArmed(ITEM_M9_FETCH))
+    {
+        return;
+    }
+
+    float dummy[3];
+    if (Fetch_FindDropPos(dummy))
+    {
+        Fetch_ElectRoster();
+    }
 }
 
 /**
@@ -428,8 +335,8 @@ void Module9_OnBombDropped()
  */
 public void Module9_FrameElect(any data)
 {
-    // 递延帧可能在停用之后才到，必须二次校验业务态
-    if (!Item_IsArmed(ITEM_M9_FETCH))
+    // 递延帧可能在停用或重开回合冻结后才到，必须二次校验业务态与冻结期
+    if (!Item_IsArmed(ITEM_M9_FETCH) || GameRules_GetProp("m_bFreezePeriod") != 0)
     {
         return;
     }
@@ -464,22 +371,11 @@ void Module9_OnClientDisconnect(int client)
 }
 
 /**
- * 抢包事件：有人捡起 C4 即解散（FetchBombState 自己散伙）
+ * 抢包事件：只要当前名册有效，有人捡起 C4 即解散（无冻结期过滤，纯幂等清理）
  */
 void Module9_OnItemPickup(int client, const char[] item)
 {
-    if (!Item_IsArmed(ITEM_M9_FETCH))
-    {
-        return;
-    }
-
-    if (!g_bFetchHasRoster)
-    {
-        return;
-    }
-
-    // 冻结期系统发包不触发（与 module2/6/7 同守卫；此时名册恒空，本是 no-op，防后人加逻辑踩坑）
-    if (GameRules_GetProp("m_bFreezePeriod") != 0)
+    if (!Item_IsArmed(ITEM_M9_FETCH) || !g_bFetchHasRoster)
     {
         return;
     }
@@ -514,7 +410,7 @@ void Module9_OnMapStart()
 /**
  * 事项 M9 抢包花名册的清空：no-op 放行（无名册 = 全体放行回原生）
  *
- * 停用 / 抢包 / 回合重置 / 换图共用；只清名单不动钩子。
+ * 停用 / 抢包 / 回合重置 / 换图共用；只清名单与掉包缓存，不动钩子。
  */
 static void Fetch_ClearRoster()
 {
@@ -523,10 +419,14 @@ static void Fetch_ClearRoster()
         g_iFetchRoster[i] = -1;
     }
     g_bFetchHasRoster = false;
+    g_iLooseBombRef = INVALID_ENT_REFERENCE;
+    g_fDropPos[0] = 0.0;
+    g_fDropPos[1] = 0.0;
+    g_fDropPos[2] = 0.0;
 }
 
 /**
- * 事项 M9 抢包花名册的掉包定位：找无主掉包（m_hOwnerEntity == -1 的 weapon_c4）
+ * 事项 M9 抢包花名册的掉包定位：扫描无主 weapon_c4（m_hOwnerEntity == -1）并记录实体引用
  *
  * 找不到返回 false，调用方按 no-op 回原生放行（不等、不猜）。
  */
@@ -538,6 +438,7 @@ static bool Fetch_FindDropPos(float dropPos[3])
         if (GetEntPropEnt(ent, Prop_Send, "m_hOwnerEntity") == -1)
         {
             GetEntPropVector(ent, Prop_Send, "m_vecOrigin", dropPos);
+            g_iLooseBombRef = EntIndexToEntRef(ent);
             return true;
         }
     }
@@ -545,10 +446,47 @@ static bool Fetch_FindDropPos(float dropPos[3])
 }
 
 /**
+ * 优先通过已缓存的无主 weapon_c4 实体引用读取实时坐标，失效时回退扫描全图 weapon_c4。
+ */
+static bool Fetch_GetLiveDropPos(float dropPos[3])
+{
+    if (g_iLooseBombRef != INVALID_ENT_REFERENCE)
+    {
+        int ent = EntRefToEntIndex(g_iLooseBombRef);
+        if (ent != INVALID_ENT_REFERENCE && IsValidEntity(ent)
+            && GetEntPropEnt(ent, Prop_Send, "m_hOwnerEntity") == -1)
+        {
+            GetEntPropVector(ent, Prop_Send, "m_vecOrigin", dropPos);
+            g_fDropPos = dropPos;
+            return true;
+        }
+    }
+
+    if (Fetch_FindDropPos(dropPos))
+    {
+        g_fDropPos = dropPos;
+        return true;
+    }
+
+    return false;
+}
+
+/**
+ * 更新并返回掉包点实时坐标；若场上暂不可见则保留最近一次已知坐标 g_fDropPos 兜底。
+ */
+static void Fetch_UpdateDropPos(float dropPos[3])
+{
+    if (!Fetch_GetLiveDropPos(dropPos))
+    {
+        dropPos = g_fDropPos;
+    }
+}
+
+/**
  * 事项 M9 抢包花名册的蹲守承诺判定：task == 19 即视为蹲坑中
  *
  * task 是任务不是姿态：狙击手进 Hide 前 task 先落 19，所以这里能抓到"还没进 Hide 的蹲守承诺"
- * （MOVE_TO_SNIPER_SPOT，M12 自己也认这个值）；已经进 Hide 的不限 task 者由 Fetch_IsHiding 兜底。
+ * （MOVE_TO_SNIPER_SPOT，M12 自己也认这个值）；已经进 Hide 的不限 task 者由 Module15_IsBotHiding 兜底。
  * 偏移缺失/实体无效一律按"非蹲守"处理（宁可漏踢，不错杀）。
  *
  * @param bot           客户端索引
@@ -571,47 +509,11 @@ static bool Fetch_IsCampCommitted(int bot)
 }
 
 /**
- * 事项 M9 抢包花名册的 Hide 真值判定：m_state 虚表指纹比对
+ * 事项 M9 抢包花名册的蹲守者解蹲：对名册里 task 19 的，一人一次强制 BotHunt
  *
- * 不限 task——残血 Hide、换弹 Hide、跟丢 Ambush Hide、狙击蹲坑 Hide 全中。
- * 指纹由 M15 共享 HideState::OnEnter 钩子首次目击时捕获（g_pHideStateVTable）；
- * 捕获前返回 false 物理上恒成立：无任何 Hide 进入即无任何存活 Bot 处 Hide，无漏判。
- * M9 是该宿主钩子的借钩方（Enable/Disable 时同步 SyncHideDurationDetourState），
- * 即使 M12/M15 关闭宿主也不会被卸载。
- * m_state 恒指有效 BotState 对象，读虚表安全；偏移缺失/实体无效/哨兵按"非 Hide"处理。
- *
- * @param bot           客户端索引
- * @return              true = 正处 HideState，抢包指望不上它
- */
-static bool Fetch_IsHiding(int bot)
-{
-    if (g_pHideStateVTable == Address_Null || g_iOffset_State <= 0)
-    {
-        return false;
-    }
-
-    Address pBot = GetEntityAddress(bot);
-    if (!IsValidAddress(pBot))
-    {
-        return false;
-    }
-
-    Address state = LoadAddressFromAddress(pBot + view_as<Address>(g_iOffset_State));
-    if (!IsValidAddress(state))
-    {
-        return false;
-    }
-
-    return LoadAddressFromAddress(state) == g_pHideStateVTable;
-}
-
-/**
- * 事项 M9 抢包花名册的蹲守者解蹲：对名册里 task 19 的，一人一次强制 Hunt
- *
- * 蹲坑者 Hide 里永远到不了 NoticeLooseBomb（Idle 的 loose 检查排在狙击手
- * 守点/架枪掷骰之后，M12 再把 task 19 的 Hide 留守），不踢出来名册就是摆设。
- * Hunt 进去 task 落 SEEK_AND_DESTROY，M12 不认（只认 19），交接干净；
- * Hunt SDKCall 缺失则跳过（名册照转被动门禁，不拓宽 FAILED 面）。
+ * 必须用 BotHunt 而非 BotIdle：HuntState::OnUpdate 首行即检查 NoticeLooseBomb()，
+ * 而 IdleState::OnUpdate 中 NoticeLooseBomb 优先级排在狙击手 camp 与随机掷骰之后；
+ * Hunt 进去 task 落 SEEK_AND_DESTROY，M12 不认（只认 19），交接干净。
  * 调用点保证帧上下文（选举/回补都在 RequestFrame 或事件里，不在钩子里），直调安全。
  *
  * @param bot           名册成员客户端索引
@@ -628,25 +530,20 @@ static bool Fetch_ForceHuntIfCamping(int bot)
     {
         DebugLog("[BotRouteFix] [Module 9] Roster %N was camping (task 19), forced Hunt to fetch", bot);
     }
-    else
-    {
-        DebugLog("[BotRouteFix] [Module 9] Roster %N camping but Hunt SDKCall unavailable, left passive", bot);
-    }
     return true;
 }
 
 /**
- * 事项 M9 抢包花名册的 Hide 解蹲：对名册里一切正处 HideState 者强制 Hunt
+ * 事项 M9 抢包花名册的 Hide 解蹲：对名册里一切正处 HideState 者强制 BotHunt
  *
- * task 19 快道抓不到的（残血 Hide、换弹 Hide、跟丢 Ambush Hide……）全在这里兜底：
- * Hide 里到不了 NoticeLooseBomb（Idle/Hunt 的 loose 检查都在各自状态流里，Hide 自成一国），
- * 不踢出来名册就是摆设。未处 Hide 时 no-op（捕获前返回 false 物理恒成立，无漏判）。
+ * HideState::OnUpdate 不检查 NoticeLooseBomb()，不踢出即锁死；
+ * 未处 Hide 时 no-op（复用 Module15_IsBotHiding 虚表真值门禁）。
  *
  * @param bot           名册成员客户端索引
  */
 static void Fetch_ForceHuntIfHiding(int bot)
 {
-    if (!Fetch_IsHiding(bot))
+    if (!Module15_IsBotHiding(bot))
     {
         return;
     }
@@ -655,18 +552,13 @@ static void Fetch_ForceHuntIfHiding(int bot)
     {
         DebugLog("[BotRouteFix] [Module 9] Roster %N was hiding (any task), forced Hunt to fetch", bot);
     }
-    else
-    {
-        DebugLog("[BotRouteFix] [Module 9] Roster %N hiding but Hunt SDKCall unavailable, left passive", bot);
-    }
 }
 
 /**
- * 事项 M9 抢包花名册的选举：掉包点真实地面行走距离最近 3 存活 T bot
+ * 事项 M9 抢包花名册的选举：掉包点真实最快地面行走距离（ROUTE_FASTEST）最近 3 存活 T bot
  *
  * 测距未就绪 / 找不到掉包 / 无存活 T bot 即空名册回原生（不拿欧氏混分，不可达跳过）。
  * 选完强制解蹲：task 19 蹲守承诺先踢（快道，含尚未进 Hide 者），一切正处 Hide 者再踢（虚表真值）。
- * 踢过一次的不踢第二次。
  */
 static void Fetch_ElectRoster()
 {
@@ -701,8 +593,8 @@ static void Fetch_ElectRoster()
             continue;
         }
 
-        // 真实地面行走距离选人（ROUTE_SAFEST 贴合原生捡包避险路线）；不可达跳过（跨楼层够不着的不选）
-        float dist = BotNavWalkDistance(i, dropPos, ROUTE_SAFEST);
+        // ROUTE_FASTEST 实测地面直达距离，避开掉包交火处刚钉刺的危险度扭曲排序；不可达跳过
+        float dist = BotNavWalkDistance(i, dropPos, ROUTE_FASTEST);
         if (dist < 0.0)
         {
             continue;
@@ -726,7 +618,8 @@ static void Fetch_ElectRoster()
 
     if (g_iFetchRoster[0] == -1)
     {
-        DebugLog("[BotRouteFix] [Module 9] No alive T bots to elect, no-op to native");
+        Fetch_ClearRoster();
+        DebugLog("[BotRouteFix] [Module 9] No alive reachable T bots to elect, no-op to native");
         return;
     }
 
@@ -737,7 +630,7 @@ static void Fetch_ElectRoster()
         (g_iFetchRoster[1] != -1) ? g_iFetchRoster[1] : g_iFetchRoster[0],
         (g_iFetchRoster[2] != -1) ? g_iFetchRoster[2] : g_iFetchRoster[0]);
 
-    // 蹲守者解蹲 + 立即切换名册 OPPO（未触发 BotHunt 者同样即刻从 ENGAGE 收拢为 OPPORTUNITY_FIRE）
+    // 蹲守者 / 隐藏者解蹲（HuntState 首行即检查 NoticeLooseBomb）
     for (int i = 0; i < FETCH_ROSTER_SIZE; i++)
     {
         if (g_iFetchRoster[i] != -1)
@@ -746,14 +639,12 @@ static void Fetch_ElectRoster()
             {
                 Fetch_ForceHuntIfHiding(g_iFetchRoster[i]);
             }
-            Module9_EnforceFetchDisposition(g_iFetchRoster[i]);
         }
     }
 }
 
 /**
- * 除名 + 按掉包点就近回补 + 全灭解散放行（死亡与掉线共用）
- * 名单有效时 C4 必躺在掉包点（谁捡起名单即散），按掉包点招人即按 C4 位置招人
+ * 除名 + 按实时掉落坐标就近回补（ROUTE_FASTEST）+ 全灭解散放行（死亡与掉线共用）
  */
 static void Fetch_RemoveAndBackfill(int client, const char[] reason)
 {
@@ -771,6 +662,9 @@ static void Fetch_RemoveAndBackfill(int client, const char[] reason)
         }
     }
 
+    float dropPos[3];
+    Fetch_UpdateDropPos(dropPos);
+
     int best = -1;
     float bestDist = 9999999.0;
     for (int i = 1; i <= MaxClients; i++)
@@ -780,7 +674,7 @@ static void Fetch_RemoveAndBackfill(int client, const char[] reason)
             continue;
         }
 
-        float dist = BotNavWalkDistance(i, g_fDropPos, ROUTE_SAFEST);
+        float dist = BotNavWalkDistance(i, dropPos, ROUTE_FASTEST);
         if (dist < 0.0)
         {
             continue;
@@ -808,7 +702,6 @@ static void Fetch_RemoveAndBackfill(int client, const char[] reason)
         {
             Fetch_ForceHuntIfHiding(best);
         }
-        Module9_EnforceFetchDisposition(best);
     }
 
     // 全灭则解散回原生（no-op 放行）
@@ -820,15 +713,17 @@ static void Fetch_RemoveAndBackfill(int client, const char[] reason)
 }
 
 //========================================================================================
-// MODULE 9 DETOUR & HOOKS (NOTICELOOSEBOMB::PRE / SETSTATE::POST / ATTACKSTATE::ONUPDATE::PRE)
+// MODULE 9 DETOUR & HOOKS (NOTICELOOSEBOMB::PRE)
 //========================================================================================
 
 /**
- * 事项 M9 抢包花名册的唯一入口钩子（NoticeLooseBomb Pre）
+ * 事项 M9 抢包花名册的入口门控（NoticeLooseBomb Pre）
  *
- * ITEM_M9_FETCH 武装且名册有效时才掐非名册者；只会把 true 掐成 false，
- * 且 CT 一律 Supercede（阵营门补漏）；名册空即全体放行回原生。
- * 失败语义：回调内不判定事项成败；Supercede 仅用于强制 false（非名册者/CT 阵营门），其余一律 MRES_Ignored。
+ * ITEM_M9_FETCH 武装且名册有效时：
+ *   - 非存活 T（含 CT）/ 名册为空 / 在册成员：MRES_Ignored 直通原生；
+ *   - 远端非名册 T（距包 > 750.0 units）：MRES_Ignored 放行靠近掉包大方向；
+ *   - 近端非名册 T（距包 <= 750.0 units）：DHookSetReturn(hParams, false) + MRES_Supercede，
+ *     若在包旁接敌后退回 Hunt/Idle，阻止再入 FetchBombState 扎堆，令其延续正常状态机。
  *
  * 契约注记：底层 DHooks 在 0 参数 non-void 钩子下槽 2 实推 rHndl（DHookSetReturn 内部双认
  * g_HookReturnHandle 与 g_HookParamsHandle），此处保留 hParams 惯用标签防误调 DHookGetReturn，勿再改名。
@@ -840,16 +735,9 @@ public MRESReturn Hook_NoticeLooseBomb_Pre(int client, DHookParam hParams)
         return MRES_Ignored;
     }
 
-    if (!IsBot(client, true))
-    {
-        return MRES_Ignored;
-    }
-
-    // 阵营门补漏：原生 NoticeLooseBomb 注释写 "for T's only"（虽底层调用点均有阵营包裹，此处作为纵深防御兜底）
     if (!IsTeamBot(client, 2, true))
     {
-        DHookSetReturn(hParams, false);
-        return MRES_Supercede;
+        return MRES_Ignored;
     }
 
     if (!g_bFetchHasRoster || Module9_IsInRoster(client))
@@ -857,108 +745,20 @@ public MRESReturn Hook_NoticeLooseBomb_Pre(int client, DHookParam hParams)
         return MRES_Ignored;
     }
 
+    float dropPos[3];
+    Fetch_UpdateDropPos(dropPos);
+
+    float botPos[3];
+    GetClientAbsOrigin(client, botPos);
+    if (GetVectorDistance(botPos, dropPos) > FETCH_GUARD_DISTANCE)
+    {
+        return MRES_Ignored;
+    }
+
     DHookSetReturn(hParams, false);
     g_iTotalFetchGated++;
-    // DebugLog("[BotRouteFix] [Module 9] Bot %N denied loose-bomb fetch (off-roster)", client);
+    // DebugLog("[BotRouteFix] [Module 9] Bot %N gated loose-bomb fetch within %.0fu (off-roster)", client, FETCH_GUARD_DISTANCE);
     return MRES_Supercede;
-}
-
-/**
- * 事项 ITEM_M9_FETCH（M9 fetch roster + OPPO guard）的名册抢包质量守卫原语
- *
- * 按名册身份（Module9_IsInRoster）统一守护，不卡状态机指针、也不排除 HideState：
- * 只要当前 m_disposition 仍为 ENGAGE，直接内存覆写为 DISP_OPPORTUNITY（1），
- * 不经 CCSBot::SetDisposition，确保 M5 后撤与近敌换弹携带的 m_ignoreEnemiesTimer
- * （及队友阵亡 1s 切路保护）完全不被提前清零；计时到期自然落回 OPPO，
- * 同时顺带兜住 Follow 停步/电台 Hold 等无 IgnoreEnemies 进 Hide 的在途段。
- * 只动抢包，不管下包不管 GUARD。
- *
- * 失败语义：本函数只做守卫补写、不判定事项成败；非名册/偏移缺失时直接返回。
- */
-static void Module9_EnforceFetchDisposition(int client)
-{
-    if (!IsBot(client, true) || !Module9_IsInRoster(client))
-    {
-        return;
-    }
-
-    Address pBot = GetEntityAddress(client);
-    if (pBot == Address_Null)
-    {
-        return;
-    }
-
-    if (g_iOffset_Disposition <= 0)
-    {
-        return;
-    }
-
-    int disposition = LoadFromAddress(pBot + view_as<Address>(g_iOffset_Disposition), NumberType_Int32);
-    if (disposition != DISP_ENGAGE)
-    {
-        return;
-    }
-
-    // 直写 m_disposition，不动 m_ignoreEnemiesTimer（cs_bot.cpp:685-704）
-    StoreToAddress(pBot + view_as<Address>(g_iOffset_Disposition), DISP_OPPORTUNITY, NumberType_Int32);
-    g_iTotalFetchGuarded++;
-    DebugLog("[BotRouteFix] [Module 9] Bot %N fetch disposition -> OPPORTUNITY_FIRE", client);
-}
-
-/**
- * 事项 ITEM_M9_FETCH（M9 fetch roster + OPPO guard）的 CCSBot::SetState Post 钩子
- * （与 M6 的同目标钩子以后缀区分，两个 Post 回调都会被 DHooks 依次调用）。
- *
- * OnEnter/OnExit 的 disposition 重置发生在 SetState 内部，Post 在这里统一覆盖。
- * 只处理名册成员，其余一律放行。名册按槽位直查，比全客户端扫描便宜。
- *
- * 失败语义：回调内不判定事项成败；未武装时首行自守，直接返回 MRES_Ignored。
- */
-public MRESReturn Hook_SetState_Post_Fetch(Address pThis, DHookParam hParams)
-{
-    if (!Item_IsArmed(ITEM_M9_FETCH) || pThis == Address_Null)
-    {
-        return MRES_Ignored;
-    }
-
-    for (int i = 0; i < FETCH_ROSTER_SIZE; i++)
-    {
-        int bot = g_iFetchRoster[i];
-        if (bot != -1 && IsClientInGame(bot) && GetEntityAddress(bot) == pThis)
-        {
-            Module9_EnforceFetchDisposition(bot);
-            break;
-        }
-    }
-    return MRES_Ignored;
-}
-
-/**
- * 事项 ITEM_M9_FETCH（M9 fetch roster + OPPO guard）的 AttackState::OnUpdate Pre 钩子
- * （与 M5 后撤、M6 下包守卫的同目标钩子以后缀区分，各自 detour 独立回调）。
- *
- * 引擎 Attack() 并发直入 m_attackState.OnEnter（不经 SetState），交火全程
- * SetState Post 面零执行；此面在攻击 tick 内兜底，名册成员无论处 FetchBombState
- * 或在途状态交战时皆就地补写 OPPO，掐死脱视 0.1s 的 Ambush Hide 蹲死。
- * 业务判定全部下沉 EnforceFetchDisposition（名册/现行值双重自守）。
- *
- * 失败语义：回调内不判定事项成败；未武装时首行自守，直接返回 MRES_Ignored。
- */
-public MRESReturn Hook_AttackState_OnUpdate_Pre_Fetch(Address pThis, DHookParam hParams)
-{
-    if (!Item_IsArmed(ITEM_M9_FETCH))
-    {
-        return MRES_Ignored;
-    }
-
-    int client = hParams.Get(1);
-    if (!IsBot(client, true))
-    {
-        return MRES_Ignored;
-    }
-
-    Module9_EnforceFetchDisposition(client);
-    return MRES_Ignored;
 }
 
 //========================================================================================
@@ -966,56 +766,58 @@ public MRESReturn Hook_AttackState_OnUpdate_Pre_Fetch(Address pThis, DHookParam 
 //========================================================================================
 
 /**
- * 应用抢包事项：启用 NoticeLooseBomb Pre + SetState Post + AttackState OnUpdate Pre 钩子
+ * 应用抢包事项（ITEM_M9_FETCH）：挂载 NoticeLooseBomb Pre 并同步共享 HideState::OnEnter 宿主。
  *
- * 事项 ITEM_M9_FETCH 的应用入口；不做 Detour 创建与签名绑定（那是 Prep 的职责）。
- * 三个钩子同属一个事项：任一失败都回滚，避免只开半边；失败只清 Armed 保留 Ready。
- * 失败语义：任一钩子启用失败则回滚已启用的，只清 Armed 保留 Ready，事项待下次 Enable 重试。
+ * 失败语义：任一钩子启用失败均回滚已启用钩子、清 Armed 保留 Ready，供下次 Enable 重试。
  *
- * @return              true = 抢包三钩子已驻留
+ * @return              true = 抢包门控与宿主钩子均已驻留
  */
 static bool ApplyModule9_FetchBackend()
 {
-    if (!Item_IsReady(ITEM_M9_FETCH)
-        || g_hLooseDetour == null || g_hFetchGuardDetour == null
-        || g_hAttackFetchGuardDetour == null)
+    if (!Item_IsReady(ITEM_M9_FETCH) || g_hLooseDetour == null || !Module15_IsHideHostReady())
     {
         Item_SetArmed(ITEM_M9_FETCH, false);
+        LogError("[BotRouteFix] [Module 9] Fetch backend unavailable (ready=%d, loose=%d, host=%d); fetch item unarmed.",
+            Item_IsReady(ITEM_M9_FETCH), g_hLooseDetour != null, Module15_IsHideHostReady());
         return false;
     }
 
-    bool looseOk = SyncDetourEnabled(g_hLooseDetour, g_bLooseHooked,
-        false, Hook_NoticeLooseBomb_Pre, true, "Module 9");
-    bool fetchOk = SyncDetourEnabled(g_hFetchGuardDetour, g_bFetchGuardHooked,
-        true, Hook_SetState_Post_Fetch, true, "Module 9");
-    bool attackOk = SyncDetourEnabled(g_hAttackFetchGuardDetour, g_bAttackFetchGuardHooked,
-        false, Hook_AttackState_OnUpdate_Pre_Fetch, true, "Module 9");
-
-    if (!looseOk || !fetchOk || !attackOk)
+    if (!SyncDetourEnabled(g_hLooseDetour, g_bLooseHooked,
+        false, Hook_NoticeLooseBomb_Pre, true, "Module 9"))
     {
-        // 挂钩失败属动态环境抖动，不证伪探测结论：回滚摘钩并清 Armed，保留 Ready 供下次 Enable 重试
-        RestoreModule9_FetchBackend();
-        LogError("[BotRouteFix] [Module 9] Fetch detour enable failed; M9 fetch roster + OPPO guard item unarmed.");
+        Item_SetArmed(ITEM_M9_FETCH, false);
+        LogError("[BotRouteFix] [Module 9] NoticeLooseBomb detour enable failed; M9 fetch item unarmed.");
         return false;
     }
 
+    // 先临时置位再同步共享宿主：SyncHideDurationDetourState 依据各借钩方 Armed 态决定 Pre/Post 启停
     Item_SetArmed(ITEM_M9_FETCH, true);
-    // 武装瞬间补选一次：中途开规则且雷已掉在地上时，不等下一次掉包事件；
-    // 地上无雷则 FindDropPos 失败即 no-op；此上下文实体状态已落定，无需像掉包事件那样递延一帧。
-    Fetch_ElectRoster();
+    if (!SyncHideDurationDetourState())
+    {
+        RestoreModule9_FetchBackend();
+        LogError("[BotRouteFix] [Module 9] Shared HideState host converge failed; M9 fetch item unarmed.");
+        return false;
+    }
+
+    // 仅在服务帧已启动后检查冻结期（规避冷启动 OnPluginStart 时 GameRules 尚未创建报错）；
+    // 非冻结期内中途武装且场上已有无主 C4 时立即补选（冻结期对称延后至 round_freeze_end）
+    if (IsServerProcessing() && GameRules_GetProp("m_bFreezePeriod") == 0)
+    {
+        Fetch_ElectRoster();
+    }
+
     return true;
 }
 
 /**
- * 还原抢包事项（ITEM_M9_FETCH）：摘三钩、清空名册（= 全体放行回原生）并解除武装。
+ * 还原抢包事项（ITEM_M9_FETCH）：摘钩、清空名册（= 全体放行回原生）、解除武装并收敛宿主钩子。
  *
- * 失败语义：无（幂等；摘钩 + 清空名册 + Armed(false)）。
+ * 失败语义：无（幂等）。
  */
 static void RestoreModule9_FetchBackend()
 {
     SyncDetourEnabled(g_hLooseDetour, g_bLooseHooked, false, Hook_NoticeLooseBomb_Pre, false, "Module 9");
-    SyncDetourEnabled(g_hFetchGuardDetour, g_bFetchGuardHooked, true, Hook_SetState_Post_Fetch, false, "Module 9");
-    SyncDetourEnabled(g_hAttackFetchGuardDetour, g_bAttackFetchGuardHooked, false, Hook_AttackState_OnUpdate_Pre_Fetch, false, "Module 9");
     Fetch_ClearRoster();
     Item_SetArmed(ITEM_M9_FETCH, false);
+    SyncHideDurationDetourState();
 }

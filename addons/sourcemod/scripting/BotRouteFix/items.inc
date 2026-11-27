@@ -19,9 +19,9 @@
 //
 // 归属原则：谁执行最终改写，谁拥有事项。
 //   - M11 只发撤退请求，最终后撤由 M5 执行 → 撤退归 M5，M11 只有走廊 danger。
-//   - M15 亲手写 m_duration → 短蹲与缩放同属 M15 一件事。
-//   - M6 亲手写下包 OPPO → 下包 OPPO 归 M6，噪声钩子拦截与事件写入同属 M6 一件事（Detour / 偏移 / SDKCall 缺失即 FAILED）。
-//   - M9 亲手写抢包 OPPO → 抢包 OPPO 归 M9；M9 名册选举只是本事项门禁的预热（Detour / 偏移 / SDKCall 缺失即 FAILED）。
+//   - M15 亲手写 m_duration 并负责下包前 Hide(-1) 短蹲与 Ambush Hide 踢出（BotIdle/BotHunt）→ 同属 M15 一件事。
+//   - M6 纯粹拦截 InvestigateNoise 梯度（零状态写入）→ 属于 M6 一件事。
+//   - M9 只拥有 750 码掉包门禁与选举瞬间解蹲（NoticeLooseBomb Pre + BotHunt）→ 属于 M9 一件事。
 //   - M10 的选举只是本模块门禁的预热，不改变引擎行为，不计事项。
 //   - GUARD_TICKING_BOMB 谁都不写：T 方守包听到枪声必须能出击，一刀切不合理。
 //========================================================================================
@@ -96,7 +96,7 @@ void InitItems()
     strcopy(g_sItemName[ITEM_M5_RETREAT], 48, "M5 retreat dhook writes");
 
     g_iItemModule[ITEM_M6_NOISE] = 6;
-    strcopy(g_sItemName[ITEM_M6_NOISE], 48, "M6 noise & OPPO dhook writes");
+    strcopy(g_sItemName[ITEM_M6_NOISE], 48, "M6 noise dhook intercept");
 
     g_iItemModule[ITEM_M7_ESCORT] = 7;
     strcopy(g_sItemName[ITEM_M7_ESCORT], 48, "M7 escort meme ret & SDKCalls");
@@ -107,7 +107,7 @@ void InitItems()
     strcopy(g_sItemName[ITEM_M8_DEADLOCK], 48, "M8 deadlock Hunt SDKCall");
 
     g_iItemModule[ITEM_M9_FETCH] = 9;
-    strcopy(g_sItemName[ITEM_M9_FETCH], 48, "M9 loose-bomb fetch gate & OPPO dhook");
+    strcopy(g_sItemName[ITEM_M9_FETCH], 48, "M9 loose-bomb fetch dhook gate");
 
     g_iItemModule[ITEM_M10_DEFUSE] = 10;
     strcopy(g_sItemName[ITEM_M10_DEFUSE], 48, "M10 defuse dhook gate");
@@ -125,7 +125,7 @@ void InitItems()
     strcopy(g_sItemName[ITEM_M14_DEFEND], 48, "M14 defend-rush formula patch");
 
     g_iItemModule[ITEM_M15_HIDE] = 15;
-    strcopy(g_sItemName[ITEM_M15_HIDE], 48, "M15 hide duration dhook writes");
+    strcopy(g_sItemName[ITEM_M15_HIDE], 48, "M15 hide dhook writes & SDKCalls");
 
     g_iItemModule[ITEM_M16_ESCAPE] = 16;
     strcopy(g_sItemName[ITEM_M16_ESCAPE], 48, "M16 escape weapon dhook & SDKCall");

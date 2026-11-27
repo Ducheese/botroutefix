@@ -80,10 +80,11 @@ static bool PrepSDKCall_MoveTo()
 }
 
 /**
- * 事项 M7 先锋复位 / 状态监督的 Idle 后端准备；缺失则 M7 事项 FAILED。
+ * 事项 M7 先锋复位 / 状态监督与 M15 Ambush 踢出的 Idle 后端准备；缺失则相关事项 FAILED。
  *
  * Idle 是引擎里所有状态收束的回口：MoveTo 完成/放弃、Hide 结束、Hunt 结束都会走 Idle()。
- * M7 用它取消先锋残留的 MoveToState，并用同一签名挂 Detour 感知先锋转入 Idle。
+ * M7 用它取消先锋残留的 MoveToState，并用同一签名挂 Detour 感知先锋转入 Idle；
+ * M15 用它把下包前陷入 Ambush Hide 的先锋与到期持包者踢回 Idle 续接原任务。
  */
 static bool PrepSDKCall_Idle()
 {
@@ -92,7 +93,7 @@ static bool PrepSDKCall_Idle()
     g_hSDKCall_Idle = EndPrepSDKCall();
     if (g_hSDKCall_Idle == null)
     {
-        LogError("[BotRouteFix] [SDKCalls] CCSBot_Idle unavailable (M7 will FAIL).");
+        LogError("[BotRouteFix] [SDKCalls] CCSBot_Idle unavailable (M7/M15 will FAIL).");
         return false;
     }
     return true;
@@ -135,7 +136,7 @@ static bool PrepSDKCall_IsOutnumbered()
 }
 
 /**
- * 事项 M8 死锁 / M12 门禁的 Hunt 后端准备；缺失则相关事项 FAILED。
+ * 事项 M8 死锁 / M9 选举解蹲 / M12 门禁 / M15 Ambush 踢出的 Hunt 后端准备；缺失则相关事项 FAILED。
  */
 static bool PrepSDKCall_Hunt()
 {
@@ -144,7 +145,7 @@ static bool PrepSDKCall_Hunt()
     g_hSDKCall_Hunt = EndPrepSDKCall();
     if (g_hSDKCall_Hunt == null)
     {
-        LogError("[BotRouteFix] [SDKCalls] CCSBot_Hunt unavailable (M8 deadlock/M12 sniper camp items will FAIL).");
+        LogError("[BotRouteFix] [SDKCalls] CCSBot_Hunt unavailable (M8 deadlock/M9 fetch/M12 sniper camp/M15 hide items will FAIL).");
         return false;
     }
     return true;

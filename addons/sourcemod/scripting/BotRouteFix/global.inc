@@ -30,7 +30,7 @@
 #define BOT_TASK_ESCAPE_FROM_BOMB     9       // 引擎原生任务枚举：ESCAPE_FROM_BOMB (逃离炸弹)
 #define BOT_TASK_FOLLOW               11      // 引擎原生任务枚举：FOLLOW (跟随任务)
 
-// 引擎 CCSBot 接战策略枚举原值（cs_bot.h DispositionType）：策略常量唯一出处，M6/M9/M12/visuals 共用；
+// 引擎 CCSBot 接战策略枚举原值（cs_bot.h DispositionType）：策略常量唯一出处，visuals 只读消费；
 // 各模块只消费不定义，Prep 亦不校验它（原值永真）
 #define DISP_ENGAGE                   0       // 引擎原生策略枚举：ENGAGE_AND_INVESTIGATE
 #define DISP_OPPORTUNITY              1       // 引擎原生策略枚举：OPPORTUNITY_FIRE
@@ -58,6 +58,7 @@ int g_iOffset_Morale = -1;
 int g_iOffset_Task = -1;
 int g_iOffset_Disposition = -1;
 int g_iOffset_State = -1;
+int g_iOffset_HideHoldPosition = -1;
 
 // 全局单例指针引用（跨模块共享）
 Address g_pTheCSBotsPtr;
