@@ -55,7 +55,7 @@ static int g_iBlockedAreaCount = 0;
 static float g_flDeadlockBrokenUntil[MAXPLAYERS + 1];
 
 //========================================================================================
-// MODULE 8 ITEM BACKENDS: QUEUE SHATTER (UpdatePathMovement Post) + DEADLOCK HUNT (Hunt SDKCall)
+// MODULE 8 ITEM BACKENDS (called by Init)
 //========================================================================================
 
 /**

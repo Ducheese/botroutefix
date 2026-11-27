@@ -309,11 +309,11 @@
 
 ### 分区横幅
 
-每个模块文件按固定顺序分区（M1 按事项拆成 `ITEM n BACKEND`，其余用集合式 `ITEM BACKENDS`）：
+每个模块文件按固定顺序分区（`ITEM BACKENDS` 一律集合式，不按事项拆分）：
 
 ```text
 MODULE X DEFINES & GLOBALS
-MODULE X ITEM BACKENDS [(called by Init [/ MapStart])]
+MODULE X ITEM BACKENDS (called by Init)
 MODULE X LIFECYCLE
 MODULE X PUBLIC GETTERS [& TELEMETRY / & FORMULA]
 MODULE X EVENT HANDLERS
@@ -325,6 +325,7 @@ MODULE X ... PRIMITIVES / DETOUR & HOOKS / ITEM APPLY / RESTORE BACKENDS
 - **引擎级常量上收 `global.inc`**：任务/策略枚举等引擎原值只在 `global.inc` 的 DEFINES 区定义一次并注明共用方（如任务常量唯一出处 M5/M6/M9/M12/M15/M16 共用，策略常量 M6/M9/M12/visuals 共用）；模块只消费不定义，更不得直接复用他模块文件的 `#define`（include 顺序不可靠，换序即 `undefined symbol`）。模块私有阈值留在本文件。
 - **跨模块公共入口归 GETTERS 区**：非 `static` 的 `ModuleX_*` 对外 API（请求入口/只读查询）一律放 `PUBLIC GETTERS` 区，`APPLY/RESTORE` 区只放 `static` 后端（M5/M15 前车：跨模块请求函数曾误放后端区）。
 - **`RestoreModuleX` 归 LIFECYCLE 区**：模块级还原是生命周期函数，跟 `Init/Enable` 放一块；`APPLY/RESTORE` 区只放分事项 `Backend`（M3 前车：`RestoreModule` 曾误挂后端横幅下）。
+- **`ITEM BACKENDS` 后缀有什么写什么**：`Prep` 被谁调，横幅就写谁——标准 `(called by Init)`，M3 加 `/ MapStart`（换图重解，每张图都跑的主入口），M12 加 `/ Enable`（重探）；只拆事项、不注调用方、写双事项描述的一律不认（M1/M3/M8 前车）。事项差异写进各 `Prep` 函数头。
 
 ### 函数命名
 

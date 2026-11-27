@@ -84,7 +84,7 @@ static const char g_sSniperCamp12_OffNames[6][32] =
 };
 
 //========================================================================================
-// MODULE 12 ITEM BACKENDS (called by Init)
+// MODULE 12 ITEM BACKENDS (called by Init / Enable)
 //========================================================================================
 
 /**

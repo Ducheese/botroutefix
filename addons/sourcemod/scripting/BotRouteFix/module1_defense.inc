@@ -57,7 +57,7 @@ static int g_GuardPatchBytes[55];
 static bool g_bModule1_Active = false;
 
 //========================================================================================
-// MODULE 1 ITEM 1 BACKENDS: GUARD BOMBSITE CHANCE FORMULA REWRITE (70 - 10 * Morale)
+// MODULE 1 ITEM BACKENDS (called by Init)
 //========================================================================================
 
 /**
@@ -256,10 +256,6 @@ static bool PrepModule1_GuardBackend()
         return true;
     }
 }
-
-//========================================================================================
-// MODULE 1 ITEM 2 BACKENDS: CT ANTI-RUSH (IsDefenseRushing NOP BYPASS)
-//========================================================================================
 
 /**
  * 事项后端：防开局前冲补丁（NOP 穿透 IsDefenseRushing 跳转）
