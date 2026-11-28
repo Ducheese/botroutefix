@@ -326,7 +326,7 @@ MODULE X ... PRIMITIVES / DETOUR & HOOKS / ITEM APPLY / RESTORE BACKENDS
 - **引擎级常量上收 `global.inc`**：任务/策略枚举等引擎原值只在 `global.inc` 的 DEFINES 区定义一次并注明共用方（如任务常量唯一出处 M5/M6/M9/M12/M15/M16 共用，策略常量 M6/M9/M12/visuals 共用）；模块只消费不定义，更不得直接复用他模块文件的 `#define`（include 顺序不可靠，换序即 `undefined symbol`）。模块私有阈值留在本文件。
 - **跨模块公共入口归 GETTERS 区**：非 `static` 的 `ModuleX_*` 对外 API（请求入口/只读查询）一律放 `PUBLIC GETTERS` 区，`APPLY/RESTORE` 区只放 `static` 后端（M5/M15 前车：跨模块请求函数曾误放后端区）。
 - **`RestoreModuleX` 归 LIFECYCLE 区**：模块级还原是生命周期函数，跟 `Init/Enable` 放一块；`APPLY/RESTORE` 区只放分事项 `Backend`（M3 前车：`RestoreModule` 曾误挂后端横幅下）。
-- **`ITEM BACKENDS` 后缀有什么写什么**：`Prep` 被谁调，横幅就写谁——标准 `(called by Init)`，M3 加 `/ MapStart`（随 `NavAreas_OnMapStart()` 重解后同步事项就绪态），M12 加 `/ Enable`（重探）；只拆事项、不注调用方、写双事项描述的一律不认（M1/M3/M8 前车）。事项差异写进各 `Prep` 函数头。
+- **`ITEM BACKENDS` 后缀有什么写什么**：`Prep` 被谁调，横幅就写谁——标准 `(called by Init)`，M3 加 `/ MapStart`（随 `NavAreas_OnMapStart()` 重解后同步事项就绪态）；只拆事项、不注调用方、写双事项描述的一律不认（M1/M3/M8 前车）。事项差异写进各 `Prep` 函数头。
 
 ### 函数命名
 
@@ -379,16 +379,16 @@ Enable(false) / Restore:
 > 不以任何单个模块为标杆；以下定义适用于每一个模块，所有模块均以此为准对齐。
 
 1. **事项 = 独立能力，后端链 = 该事项的全部前置条件。** 任一后端条件不满足，该事项即认定为无法运行；一事项可用、一事项不可用 → 模块 `DEGRADED`；全不可用 → `FAILED`。
-2. **`Ready` = 最近一次探测结论，不是环境快照。** 探测只发生在三处：`Init`（全部事项）、环境重建点（如换图 `NavAreas_OnMapStart()` 重解后的 M3 就绪同步）、重武装前（资源可能在此期间失效如补丁被还原）。
+2. **`Ready` = 最近一次探测结论，不是环境快照。** 探测只发生在两处：`Init`（全部事项）与环境重建点（如换图 `NavAreas_OnMapStart()` 重解后的 M3 就绪同步）；静态模块不随 `Enable` 重探。
 3. **`Prep` 只探测不注入**（定位 / 校验 / 备份）；**`Apply` 只注入不探测**（写补丁 / 挂钩子）以 `Ready` 为前置只写 `Armed`。写入失败若证伪了探测结论（如模板明明校验通过落笔却写不进去）则同步刷新 `Ready=false`；挂钩类失败（句柄有效、可待下次全关全开重试）只清 `Armed`。
-4. **`Enable` 只做调度**：重探（如需）→ `Apply` → `Armed` → `Active = OR` → 部分成功打 Partial 日志。`Enable` 内部不得内联注入逻辑。
+4. **`Enable` 只做调度**：`Apply` → `Armed` → `Active = OR` → 部分成功打 Partial 日志。`Enable` 内部不得内联注入或重探逻辑。
 5. **按回合 / 事件生灭的资源**（如 M2 包点锁）注入点在所属事件里但必须同样以 `Armed` 为门禁等价于 `Apply`；事件里的战术写操作一律按 `Armed` 门控只读 getter 不参与。
 
 ### Apply 失败回滚（按钩子数）
 
 - **单钩 / 单原子写**：失败只清 `Armed`（探测证伪才同步清 `Ready`），无可滚，不调 `Backend`（M5 Dodge/Retreat、M8 Queue、M10；单补丁 M1/M4-NOP/M13/M14 同理）。
 - **多钩**：任一失败必须调各自 `RestoreBackend()` 全滚，不手写第二遍 `Sync`（M4/M6/M7/M9/M12/M16）；补丁多写（M7 meme、M13 双段、M14 五处、M12 六处）失败手写全量回滚 + 清 `Ready`，与“调 `Backend()` + 补 `Ready=false`”等价，两种写法都认。
-- 钩失败保 `Ready`（环境抖动，下次 `Enable` 重试）；写失败清 `Ready`（探测证伪；M12 另置重探旗）。
+- 钩失败保 `Ready`（环境抖动，下次 `Enable` 重试）；写失败清 `Ready`（探测证伪，与 M1/M4/M13/M14 同形）。
 
 ### RestoreModule 去重规则
 

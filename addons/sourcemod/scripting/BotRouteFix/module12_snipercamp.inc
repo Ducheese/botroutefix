@@ -68,7 +68,6 @@ static MemoryPatch g_PatchSniperCampSites[6];
 static int g_SniperCampPatchBytes[6][6];    // 预先构造的旁路字节（Prep 构造 / Apply 原样写入）
 // Task/Disposition 上收 global.inc 共享（OnPluginStart 一次解析），本文件只用不存
 static bool g_bModule12_Active = false; // 模块规则开启态（Enable 幂等缓存）
-static bool g_bSniperCampNeedsReprobe = false; // 物理写入失败或显式停用未就绪事项后置 true，避免 Init/Config 重复探测
 static int g_iTotalSniperCampRedirected = 0;
 
 // 站点表：0=O1 1=O2 2=O3 3=D1 4=D2 5=D3；O2/O3 为 ja/jb-to-camp，需 E9 转换，其余 NOP
@@ -84,7 +83,7 @@ static const char g_sSniperCamp12_OffNames[6][32] =
 };
 
 //========================================================================================
-// MODULE 12 ITEM BACKENDS (called by Init / Enable)
+// MODULE 12 ITEM BACKENDS (called by Init)
 //========================================================================================
 
 /**
@@ -93,7 +92,7 @@ static const char g_sSniperCamp12_OffNames[6][32] =
  * 校验宿主 HideState::OnEnter 句柄、Hunt SDKCall、task/disposition/morale 偏移，
  * 并逐站点定位/校验/备份/构造旁路字节；不写入任何代码段（写入由 Apply 执行）。
  * 任一后端失败返回 false，Init 标记事项 FAILED。
- * 失败语义：任一依赖缺失返回 false，Init/重探将事项标记 FAILED（Ready=false）。
+ * 失败语义：任一依赖缺失返回 false，Init 将事项标记 FAILED（Ready=false）。
  *
  * @return              true = 宿主、偏移与六站点全部就绪
  */
@@ -379,7 +378,6 @@ bool InitModule12_SniperCamp()
         return false;
     }
 
-    g_bSniperCampNeedsReprobe = false;
     Item_SetReady(ITEM_M12_SNIPERCAMP, PrepModule12_SniperCampBackend());
     EnableModule12_SniperCamp(true);
     if (!g_bModule12_Active)
@@ -395,19 +393,13 @@ bool InitModule12_SniperCamp()
 /**
  * 动态启用或停用模块 12（事项 ITEM_M12_SNIPERCAMP 的调度入口；幂等；停用即写回六处 jcc 并解除武装）
  *
- * 只做调度：物理写失败或显式停用后重新启用时重跑一次事项 Prep，再按 Ready 武装；单事项故 Active == Armed。
- * 失败语义：Apply 写入失败会清 Ready 并回滚；后续重新启用或 -12 后重开时重新探测，挂钩失败只清 Armed。
+ * 只做调度：按当前 Ready 态交 Apply 武装；单事项故 Active == Armed。
+ * 失败语义：Apply 写入失败同步清 Ready 并回滚；挂钩失败只清 Armed，保留 Ready 供下次 Enable 重试。
  *
  * @param enable        true = 按事项后端就绪情况武装；false = 还原并解除武装
  */
 void EnableModule12_SniperCamp(bool enable)
 {
-    // 显式关闭且当前处于未就绪态时，为下次重新开启保留一次重探机会（必须在早退之前记录）
-    if (!enable && !Item_IsReady(ITEM_M12_SNIPERCAMP))
-    {
-        g_bSniperCampNeedsReprobe = true;
-    }
-
     if (enable == g_bModule12_Active)
     {
         return;
@@ -420,13 +412,6 @@ void EnableModule12_SniperCamp(bool enable)
         // 借钩宿主：模块 15 若仍在工作，钩子必须保持启用
         SyncHideDurationDetourState();
         return;
-    }
-
-    // 仅在物理写入失败或显式停用未就绪事项后置标时重探，避免 Init/Config 期连续重复跑 Prep。
-    if (!Item_IsReady(ITEM_M12_SNIPERCAMP) && g_bSniperCampNeedsReprobe)
-    {
-        g_bSniperCampNeedsReprobe = false;
-        Item_SetReady(ITEM_M12_SNIPERCAMP, PrepModule12_SniperCampBackend());
     }
 
     bool armed = ApplyModule12_SniperCampBackend();
@@ -587,7 +572,7 @@ public void Module12_FrameHunt(any data)
  * 应用 camp 门禁事项（ITEM_M12_SNIPERCAMP）：六站点全成或全败
  *
  * 物理写入失败证伪了 Prep 的模板校验，必须同步清 Ready 并回滚已写站点。
- * 失败语义：写入失败同步清 Ready、置重探旗标并回滚已写站点，事项 FAILED。
+ * 失败语义：写入失败同步清 Ready 并回滚已写站点，事项 FAILED。
  *
  * @return              true = 六处旁路全部驻留
  */
@@ -605,7 +590,6 @@ static bool ApplyModule12_SniperCampBackend()
         {
             RestoreModule12_SniperCampBackend();
             Item_SetReady(ITEM_M12_SNIPERCAMP, false);
-            g_bSniperCampNeedsReprobe = true;
             LogError("[BotRouteFix] [Module 12] Site %d write failed; all bypasses rolled back, camp item FAILED.", i);
             return false;
         }
