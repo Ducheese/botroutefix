@@ -26,10 +26,9 @@
 //           士气 +3(大优): 30% 留守蹲点（其余 70% 转 Hunt 前压）
 //         ★ 短路契约: 重定向去 Hunt 的 Bot 返回 true，模块 15 立即 short-circuit
 //         跳过蹲守时长缩放，避免对即将切态的 Bot 进行无效计算；留守者返回 false 正常缩放；
-//      c) 未通过重骰：递延一帧 SDKCall CCSBot::Hunt()（= 原生前压语义）+ 同回调内把
-//         disposition 写回 ENGAGE_AND_INVESTIGATE 做保险（分支在 Hide 返回后会写
-//         OPPORTUNITY_FIRE；HuntState::OnEnter 本体已置 ENGAGE+SEEK，回调内再写一次
-//         即双保险，时序恒在其后）。
+//      c) 未通过重骰：递延一帧 SDKCall CCSBot::Hunt()（= 原生前压语义；
+//         HuntState::OnEnter 本体已无条件置 ENGAGE_AND_INVESTIGATE + SEEK_AND_DESTROY，
+//         自然覆写分支 Hide 返回后写下的 OPPORTUNITY_FIRE）。
 //         注意：绝不能在 OnEnter-post 钩内同步调 Hunt()——SetState 先调 OnEnter 后写
 //         m_state（statemachine.cpp:48-54），内层置的 hunt 会被外层 Hide 覆盖。
 //         一切状态切换必须递延到帧外（RequestFrame），这是本模块第一铁律。
@@ -66,7 +65,7 @@
 #define SNIPERCAMP_CHANCE_MAX         100.0   // 留守概率上限
 static MemoryPatch g_PatchSniperCampSites[6];
 static int g_SniperCampPatchBytes[6][6];    // 预先构造的旁路字节（Prep 构造 / Apply 原样写入）
-// Task/Disposition 上收 global.inc 共享（OnPluginStart 一次解析），本文件只用不存
+// Task 上收 global.inc 共享（OnPluginStart 一次解析），本文件只用不存
 static bool g_bModule12_Active = false; // 模块规则开启态（Enable 幂等缓存）
 static int g_iTotalSniperCampRedirected = 0;
 
@@ -89,7 +88,7 @@ static const char g_sSniperCamp12_OffNames[6][32] =
 /**
  * 事项后端：camp 门禁（ITEM_M12_SNIPERCAMP）
  *
- * 校验宿主 HideState::OnEnter 句柄、Hunt SDKCall、task/disposition/morale 偏移，
+ * 校验宿主 HideState::OnEnter 句柄、Hunt SDKCall、task/morale 偏移，
  * 并逐站点定位/校验/备份/构造旁路字节；不写入任何代码段（写入由 Apply 执行）。
  * 任一后端失败返回 false，Init 标记事项 FAILED。
  * 失败语义：任一依赖缺失返回 false，Init 将事项标记 FAILED（Ready=false）。
@@ -118,10 +117,10 @@ static bool PrepModule12_SniperCampBackend()
         return false;
     }
 
-    // Task/Disposition 由 OnPluginStart 统一解析，此处只做门禁
-    if (g_iOffset_Task <= 0 || g_iOffset_Disposition <= 0)
+    // Task 由 OnPluginStart 统一解析，此处只做门禁
+    if (g_iOffset_Task <= 0)
     {
-        LogError("[BotRouteFix] [Module 12] Task/Disposition offsets missing; camp item FAILED.");
+        LogError("[BotRouteFix] [Module 12] Task offset missing; camp item FAILED.");
         return false;
     }
 
@@ -131,8 +130,8 @@ static bool PrepModule12_SniperCampBackend()
         return false;
     }
 
-    LogMessage("[BotRouteFix] [Module 12] Sniper camp offsets verified (task=%d, disp=%d, hunt SDKCall).",
-        g_iOffset_Task, g_iOffset_Disposition);
+    LogMessage("[BotRouteFix] [Module 12] Sniper camp offsets verified (task=%d, morale=%d, hunt SDKCall).",
+        g_iOffset_Task, g_iOffset_Morale);
 
     for (int i = 0; i < 6; i++)
     {
@@ -496,7 +495,7 @@ bool Module12_HandleSniperCamp(int client)
         return false;
     }
 
-    if (g_iOffset_Task <= 0 || g_iOffset_Disposition <= 0)
+    if (g_iOffset_Task <= 0)
     {
         return false;
     }
@@ -532,9 +531,9 @@ bool Module12_HandleSniperCamp(int client)
 }
 
 /**
- * 事项 M12 SniperCamp 门禁的 SourceMod RequestFrame 回调：递延一帧转 Hunt（帧外切状态才安全）
- * + disposition 双保险。
- * 失败语义：事项停用或客户端无效时直接返回，不改变 Bot 状态；有效时执行一次 Hunt 重定向。
+ * 事项 M12 SniperCamp 门禁的 SourceMod RequestFrame 回调：递延一帧转 Hunt（帧外切状态才安全；
+ * HuntState::OnEnter 本体已置 ENGAGE_AND_INVESTIGATE + SEEK_AND_DESTROY）。
+ * 失败语义：事项停用、客户端无效或 Hunt 发起失败时直接返回，不改变 Bot 状态；有效时执行一次 Hunt 重定向。
  */
 public void Module12_FrameHunt(any data)
 {
@@ -550,16 +549,11 @@ public void Module12_FrameHunt(any data)
         return;
     }
 
-    BotHunt(client);
-    // 避开在册抢包手、开路先锋与持包人：BotHunt 内部触发的 SetState Post 已为他们写入 OPPO，
-    // 这里若再无条件写回 ENGAGE(0) 会当场冲掉 M9/M6 守卫。
-    if (g_iOffset_Disposition > 0
-        && !Module9_IsInRoster(client)
-        && client != Module7_GetPointman()
-        && client != GetC4Carrier())
+    if (!BotHunt(client))
     {
-        SetEntData(client, g_iOffset_Disposition, DISP_ENGAGE, 4, true); // ENGAGE_AND_INVESTIGATE
+        return;
     }
+
     DebugLog("[BotRouteFix] [Module 12] Bot %N camp redirect executed (deferred Hunt now)", client);
     g_iTotalSniperCampRedirected++;
 }

@@ -183,7 +183,7 @@
   - 若掷骰未中决定前压，模块 12 返回 `true`，触发模块 15 短路跳过蹲守时长缩放。
   - **名册优先（与 M9 两手抓）**：task-19 的 Hide 若命中 M9 抢包名册，跳过士气重骰直接递延 Hunt——M9 选举时的强制 Hunt 是一次性的，Idle 狙击手露营掷骰随时能把人再拐回 task-19，这边不拒收就前功尽弃；M9 无名册时本条零行为变化。
 - **递延一帧切状态 (Safe Deferred State Transition)**：
-  - 若重骰判定不留守，利用 `RequestFrame` 递延至下一帧调用底层 `CCSBot::Hunt()`，并强制将作战姿态重写为 `ENGAGE_AND_INVESTIGATE`。
+  - 若重骰判定不留守，利用 `RequestFrame` 递延至下一帧调用底层 `CCSBot::Hunt()`（`HuntState::OnEnter` 原生重置为 `ENGAGE_AND_INVESTIGATE` 与 `SEEK_AND_DESTROY`）。
   - 彻底规避 Source 引擎状态机在 `OnEnter` 内同步切状态被外层覆盖的经典缺陷，完美实现高士气狙击手带头前冲搜敌。
 
 ### 模块 13：随机买狙击枪意愿概率 (Sniper Rifle Buy Chance)
@@ -323,7 +323,7 @@ MODULE X ... PRIMITIVES / DETOUR & HOOKS / ITEM APPLY / RESTORE BACKENDS
 
 调用顺序从上往下可读：`Prep → Mount → Lifecycle → Public → Events → Hooks → Apply/Restore → Validation`。被调用者尽量出现在调用者附近（如 M4 的 `MountHuntStateDetour` 紧跟 `PrepModule4_HuntBackend`），而不是扔在文件尾。原语靠近其调用者即可，位置不限（新模块按模板放在钩子之前）。
 
-- **引擎级常量上收 `global.inc`**：任务/策略枚举等引擎原值只在 `global.inc` 的 DEFINES 区定义一次并注明共用方（如任务常量唯一出处 M5/M6/M9/M12/M15/M16 共用，策略常量 M6/M9/M12/visuals 共用）；模块只消费不定义，更不得直接复用他模块文件的 `#define`（include 顺序不可靠，换序即 `undefined symbol`）。模块私有阈值留在本文件。
+- **引擎级常量上收 `global.inc`**：任务/策略枚举等引擎原值只在 `global.inc` 的 DEFINES 区定义一次并注明共用方（如任务常量唯一出处 M5/M6/M9/M12/M15/M16 共用，策略常量 `visuals` 只读消费）；模块只消费不定义，更不得直接复用他模块文件的 `#define`（include 顺序不可靠，换序即 `undefined symbol`）。模块私有阈值留在本文件。
 - **跨模块公共入口归 GETTERS 区**：非 `static` 的 `ModuleX_*` 对外 API（请求入口/只读查询）一律放 `PUBLIC GETTERS` 区，`APPLY/RESTORE` 区只放 `static` 后端（M5/M15 前车：跨模块请求函数曾误放后端区）。
 - **`RestoreModuleX` 归 LIFECYCLE 区**：模块级还原是生命周期函数，跟 `Init/Enable` 放一块；`APPLY/RESTORE` 区只放分事项 `Backend`（M3 前车：`RestoreModule` 曾误挂后端横幅下）。
 - **`ITEM BACKENDS` 后缀有什么写什么**：`Prep` 被谁调，横幅就写谁——标准 `(called by Init)`，M3 / M11 加 `/ MapStart`（随 `NavAreas_OnMapStart()` 重解后同步事项就绪态）；只拆事项、不注调用方、写双事项描述的一律不认（M1/M3/M8 前车）。事项差异写进各 `Prep` 函数头。
