@@ -205,7 +205,7 @@ public void OnMapStart()
 {
     // 换图 = 实体索引全废 + nav 重建 + curtime 归零：第 0 层先重解容器，再刷各模块脏状态
     // M1 真无状态；M4 仅 per-client 可视化缓存，由 GetHuntArea 三重门控（在服+存活+0.3s 心跳）+ round_start 全清覆盖，无需清；
-    // NavAreas 无条件重解容器，M3 重刷就绪/武装态，M5 清时间数组，M8 清打碎计数，其余清名单/旗帜（与 round_start 同语义但独立命名）
+    // NavAreas 无条件重解容器，M3 / M11 重刷就绪/武装态，M5 清时间数组，M8 清打碎计数，其余清名单/旗帜（与 round_start 同语义但独立命名）
     Events_OnMapStart();    // 对局炸弹状态唯一写入方
     NavAreas_OnMapStart();  // TheNavAreas 全局容器无条件重解（第 0 层无票基建）
     Visuals_OnMapStart();   // 预缓存激光与光环精灵

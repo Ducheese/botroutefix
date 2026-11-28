@@ -34,9 +34,11 @@
 // 事项契约:
 //   - 唯一事项 = corridor danger（走廊钉刺）。撤退由 M5 执行 → 撤退归 M5；
 //     本模块只发跨模块通知，不计事项（items.inc:21 归属原则）。
+//   - 后端涵盖 SpottedSniper 载体、偏移、BotNavReady 与第 0 层 TheNavAreas 容器；
+//     换图随 NavAreas_OnMapStart() 重解后无条件刷新 Ready / Armed 态。
 //   - SpottedSniper Detour 是通知载体（模块级资源），不是事项后端：
-//     规则开启且签名可用即挂载，保证 nav 缺失、走廊事项 FAILED 时请求仍能转发
-//     （README M11 特例 / items.inc 归属原则）。
+//     规则开启且签名可用即挂载，保证 nav 缺失 / TheNavAreas 不可用、走廊事项 FAILED 时
+//     请求仍能转发（README M11 特例 / items.inc 归属原则）。
 //   - 走廊钉刺只在 ITEM_M11_CORRIDOR 武装时写入；只要模块 11 规则开启且载体挂载，
 //     本钩子即转发 M5 撤退请求，规则关闭时载体随 EnableModule11_Sniper(false) 立即摘钩。
 //========================================================================================
@@ -83,7 +85,7 @@ static int g_iOffset_EnemyQueue      = -1;
 static int g_iOffset_EnemyQueueIndex = -1;
 
 //========================================================================================
-// MODULE 11 ITEM BACKENDS (called by Init)
+// MODULE 11 ITEM BACKENDS (called by Init / MapStart)
 //========================================================================================
 
 /**
@@ -124,10 +126,10 @@ static bool MountSpottedSniperDetour()
 /**
  * 事项后端：走廊 danger（ITEM_M11_CORRIDOR）
  *
- * 只定位/校验走廊钉刺所需偏移与测距子系统，不挂载钩子、不写内存。
- * 任一后端缺失都返回 false，Init 会把走廊事项标记为 FAILED。
- * 失败语义：任一依赖缺失返回 false，Init 将事项标记 FAILED。
- * nav 缺失只让走廊事项 FAILED；Detour 仍在时撤退请求继续转发（不属于本事项）。
+ * 只定位/校验走廊钉刺所需偏移、载体句柄、测距与 TheNavAreas 容器就绪态，不挂载钩子、不写内存。
+ * 任一后端缺失都返回 false，对应事项由 Init / OnMapStart 标记为 FAILED。
+ * 失败语义：任一依赖缺失返回 false，Init / OnMapStart 将事项标记 FAILED。
+ * nav / 测距 / TheNavAreas 缺失只让走廊事项 FAILED；Detour 仍在时撤退请求继续转发（不属于本事项）。
  *
  * @return              true = 走廊事项后端就绪
  */
@@ -143,7 +145,7 @@ static bool PrepModule11_CorridorBackend()
     g_iOffset_Enemy           = GameConfGetOffset(g_hGameConf, "CCSBot_Enemy_Offset");
     g_iOffset_EnemyQueue      = GameConfGetOffset(g_hGameConf, "CCSBot_EnemyQueue_Offset");
     g_iOffset_EnemyQueueIndex = GameConfGetOffset(g_hGameConf, "CCSBot_EnemyQueueIndex_Offset");
-    // Danger 由 InitNavMeasure 统一解析，此处只做门禁
+    // Danger 与 TheNavAreas 容器由 InitNavMeasure / NavAreas_OnMapStart 统一解析，此处只做门禁
 
     bool offsetsOk = (g_iOffset_ChatterMe > 0 && g_iOffset_Enemy > 0
         && g_iOffset_EnemyQueue > 0 && g_iOffset_EnemyQueueIndex > 0
@@ -169,6 +171,13 @@ static bool PrepModule11_CorridorBackend()
     if (!BotNavReady())
     {
         LogError("[BotRouteFix] [Module 11] NavMeasure unavailable; corridor item FAILED (retreat requests still forwarded).");
+        return false;
+    }
+
+    // 写前门禁 NavAreas_IsKnown 依赖第 0 层 TheNavAreas 容器；容器未就绪时 100% 拒写（防止事项假死）
+    if (!NavAreas_IsReady())
+    {
+        LogError("[BotRouteFix] [Module 11] TheNavAreas container unavailable; corridor item FAILED (retreat requests still forwarded).");
         return false;
     }
 
@@ -356,13 +365,28 @@ void Module11_OnRoundStart()
 }
 
 /**
- * 地图加载：换图清空名单（客户端槽位会被复用，旧索引野掉）。
+ * 地图加载 (OnMapStart)：换图清空名单（客户端槽位会被复用，旧索引野掉），
+ * 并随 NavAreas_OnMapStart() 重解后无条件同步 M11 走廊事项的 Ready / Armed 态。
  *
- * 纯幂等清理，依底层契约天然豁免守卫。
+ * 【豁免业务态守卫（events.inc 契约 c）】规则关闭态亦须同步 Ready，避免后续启用残留旧态；
+ * 当 !resolved（如 TheNavAreas 缺失）时仅撤下走廊武装并同步 g_bModule11_Active = false，
+ * 同时按规则维持 SpottedSniper 载体挂载，避免调 EnableModule11_Sniper(false) 连带摘除 M5 撤退转发。
  */
 void Module11_OnMapStart()
 {
     Module11_OnRoundStart();
+
+    bool resolved = PrepModule11_CorridorBackend();
+    Item_SetReady(ITEM_M11_CORRIDOR, resolved);
+
+    if (!resolved)
+    {
+        g_bModule11_Active = false;
+        SyncSpottedSniperTransport(IsModuleEnabledByRule(11));
+        return;
+    }
+
+    EnableModule11_Sniper(IsModuleEnabledByRule(11));
 }
 
 //========================================================================================
