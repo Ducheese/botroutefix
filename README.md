@@ -386,8 +386,8 @@ Enable(false) / Restore:
 
 ### Apply 失败回滚（按钩子数）
 
-- **单钩 / 单原子写**：失败只清 `Armed`（探测证伪才同步清 `Ready`），无可滚，不调 `Backend`（M5 Dodge/Retreat、M8 Queue、M10；单补丁 M1/M4-NOP/M13/M14 同理）。
-- **多钩**：任一失败必须调各自 `RestoreBackend()` 全滚，不手写第二遍 `Sync`（M4/M6/M7/M9/M12/M16）；补丁多写（M7 meme、M13 双段、M14 五处、M12 六处）失败手写全量回滚 + 清 `Ready`，与“调 `Backend()` + 补 `Ready=false`”等价，两种写法都认。
+- **单钩 / 单原子写**：失败只清 `Armed`（探测证伪才同步清 `Ready`），无可滚，不调 `Backend`（M5 Dodge/Retreat、M8 Queue、M9 Fetch、M10；单补丁 M1/M4-NOP/M13/M14 同理）。
+- **多钩**：任一失败必须调各自 `RestoreBackend()` 全滚，不手写第二遍 `Sync`（M4/M6/M7/M12/M16）；补丁多写（M7 meme、M13 双段、M14 五处、M12 六处）失败手写全量回滚 + 清 `Ready`，与“调 `Backend()` + 补 `Ready=false`”等价，两种写法都认。
 - 钩失败保 `Ready`（环境抖动，下次 `Enable` 重试）；写失败清 `Ready`（探测证伪，与 M1/M4/M13/M14 同形）。
 
 ### RestoreModule 去重规则
@@ -397,8 +397,8 @@ Enable(false) / Restore:
 
 ### 借钩宿主与先置位再同步
 
-- 宿主（M15）归集句柄，统一收敛 Pre（`wantPre = Armed(M15)||Armed(M9)`）与 Post（`wantPost = Armed(M15)||Armed(M12)||Armed(M9)`）；借方（M9/M12）只调 `SyncHideDurationDetourState()` 收敛，不建不删。
-- 依赖宿主判定的 `Apply` 必须先临时 `Armed(true)` 再同步（M9/M12/M15 同形），顺序反了宿主永远不开机。
+- 宿主（M15）归集句柄，统一收敛 Pre（`wantPre = Armed(M15)`）与 Post（`wantPost = Armed(M15)||Armed(M12)||Armed(M9)`）；借方（M9/M12）只调 `SyncHideDurationDetourState()` 收敛，不建不删（其中 M12 缺宿主必 FAILED，M9 缺宿主仅放弃 Hide 指纹捕获增强、不连坐失败）。
+- 同步宿主的 `Apply` 必须先置位 `Armed(true)` 再同步（M9/M12/M15 同形），顺序反了宿主不开机。
 
 ### 载体与事项分离（M11）
 
@@ -528,7 +528,7 @@ addons\sourcemod\
   - 门禁口径：业务写入必守卫（首行或分支入口均可）；纯观测（如 M4 visual 数组）或跨模块信号（如 M11 侦察向 M5 发撤退请求）走消费方门禁；多租户共享宿主钩子（如 M15 借钩宿主）按各租户业务分支分别守卫，杜绝为字面形式强加首行粗暴短路；
   - 运行期日志：前缀统一 `[BotRouteFix] [Module N]`；`DebugLog` 只记离散事件/状态变化（选举/拾取/安放/重定向/放行/认领），不记每 tick 求值——M4 的 `HuntState::OnUpdate` pre/post 刻意零输出（高频 tick），它的可观测面是 status 的 `total claims` 计数器；`LogError` 只用于不变量破坏（如 M7 非法名册数），普通业务分支一律 `DebugLog`；新增 Hook 回调必须带一行说明决策的 `DebugLog`，不留注释掉的死代码。
 - **准备期与运行期的门禁分界**：准备期输出（Prep/Mount/Apply/Restore/Enable 内的句柄创建、签名绑定、基线备份、补丁落子、`verified`/`Resolved` 确认行）走 Init 口径，**无条件输出，不受 `sm_brf_debug` 约束**；运行期离散事件（Hook 回调/事件响应内的逐条决策，如持包人变更、锁落子/还原、士气处置切换）**必须走 `DebugLog`，受 debug 约束**。M2 锁落子/还原与 M6 逐条拦截/放行的 `DebugLog` 属后者（运行期逐 noise 事件），不是准备期，门控正确。
-- **各模块检查点清单**：M1 守点/反冲各 1 个写入点；M2 单例指针 + 时钟偏移 + 锁写入点；M3 危险度偏移 + NavAreas 就绪校验 + 状态重置；M4 随机旁路写入点 + 搜寻偏移；M5 reload 写入点 + 闪避偏移 + 后撤后端；M6 士气/噪声偏移 + 1 自有 Detour；M7 Follow/StopFollowing SDKCalls + 士气偏移 + FollowMeme ret 补丁；M8 排队偏移 + 死锁 SDKCall；M9 State/Task 偏移 + NavMeasure + Hunt SDKCall + M15 宿主 + 自有 NoticeLooseBomb Detour；M10 无（纯 hook/名册）；M11 走廊对抗偏移；M12 蹲守偏移 + 6 个 bypass 点；M13 rewrite/cave 二选一（按架构）；M14 4 站点 + 1 常量池；M15 士气/Task/State/隐藏时长/HideHoldPosition 偏移 + Idle/Hunt SDKCall + 1 自有宿主 Detour；M16 EquipKnife 签名 + EquipBestWeapon SDKCall + 1 自有 Detour。
+- **各模块检查点清单**：M1 守点/反冲各 1 个写入点；M2 单例指针 + 时钟偏移 + 锁写入点；M3 危险度偏移 + NavAreas 就绪校验 + 状态重置；M4 随机旁路写入点 + 搜寻偏移；M5 reload 写入点 + 闪避偏移 + 后撤后端；M6 士气/噪声偏移 + 1 自有 Detour；M7 Follow/StopFollowing SDKCalls + 士气偏移 + FollowMeme ret 补丁；M8 排队偏移 + 死锁 SDKCall；M9 State/Task 偏移 + NavMeasure + Hunt SDKCall + 自有 NoticeLooseBomb Detour（M15 Hide 指纹宿主为可选增强）；M10 无（纯 hook/名册）；M11 走廊对抗偏移；M12 蹲守偏移 + 6 个 bypass 点；M13 rewrite/cave 二选一（按架构）；M14 4 站点 + 1 常量池；M15 士气/Task/State/隐藏时长/HideHoldPosition 偏移 + Idle/Hunt SDKCall + 1 自有宿主 Detour；M16 EquipKnife 签名 + EquipBestWeapon SDKCall + 1 自有 Detour。
 
 ---
 

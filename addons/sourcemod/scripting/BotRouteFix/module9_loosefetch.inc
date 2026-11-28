@@ -62,9 +62,10 @@ static int g_iTotalFetchElections = 0;
 /**
  * 事项后端：掉包抢包花名册（ITEM_M9_FETCH）
  *
- * 只创建 NoticeLooseBomb Detour、绑定签名，并核验测距/偏移/宿主指纹与 Hunt SDKCall，
- * 不提前启用钩子（启用由 Apply 执行）。
- * 失败语义：任一依赖缺失返回 false，Init 将事项标记 FAILED（全成或全败，不降级）。
+ * 只创建 NoticeLooseBomb Detour、绑定签名，并核验测距、偏移与 Hunt SDKCall，
+ * 不提前启用钩子（启用由 Apply 执行）；M15 HideState 指纹宿主属于可选增强，不进硬门禁。
+ * 失败语义：核心依赖（Detour/测距/State&Task偏移/Hunt）缺失返回 false，Init 将事项标记 FAILED（全成或全败，不降级）；
+ * HideState 宿主缺失不阻断本事项。
  *
  * @return              true = 抢包事项后端就绪
  */
@@ -102,13 +103,8 @@ static bool PrepModule9_FetchBackend()
         return false;
     }
 
-    if (!Module15_IsHideHostReady())
-    {
-        LogError("[BotRouteFix] [Module 9] Shared HideState::OnEnter host detour unavailable; M9 fetch roster item FAILED.");
-        delete g_hLooseDetour;
-        g_hLooseDetour = null;
-        return false;
-    }
+    // HideState::OnEnter 指纹捕获属于 best-effort 增强（C 类可选能力）：
+    // 宿主缺失时 Module15_IsBotHiding() 恒返 false，750u 门控、Top3 选举与 task == 19 解蹲仍完整工作，不连坐失败。
 
     if (g_hSDKCall_Hunt == null)
     {
@@ -766,19 +762,20 @@ public MRESReturn Hook_NoticeLooseBomb_Pre(int client, DHookParam hParams)
 //========================================================================================
 
 /**
- * 应用抢包事项（ITEM_M9_FETCH）：挂载 NoticeLooseBomb Pre 并同步共享 HideState::OnEnter 宿主。
+ * 应用抢包事项（ITEM_M9_FETCH）：挂载 NoticeLooseBomb Pre，并尽力同步可选 HideState::OnEnter 指纹宿主。
  *
- * 失败语义：任一钩子启用失败均回滚已启用钩子、清 Armed 保留 Ready，供下次 Enable 重试。
+ * 失败语义：NoticeLooseBomb 启用失败清 Armed 保留 Ready，供下次 Enable 重试；
+ * HideState::OnEnter 宿主属于 C 类可选增强，缺失或挂钩失败时仅放弃 Hide 指纹捕获，不连坐回滚 M9。
  *
- * @return              true = 抢包门控与宿主钩子均已驻留
+ * @return              true = 抢包门控已驻留
  */
 static bool ApplyModule9_FetchBackend()
 {
-    if (!Item_IsReady(ITEM_M9_FETCH) || g_hLooseDetour == null || !Module15_IsHideHostReady())
+    if (!Item_IsReady(ITEM_M9_FETCH) || g_hLooseDetour == null)
     {
         Item_SetArmed(ITEM_M9_FETCH, false);
-        LogError("[BotRouteFix] [Module 9] Fetch backend unavailable (ready=%d, loose=%d, host=%d); fetch item unarmed.",
-            Item_IsReady(ITEM_M9_FETCH), g_hLooseDetour != null, Module15_IsHideHostReady());
+        LogError("[BotRouteFix] [Module 9] Fetch backend unavailable (ready=%d, loose=%d); fetch item unarmed.",
+            Item_IsReady(ITEM_M9_FETCH), g_hLooseDetour != null);
         return false;
     }
 
@@ -790,14 +787,10 @@ static bool ApplyModule9_FetchBackend()
         return false;
     }
 
-    // 先临时置位再同步共享宿主：SyncHideDurationDetourState 依据各借钩方 Armed 态决定 Pre/Post 启停
+    // 先临时置位再尽力同步共享宿主：HideState::OnEnter 仅供首次目击捕获 g_pHideStateVTable；
+    // SyncDetourEnabled 对 hook == null 静默安全，宿主缺失或挂钩失败时不回滚 M9 抢包门控。
     Item_SetArmed(ITEM_M9_FETCH, true);
-    if (!SyncHideDurationDetourState())
-    {
-        RestoreModule9_FetchBackend();
-        LogError("[BotRouteFix] [Module 9] Shared HideState host converge failed; M9 fetch item unarmed.");
-        return false;
-    }
+    SyncHideDurationDetourState();
 
     // 仅在服务帧已启动后检查冻结期（规避冷启动 OnPluginStart 时 GameRules 尚未创建报错）；
     // 非冻结期内中途武装且场上已有无主 C4 时立即补选（冻结期对称延后至 round_freeze_end）

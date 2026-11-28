@@ -134,8 +134,8 @@ public void OnPluginStart()
     InitModule6_Noise();
     InitModule7_Escort();
     InitModule8_Queue();
-    // 借钩宿主先于借用方：M9 与 M12 复用 M15 的 HideState::OnEnter Detour，
-    // 宿主先挂载可避免启动期一次"宿主不可用"的回滚误报。
+    // 借钩宿主先于借用方：M12 硬依赖、M9 可选复用 M15 的 HideState::OnEnter Detour，
+    // 宿主先挂载可让 M12 通过前置门禁并让 M9 启动即启用可选指纹捕获（M9 缺宿主不连坐）。
     InitModule15_HideDuration();
     InitModule9_Fetch();
     InitModule10_Defuse();
