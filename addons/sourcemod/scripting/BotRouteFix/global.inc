@@ -60,10 +60,8 @@ int g_iOffset_Disposition = -1;
 int g_iOffset_State = -1;
 int g_iOffset_HideHoldPosition = -1;
 
-// 全局单例指针引用（跨模块共享）
+// 全局单例指针引用（TheNavAreas 已收敛进 nav_measure.inc 私有封装）
 Address g_pTheCSBotsPtr;
-Address g_pTheNavAreasCount;
-Address g_pTheNavAreasBase;
 
 // HideState 虚表指纹（跨模块真值：M15 共享 HideState::OnEnter 钩子首次目击时捕获，
 // M9 名册落子前判"正处 Hide"用。虚表地址进程内稳定，换图不失效；捕获前恒为 Null，

@@ -21,13 +21,22 @@
 // 事项 Prep 只做 > 0 门禁，不再各自私下 GameConfGetOffset）：
 //   g_iOffset_TimerDuration / g_iOffset_TimerTimestamp → M5 后撤计时器、M8 排队 polite 计时器
 //   g_iOffset_Danger / g_iOffset_DangerTimestamp       → M3 软衰减、M8 排队钉刺、M11 走廊钉刺
-//   g_iPtrSize                                         → M3 容器解析、M8 排队（缺失回退 g_bIsWin64 ? 8 : 4）
+//   g_iPtrSize                                         → TheNavAreas 容器读取、M8 排队（缺失回退 g_bIsWin64 ? 8 : 4）
 //   g_iOffset_Task 由 global.inc 提供（OnPluginStart 解析），此处只用不存。
+//
+// 本文件的第三职责：TheNavAreas 全局导航网格容器（第 0 层无票基建，与测距就绪解耦）：
+//   InitNavMeasure() 首装解析 + NavAreas_OnMapStart() 换图无条件重解；
+//   M3/M4/M8/M11 统一消费 NavAreas_IsReady / NavAreas_GetCount / NavAreas_GetAt / NavAreas_IsKnown；
+//   NavAreas_IsKnown 未命中时一律静默返回 false。
+//
 // 待定：M8 的 Path/PathLength/PathStride/PathLadder/IsStopping 与本文件同 key 私有并存
 // （变量名不同：g_iOffset_* vs g_iNav_*），收敛与否等拍板后再动。
 //========================================================================================
 
 #define NAV_MEASURE_MAX_PATH_NODES  256     // 与 cs_bot.h 的 MAX_PATH_LENGTH 对齐
+#define NAV_AREA_MAX_SANITY         100000  // 导航网格数量合理性上限
+#define NAV_AREA_PAIR_SCAN_BYTES    0x700   // 32 位锚点后的候选指令扫描窗口
+#define NAV_AREA_PAIR_MAX_DELTA     0x800000 // 候选 base 与锚点的最大距离
 
 // 路由类型定义（与引擎 enum RouteType 严格对齐）
 #define ROUTE_DEFAULT   0   // 原生默认路由（不带危险度惩罚）
@@ -60,8 +69,13 @@ int g_iOffset_Danger          = -1;
 int g_iOffset_DangerTimestamp = -1;
 int g_iPtrSize                = 4;
 
+// C 组：TheNavAreas 全局导航容器单例指针（第 0 层私有封装，外部走 NavAreas_* 接口）
+static Address g_pTheNavAreasCount = Address_Null;
+static Address g_pTheNavAreasBase  = Address_Null;
+
 /**
- * 加载无损测距所需偏移 + 一次解析跨模块共享偏移（软加载：缺失只记日志，测距整体待机）
+ * 加载无损测距所需偏移 + 解析跨模块共享偏移与 TheNavAreas 容器
+ * （软加载：测距偏移缺失只让测距待机；TheNavAreas 独立维护 NavAreas_IsReady，不阻塞测距或受测距阻塞）
  */
 bool InitNavMeasure()
 {
@@ -88,6 +102,9 @@ bool InitNavMeasure()
     {
         g_iPtrSize = g_bIsWin64 ? 8 : 4;
     }
+
+    // C 组：TheNavAreas 全局导航容器（独立就绪态 NavAreas_IsReady，不进下方测距待机门）
+    ResolveTheNavAreas();
 
     if (g_hSDKCall_ComputePath == null || g_iNav_Path <= 0 || g_iNav_PathStride <= 0 ||
         g_iNav_PathLength <= 0 || g_iNav_PathLadder <= 0 || g_iNav_IsStopping <= 0 ||
@@ -338,4 +355,269 @@ stock Address BotNavProbeAreaAt(int index)
         return Address_Null;
     }
     return g_NavProbeAreas[index];
+}
+
+//========================================================================================
+// THE NAV AREAS CONTAINER INFRA（第 0 层无票引擎单例；M3/M4/M8/M11 共用，与测距就绪解耦）
+//========================================================================================
+
+/**
+ * 解析全局 TheNavAreas 容器（CUtlVector<CNavArea*> 的 Base/Count 全局地址）
+ *
+ * 64 位：从 CCSBotManager::GetRandomArea 的 mov ecx, cs:TheNavAreas.m_Size 定位。
+ * 32 位：从 HuntState::OnUpdate 的 NavArray 对特征扫描定位。
+ * 失败语义：先用局部候选地址校验 count 合理性，失败不写入全局变量，保证 NavAreas_IsReady() 诚实。
+ *
+ * @return              true = 容器 Base/Count 均已验证有效
+ */
+static bool ResolveTheNavAreas()
+{
+    if (g_pTheNavAreasCount != Address_Null && g_pTheNavAreasBase != Address_Null)
+    {
+        return true;
+    }
+
+    if (g_hGameConf == null)
+    {
+        return false;
+    }
+
+    if (g_bIsWin64)
+    {
+        // -------------------------------------------------------------------------------
+        // 64-bit 实现 (Steam x64)
+        // 通过 CCSBotManager::GetRandomArea 的 64 位特征指令定位 TheNavAreas
+        // 指令序列: mov ecx, cs:TheNavAreas.m_Size (8B 0D <rel32> @ sigAddr + 14)
+        // -------------------------------------------------------------------------------
+        Address sigAddr = GameConfGetAddress(g_hGameConf, "CCSBotManager_GetRandomArea");
+        if (sigAddr == Address_Null)
+        {
+            LogError("[BotRouteFix] [NavMeasure] Failed to locate signature for CCSBotManager_GetRandomArea!");
+            return false;
+        }
+
+        int relOffset = LoadFromAddress(sigAddr + view_as<Address>(16), NumberType_Int32);
+        Address candCount = sigAddr + view_as<Address>(20 + relOffset);
+        // CUtlVector 内存布局: m_pMemory 位于 m_Size 前面 16 字节
+        Address candBase = candCount - view_as<Address>(16);
+
+        int areaCount = LoadFromAddress(candCount, NumberType_Int32);
+        if (areaCount < 0 || areaCount > NAV_AREA_MAX_SANITY)
+        {
+            LogError("[BotRouteFix] [NavMeasure] 64-bit areaCount (%d) out of reasonable range [0, %d]!",
+                areaCount, NAV_AREA_MAX_SANITY);
+            return false;
+        }
+
+        g_pTheNavAreasCount = candCount;
+        g_pTheNavAreasBase  = candBase;
+
+        LogMessage("[BotRouteFix] [NavMeasure] Resolved 64-bit TheNavAreas (Base: @%X, Count: @%X, Areas: %d)",
+            g_pTheNavAreasBase, g_pTheNavAreasCount, areaCount);
+        return true;
+    }
+
+    // -------------------------------------------------------------------------------
+    // 32-bit 实现 (v91/v92)
+    // 通过 HuntState::OnUpdate 内部稳定的 NavArray 对特征扫描定位:
+    //   mov ecx, [TheNavAreasBase] / mov ecx, [ecx + edx*4] (8B 0D <Base> 8B 0C 91)
+    // 该特征在 CS:S 32 位二进制中全局唯一，Count = Base + 12
+    // -------------------------------------------------------------------------------
+    Address huntAddr = GameConfGetAddress(g_hGameConf, "HuntState_NavArrayAnchor");
+    if (huntAddr == Address_Null)
+    {
+        LogError("[BotRouteFix] [NavMeasure] Failed to locate signature for HuntState_NavArrayAnchor!");
+        return false;
+    }
+
+    LogMessage("[BotRouteFix] [NavMeasure] Hunt anchor @ %X, scanning nav-array pairs...", huntAddr);
+
+    Address pairAddr = Address_Null;
+    int seenPairs = 0;
+
+    // 逐个验候选 pair：base 先过邻近性检查（相对 anchor ±8MB，防野地址读崩服；
+    // 不写死 0x10000000 基址——某些加载器会把 server.dll 重定基到 0x65 等他址），
+    // 再验 count 是否 sane；首个全过即用；全灭则报错供诊断。
+    for (int off = 0; off < NAV_AREA_PAIR_SCAN_BYTES; off++)
+    {
+        if (LoadFromAddress(huntAddr + view_as<Address>(off), NumberType_Int8) == 0x8B
+            && LoadFromAddress(huntAddr + view_as<Address>(off + 1), NumberType_Int8) == 0x0D
+            && LoadFromAddress(huntAddr + view_as<Address>(off + 6), NumberType_Int8) == 0x8B
+            && LoadFromAddress(huntAddr + view_as<Address>(off + 7), NumberType_Int8) == 0x0C
+            && LoadFromAddress(huntAddr + view_as<Address>(off + 8), NumberType_Int8) == 0x91)
+        {
+            seenPairs++;
+            Address candAddr = huntAddr + view_as<Address>(off);
+            int candBase = LoadFromAddress(candAddr + view_as<Address>(2), NumberType_Int32);
+
+            int baseDelta = candBase - view_as<int>(huntAddr);
+            if (baseDelta < 0)
+            {
+                baseDelta = -baseDelta;
+            }
+            if (baseDelta > NAV_AREA_PAIR_MAX_DELTA)
+            {
+                LogMessage("[BotRouteFix] [NavMeasure] Candidate pair @ %X skipped (base %X too far from anchor)",
+                    candAddr, candBase);
+                continue;
+            }
+
+            int candCount = LoadFromAddress(view_as<Address>(candBase + 12), NumberType_Int32);
+            if (candCount < 0 || candCount > NAV_AREA_MAX_SANITY)
+            {
+                LogMessage("[BotRouteFix] [NavMeasure] Candidate pair @ %X skipped (count %d insane)",
+                    candAddr, candCount);
+                continue;
+            }
+
+            pairAddr = candAddr;
+            break;
+        }
+    }
+
+    if (pairAddr == Address_Null)
+    {
+        if (seenPairs == 0)
+        {
+            LogError("[BotRouteFix] [NavMeasure] Nav-array pair pattern not found in HuntState::OnUpdate!");
+        }
+        else
+        {
+            LogError("[BotRouteFix] [NavMeasure] %d nav-array pair(s) seen from anchor @ %X but none validated!",
+                seenPairs, huntAddr);
+        }
+        return false;
+    }
+
+    int baseAddr = LoadFromAddress(pairAddr + view_as<Address>(2), NumberType_Int32);
+    Address candBase  = view_as<Address>(baseAddr);
+    Address candCount = view_as<Address>(baseAddr + 12);
+
+    int areaCount = LoadFromAddress(candCount, NumberType_Int32);
+    if (areaCount < 0 || areaCount > NAV_AREA_MAX_SANITY)
+    {
+        LogError("[BotRouteFix] [NavMeasure] Nav-area count is unreasonable (%d)!", areaCount);
+        return false;
+    }
+
+    g_pTheNavAreasBase  = candBase;
+    g_pTheNavAreasCount = candCount;
+
+    LogMessage("[BotRouteFix] [NavMeasure] Resolved 32-bit TheNavAreas (Base: @%X, Count: @%X, Areas: %d)",
+        g_pTheNavAreasBase, g_pTheNavAreasCount, areaCount);
+    return true;
+}
+
+/**
+ * 内部原语：读取并校验当前 TheNavAreas 数组基址与非空计数
+ *
+ * @param count         输出有效区域数量（> 0 且 <= NAV_AREA_MAX_SANITY）；不可用时置 0
+ * @return              m_pMemory 基址；未解析/空容器/count 越界/数组空时返回 Address_Null
+ */
+static Address NavAreas_GetArray(int &count)
+{
+    count = 0;
+    if (g_pTheNavAreasCount == Address_Null || g_pTheNavAreasBase == Address_Null)
+    {
+        return Address_Null;
+    }
+
+    int n = LoadFromAddress(g_pTheNavAreasCount, NumberType_Int32);
+    if (n <= 0 || n > NAV_AREA_MAX_SANITY)
+    {
+        return Address_Null;
+    }
+
+    Address pArray = LoadAddressFromAddress(g_pTheNavAreasBase);
+    if (pArray == Address_Null)
+    {
+        return Address_Null;
+    }
+
+    count = n;
+    return pArray;
+}
+
+/**
+ * 地图加载 (OnMapStart)：nav 网格重建，必须无条件清空并重解 TheNavAreas 容器
+ *
+ * 【第 0 层无票基建，不得受任何业务开关守卫】
+ *
+ * @return              true = 容器重解且计数在合法范围
+ */
+bool NavAreas_OnMapStart()
+{
+    g_pTheNavAreasCount = Address_Null;
+    g_pTheNavAreasBase  = Address_Null;
+    return ResolveTheNavAreas();
+}
+
+/**
+ * 查询 TheNavAreas 全局容器地址是否已解析就绪（与测距 BotNavReady 独立）
+ */
+stock bool NavAreas_IsReady()
+{
+    return (g_pTheNavAreasCount != Address_Null && g_pTheNavAreasBase != Address_Null);
+}
+
+/**
+ * 查询当前 TheNavAreas 中的已知区域总数
+ *
+ * @return              区域总数；未解析/异常或为空时返回 0
+ */
+stock int NavAreas_GetCount()
+{
+    int count;
+    NavAreas_GetArray(count);
+    return count;
+}
+
+/**
+ * 按下标读取 TheNavAreas 容器中的 CNavArea 指针（外部遍历不再直接解引用裸数组）
+ *
+ * @param index         0-based 下标
+ * @return              CNavArea 指针；容器未就绪或越界返回 Address_Null
+ */
+stock Address NavAreas_GetAt(int index)
+{
+    int count;
+    Address pArray = NavAreas_GetArray(count);
+    if (pArray == Address_Null || index < 0 || index >= count)
+    {
+        return Address_Null;
+    }
+    return LoadAddressFromAddress(pArray + view_as<Address>(index * g_iPtrSize));
+}
+
+/**
+ * TheNavAreas 容器成员真值校验（M4 认领 / M8 排队钉刺 / M11 走廊钉刺写前门禁共用）
+ *
+ * 探针尾槽或结构字段里的陈旧野值（非 NULL/-1，哨兵拦不住）只有逐一比对容器才能认出；
+ * 容器未解析、计数非法或未命中时静默返回 false（零日志、零计数器）。
+ *
+ * @param pArea         待校验的 CNavArea 指针
+ * @return              true = 容器内已知区域
+ */
+stock bool NavAreas_IsKnown(Address pArea)
+{
+    if (!IsValidAddress(pArea))
+    {
+        return false;
+    }
+
+    int count;
+    Address pArray = NavAreas_GetArray(count);
+    if (pArray == Address_Null)
+    {
+        return false;
+    }
+
+    for (int i = 0; i < count; i++)
+    {
+        if (LoadAddressFromAddress(pArray + view_as<Address>(i * g_iPtrSize)) == pArea)
+        {
+            return true;
+        }
+    }
+    return false;
 }

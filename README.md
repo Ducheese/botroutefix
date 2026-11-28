@@ -326,7 +326,7 @@ MODULE X ... PRIMITIVES / DETOUR & HOOKS / ITEM APPLY / RESTORE BACKENDS
 - **引擎级常量上收 `global.inc`**：任务/策略枚举等引擎原值只在 `global.inc` 的 DEFINES 区定义一次并注明共用方（如任务常量唯一出处 M5/M6/M9/M12/M15/M16 共用，策略常量 M6/M9/M12/visuals 共用）；模块只消费不定义，更不得直接复用他模块文件的 `#define`（include 顺序不可靠，换序即 `undefined symbol`）。模块私有阈值留在本文件。
 - **跨模块公共入口归 GETTERS 区**：非 `static` 的 `ModuleX_*` 对外 API（请求入口/只读查询）一律放 `PUBLIC GETTERS` 区，`APPLY/RESTORE` 区只放 `static` 后端（M5/M15 前车：跨模块请求函数曾误放后端区）。
 - **`RestoreModuleX` 归 LIFECYCLE 区**：模块级还原是生命周期函数，跟 `Init/Enable` 放一块；`APPLY/RESTORE` 区只放分事项 `Backend`（M3 前车：`RestoreModule` 曾误挂后端横幅下）。
-- **`ITEM BACKENDS` 后缀有什么写什么**：`Prep` 被谁调，横幅就写谁——标准 `(called by Init)`，M3 加 `/ MapStart`（换图重解，每张图都跑的主入口），M12 加 `/ Enable`（重探）；只拆事项、不注调用方、写双事项描述的一律不认（M1/M3/M8 前车）。事项差异写进各 `Prep` 函数头。
+- **`ITEM BACKENDS` 后缀有什么写什么**：`Prep` 被谁调，横幅就写谁——标准 `(called by Init)`，M3 加 `/ MapStart`（随 `NavAreas_OnMapStart()` 重解后同步事项就绪态），M12 加 `/ Enable`（重探）；只拆事项、不注调用方、写双事项描述的一律不认（M1/M3/M8 前车）。事项差异写进各 `Prep` 函数头。
 
 ### 函数命名
 
@@ -347,7 +347,7 @@ MODULE X ... PRIMITIVES / DETOUR & HOOKS / ITEM APPLY / RESTORE BACKENDS
 
 1. 这个函数属于哪个事项（如“事项 M4 HuntState dhook writes 的唯一后端入口”）；
 2. 失败语义（如“失败时该事项 FAILED，另一事项不受影响”）；
-3. 确需偏离门禁的特殊情形必须显式标注（如 M3 `OnMapStart` 的“【例外：不随业务态守卫】”）；纯幂等清理依底层契约天然豁免，无需标注。
+3. 确需偏离门禁的特殊情形必须显式标注（如第 0 层 `NavAreas_OnMapStart` 的“不随业务态守卫”与 M3 `OnMapStart` 换图同步就绪态）；纯幂等清理依底层契约天然豁免，无需标注。
 
 ### 生命周期链（固定模板）
 
@@ -379,7 +379,7 @@ Enable(false) / Restore:
 > 不以任何单个模块为标杆；以下定义适用于每一个模块，所有模块均以此为准对齐。
 
 1. **事项 = 独立能力，后端链 = 该事项的全部前置条件。** 任一后端条件不满足，该事项即认定为无法运行；一事项可用、一事项不可用 → 模块 `DEGRADED`；全不可用 → `FAILED`。
-2. **`Ready` = 最近一次探测结论，不是环境快照。** 探测只发生在三处：`Init`（全部事项）、环境重建点（如换图的 M3 重解）、重武装前（资源可能在此期间失效如补丁被还原）。
+2. **`Ready` = 最近一次探测结论，不是环境快照。** 探测只发生在三处：`Init`（全部事项）、环境重建点（如换图 `NavAreas_OnMapStart()` 重解后的 M3 就绪同步）、重武装前（资源可能在此期间失效如补丁被还原）。
 3. **`Prep` 只探测不注入**（定位 / 校验 / 备份）；**`Apply` 只注入不探测**（写补丁 / 挂钩子）以 `Ready` 为前置只写 `Armed`。写入失败若证伪了探测结论（如模板明明校验通过落笔却写不进去）则同步刷新 `Ready=false`；挂钩类失败（句柄有效、可待下次全关全开重试）只清 `Armed`。
 4. **`Enable` 只做调度**：重探（如需）→ `Apply` → `Armed` → `Active = OR` → 部分成功打 Partial 日志。`Enable` 内部不得内联注入逻辑。
 5. **按回合 / 事件生灭的资源**（如 M2 包点锁）注入点在所属事件里但必须同样以 `Armed` 为门禁等价于 `Apply`；事件里的战术写操作一律按 `Armed` 门控只读 getter 不参与。
@@ -429,7 +429,7 @@ a) 有业务副作用的处理器，函数首行必须自守（不看模块级 `
 if (!Item_IsArmed(ITEM_M2_LOCK)) return;
 ```
 b) 纯幂等清理（关闭态下本就是 no-op：清计数/清名单）可豁免守卫，无需逐处标注；
-c) 换图必须执行的底层重建（如 M3 重解导航容器）【不得】加守卫。
+c) 换图必须执行的底层重建（如第 0 层 `NavAreas_OnMapStart()` 重解导航容器、M3 同步就绪态）【不得】加守卫。
 
 可视化/调试读取是跨模块 getter，不参与事项状态（见“调试可视化”）。
 
@@ -457,7 +457,7 @@ addons\sourcemod\
         ├── helpers.inc               Bot 实体判定、Morale 属性与通用内存数据读取
         ├── items.inc                 22 件事项能力表与四态计算（唯一状态源）
         ├── sdkcalls.inc              引擎级虚函数/静态函数底层调用封装 (SDKCall Hub)
-        ├── nav_measure.inc             真实地面行走距离无损测量子系统 (NavMeasure，M9/M10 共用)
+        ├── nav_measure.inc           真实地面行走距离无损测量与 TheNavAreas 容器基建 (NavMeasure & NavAreas，第 0 层共用)
         ├── events.inc                游戏事件监听与多模块生命周期同步分发 (Events Hub)
         ├── commands.inc              控制台指令、在线遥测与模块调试工具
         ├── module_manager.inc        模块规则解析与动态通断调度系统 (Module Rules)
@@ -528,7 +528,7 @@ addons\sourcemod\
   - 门禁口径：业务写入必守卫（首行或分支入口均可）；纯观测（如 M4 visual 数组）或跨模块信号（如 M11 侦察向 M5 发撤退请求）走消费方门禁；多租户共享宿主钩子（如 M15 借钩宿主）按各租户业务分支分别守卫，杜绝为字面形式强加首行粗暴短路；
   - 运行期日志：前缀统一 `[BotRouteFix] [Module N]`；`DebugLog` 只记离散事件/状态变化（选举/拾取/安放/重定向/放行/认领），不记每 tick 求值——M4 的 `HuntState::OnUpdate` pre/post 刻意零输出（高频 tick），它的可观测面是 status 的 `total claims` 计数器；`LogError` 只用于不变量破坏（如 M7 非法名册数），普通业务分支一律 `DebugLog`；新增 Hook 回调必须带一行说明决策的 `DebugLog`，不留注释掉的死代码。
 - **准备期与运行期的门禁分界**：准备期输出（Prep/Mount/Apply/Restore/Enable 内的句柄创建、签名绑定、基线备份、补丁落子、`verified`/`Resolved` 确认行）走 Init 口径，**无条件输出，不受 `sm_brf_debug` 约束**；运行期离散事件（Hook 回调/事件响应内的逐条决策，如持包人变更、锁落子/还原、士气处置切换）**必须走 `DebugLog`，受 debug 约束**。M2 锁落子/还原与 M6 逐条拦截/放行的 `DebugLog` 属后者（运行期逐 noise 事件），不是准备期，门控正确。
-- **各模块检查点清单**：M1 守点/反冲各 1 个写入点；M2 单例指针 + 时钟偏移 + 锁写入点；M3 危险度偏移 + nav 解析 + 状态重置；M4 随机旁路写入点 + 搜寻偏移；M5 reload 写入点 + 闪避偏移 + 后撤后端；M6 士气/噪声偏移 + 1 自有 Detour；M7 Follow/StopFollowing SDKCalls + 士气偏移 + FollowMeme ret 补丁；M8 排队偏移 + 死锁 SDKCall；M9 State/Task 偏移 + NavMeasure + Hunt SDKCall + M15 宿主 + 自有 NoticeLooseBomb Detour；M10 无（纯 hook/名册）；M11 走廊对抗偏移；M12 蹲守偏移 + 6 个 bypass 点；M13 rewrite/cave 二选一（按架构）；M14 4 站点 + 1 常量池；M15 士气/Task/State/隐藏时长/HideHoldPosition 偏移 + Idle/Hunt SDKCall + 1 自有宿主 Detour；M16 EquipKnife 签名 + EquipBestWeapon SDKCall + 1 自有 Detour。
+- **各模块检查点清单**：M1 守点/反冲各 1 个写入点；M2 单例指针 + 时钟偏移 + 锁写入点；M3 危险度偏移 + NavAreas 就绪校验 + 状态重置；M4 随机旁路写入点 + 搜寻偏移；M5 reload 写入点 + 闪避偏移 + 后撤后端；M6 士气/噪声偏移 + 1 自有 Detour；M7 Follow/StopFollowing SDKCalls + 士气偏移 + FollowMeme ret 补丁；M8 排队偏移 + 死锁 SDKCall；M9 State/Task 偏移 + NavMeasure + Hunt SDKCall + M15 宿主 + 自有 NoticeLooseBomb Detour；M10 无（纯 hook/名册）；M11 走廊对抗偏移；M12 蹲守偏移 + 6 个 bypass 点；M13 rewrite/cave 二选一（按架构）；M14 4 站点 + 1 常量池；M15 士气/Task/State/隐藏时长/HideHoldPosition 偏移 + Idle/Hunt SDKCall + 1 自有宿主 Detour；M16 EquipKnife 签名 + EquipBestWeapon SDKCall + 1 自有 Detour。
 
 ---
 
@@ -536,18 +536,18 @@ addons\sourcemod\
 
 ### 引擎全局单例指针跨签名解析 (Singleton Cross-Signature Resolution)
 - **涉及的核心单例**：
-  1. `TheCSBots`（`CCSBotManager*` 引擎全局单例指针）：用于管理全队 Rush 状态、全图包点列表 `m_zones` 以及运包时钟 `m_earliestBombPlantTimestamp`。
-  2. `TheNavAreas`（`CUtlVector<CNavArea*>` 引擎全局导航网格容器）：用于全图 Nav 节点遍历与危险度衰减。
+  1. `TheCSBots`（`CCSBotManager*` 引擎全局单例指针，暂留于 M2 / [global.inc](addons/sourcemod/scripting/BotRouteFix/global.inc)）：用于管理全队 Rush 状态、全图包点列表 `m_zones` 以及运包时钟 `m_earliestBombPlantTimestamp`。
+  2. `TheNavAreas`（`CUtlVector<CNavArea*>` 引擎全局导航网格容器，已下沉收编至第 0 层 [nav_measure.inc](addons/sourcemod/scripting/BotRouteFix/nav_measure.inc)）：用于全图 Nav 节点遍历、危险度衰减及 `NavAreas_IsKnown` 容器真值校验（M3/M4/M8/M11 共用）。
 - **现状与跨模块借用链路**：
   - **模块 2 借用模块 1 签名**：模块 2（[module2_bombsite.inc](addons/sourcemod/scripting/BotRouteFix/module2_bombsite.inc)）为了获取 `TheCSBots` 指针，借用了模块 1 的特征码 `"IdleState_DefenseRush"`，从中提取 `mov eax, [TheCSBots]`（32位）或 `mov rax, cs:TheCSBots`（64位 RIP 相对偏移）。
-  - **模块 3 借用模块 4 签名与暴力扫码**：模块 3（[module3_danger.inc](addons/sourcemod/scripting/BotRouteFix/module3_danger.inc)）为了获取 `TheNavAreas` 容器，64 位下借用了 `"CCSBotManager_GetRandomArea"`；32 位下则借用了模块 4 的特征码 `"HuntState_NavArrayAnchor"`（实为 `HuntState::OnUpdate`），并在代码段内向后暴力循环扫描 0x700 字节以命中 `8B 0D <Base> 8B 0C 91`。
+  - **`TheNavAreas` 已下沉第 0 层，但底层仍借用 `"HuntState_NavArrayAnchor"` 32 位扫码**：[nav_measure.inc](addons/sourcemod/scripting/BotRouteFix/nav_measure.inc) 在 `InitNavMeasure()` / `NavAreas_OnMapStart()` 中解析 `TheNavAreas`（64 位下用 `"CCSBotManager_GetRandomArea"`，32 位下在 `"HuntState_NavArrayAnchor"` 代码段内向后暴力循环扫描 `0x700` 字节以命中 `8B 0D <Base> 8B 0C 91`）。容器指针 `g_pTheNavAreasBase` / `g_pTheNavAreasCount` 现已在 `nav_measure.inc` 内私有封装，消除了 M4/M8/M11 对 M3 的跨业务寄生依赖与 M3 关闭态下的容器重解责任耦合。
 - **架构坏味道与潜在风险**：
-  - **隐式跨模块依赖**：模块 2 隐式依赖模块 1 的 Gamedata 条目，模块 3 隐式依赖模块 4 的 Gamedata 条目。若未来单独拆分或修改某一模块签名，可能导致其他业务模块无法定位单例。
+  - **隐式签名借用仍在**：模块 2 仍隐式依赖模块 1 的 `"IdleState_DefenseRush"`，第 0 层 `nav_measure.inc` 32 位解析仍借用 `"HuntState_NavArrayAnchor"`。若未来单独修改某一签名条目，仍可能影响单例定位。
   - **32 位扫码脆弱性**：代码段暴力扫描受编译器机器码排布与版本迭代影响，具有隐性脆弱点。
 - **现状保留决策与考量**：
   - 目前该套解析机制在 CS:S 现行全平台版本（v91/v92 x86 及 Steam x64）中经过长时间测试，运行稳定可靠。
-  - 单例指针仅在插件载入时解析一次并缓存在 [global.inc](addons/sourcemod/scripting/BotRouteFix/global.inc) 的全局变量（`g_pTheCSBotsPtr`、`g_pTheNavAreasBase`、`g_pTheNavAreasCount`）中，运行时各模块只读消费，性能开销为 0。
-  - 经评估，为了保持当前版本测试基准的绝对稳定，避免引入无必要的重构扰动与时序风险，**暂不作代码重构，特在此归档备忘**。未来若需彻底解耦，可建立独立的 `singletons.inc` 基础设施层在 `OnPluginStart` 首步统一解析，并为 Gamedata 分离出纯净的独立定位锚点。
+  - `TheCSBots` 指针仅在插件载入时解析一次并缓存在 [global.inc](addons/sourcemod/scripting/BotRouteFix/global.inc) 的 `g_pTheCSBotsPtr`；`TheNavAreas` 已在 [nav_measure.inc](addons/sourcemod/scripting/BotRouteFix/nav_measure.inc) 私有缓存，运行时只读消费，性能开销为 0。
+  - `TheCSBots` 暂不作文件拆分，特在此归档备忘；未来若需为两者分离纯净定位锚点或单独拆分 `singletons.inc`，再另行推进。
 
 ### 模块 1 与模块 2 核心安全熔断与残留锁启动机制 (Fuse-Protected Stale Lock & Zero-Write Prevention)
 - **背景与崩服隐患**：在模块 1（防前冲补丁）与模块 2（开局包点锁定）中，若旧版本会话异常退出、崩溃残留，或管理员在带锁/已打补丁状态下热重载插件，目标内存代码段可能已处于被修改状态。若此时盲目将其判定为已打补丁并允许后续 `Restore()` 执行，因缺失原始未修改时的基线备份，会将未初始化的全零（`0x00`）写回服务端可执行代码段，直接导致非法指令段错误崩溃。
@@ -558,9 +558,9 @@ addons\sourcemod\
   - 在残留锁状态下启动时，补丁依然可通过裸写机制正常生效，但在卸载或还原时，由于无原始基线可写，`Restore()` 会被熔断拦截（输出一条防护日志），避免全零写入。
   - 此行为保证了绝对零崩服，且代码段状态在换图或重启服务器后自动彻底恢复，行为完全安全可控。
 
-### 模块 3 换图网格重构与边界校验 (Module 3 Map Reload & Container Re-Resolution)
-- 地图切换时，引擎将销毁旧图 NavArea 并重建导航网格。模块 3 在 `OnMapStart` 彻底重置危险度软衰减标记（`g_bDecayedThisRound`），并在首回合重新解析 `TheNavAreas` 容器首地址与计数。
-- 在 64 位环境下，解析出区域总数后增加防越界安全校验（`0 < areaCount <= 100,000`），若遇异常网格数据则优雅告警并跳过软衰减，坚决杜绝野指针越界遍历引发崩溃。
+### 换图网格重构与边界校验 (Map Reload & Container Re-Resolution)
+- 地图切换时，引擎将销毁旧图 NavArea 并重建导航网格。第 0 层 `NavAreas_OnMapStart()`（[nav_measure.inc](addons/sourcemod/scripting/BotRouteFix/nav_measure.inc)）在 `botroutefix.sp` 的 `OnMapStart()` 中无条件清空并重解 `TheNavAreas` 容器首地址与计数；随后 `Module3_OnMapStart()` 同步刷新 M3 自身的 `Ready` / `Armed` 事项态。
+- 解析出区域总数后执行合理性边界校验（`0 <= areaCount <= 100,000`）且验证通过后才写入容器全局变量；若遇异常网格数据则拒绝写入、优雅告警并令 `NavAreas_IsReady()` 返回 `false`，M3 标记 `FAILED`，M4/M8/M11 门禁 `NavAreas_IsKnown()` 静默返回 `false`，坚决杜绝野指针越界遍历引发崩溃。
 
 ### 模块 4 事项级降级与多版本补丁自愈 (Module 4 Item-Level Fallback & Alt Patch Offset)
 - 模块 4 有两个独立事项：随机覆盖 NOP 与 HuntState dhook 写入（45s bypass + 认领）。NOP 补丁匹配失败时，只有 NOP 事项 FAILED；dhook 事项仍可工作，模块显示 DEGRADED。不再把“flush-only”当成整个模块的降级。

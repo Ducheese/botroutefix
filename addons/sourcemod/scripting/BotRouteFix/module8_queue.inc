@@ -423,7 +423,7 @@ static void RecordBlockedArea(Address pArea, float expireTime)
 static void Queue_NailDanger(Address pArea, int teamIdx, float curtime)
 {
     // 写前门禁：哨兵快拒 + 容器 exact-match，活路径槽位不可信。
-    if (!IsValidAddress(pArea) || !Module3_IsKnownNavArea(pArea))
+    if (!IsValidAddress(pArea) || !NavAreas_IsKnown(pArea))
     {
         return;
     }

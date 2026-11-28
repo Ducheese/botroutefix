@@ -403,7 +403,7 @@ public Action Command_Status(int client, int args)
 
     if (ModuleHasLive(3))
     {
-        Format(live, sizeof(live), "%d areas tracked", Module3_GetTotalNavAreaCount());
+        Format(live, sizeof(live), "%d areas tracked", NavAreas_GetCount());
         ReplyToCommand(client, "[BotRouteFix] [Live] M03 | %s", live);
     }
 

@@ -482,7 +482,7 @@ static bool Sniper_NailDanger(Address pArea, int teamIdx, float curtime)
     // 写前门禁：哨兵快拒 + 容器 exact-match，野指针到不了 StoreToAddress。
     if (!IsValidAddress(pArea)
         || g_iOffset_Danger <= 0 || g_iOffset_DangerTimestamp <= 0
-        || !Module3_IsKnownNavArea(pArea))
+        || !NavAreas_IsKnown(pArea))
     {
         return false;
     }

@@ -34,23 +34,20 @@
 //      为 Bot 提供自然且富于变化的动态寻路权衡，避免死板走固定路线。
 //
 // 事项契约:
-//   - 唯一事项 = danger soft-decay；后端 = danger/timestamp 偏移 + TheNavAreas 容器解析。
-//   - 本模块没有常驻补丁；换图只需重新解析 nav 容器，不需要恢复代码段。
-//   - 规则关闭时仍刷新 Ready，避免下次启用时写入已释放的旧网格。
+//   - 唯一事项 = danger soft-decay；后端 = danger/timestamp 偏移 + NavAreas 容器就绪态。
+//   - 本模块没有常驻补丁；换图随 NavAreas_OnMapStart() 重解后同步刷新事项就绪与武装态。
+//   - TheNavAreas 容器归第 0 层 nav_measure.inc 无条件维护；本模块不再承载跨模块导航基建。
 //========================================================================================
 
 //========================================================================================
 // MODULE 3 DEFINES & GLOBALS
 //========================================================================================
 
-// 危险度软衰减与网格安全宏定义（沉降速率 DANGER_DECAY_RATE_SEC 统一定义于 global.inc）
+// 危险度软衰减宏定义（沉降速率 DANGER_DECAY_RATE_SEC 统一定义于 global.inc）
 #define DANGER_ROUND_RETENTION      0.2     // 开局保留 20% 危险度（即衰减 80%）
 #define DANGER_NOISE_THRESHOLD      0.05    // 低于该值直接归零，消除浮点底噪
-#define NAV_AREA_MAX_SANITY         100000  // 导航网格数量合理性上限
-#define NAV_AREA_PAIR_SCAN_BYTES    0x700   // 32 位锚点后的候选指令扫描窗口
-#define NAV_AREA_PAIR_MAX_DELTA     0x800000 // 候选 base 与锚点的最大距离
 
-// Danger/DangerTimestamp/PtrSize 上收 nav_measure.inc 共享（InitNavMeasure 一次解析），本文件只用不存
+// Danger/DangerTimestamp 与 TheNavAreas 容器均由 nav_measure.inc 统一解析与维护，本文件只用不存
 // 模块内部启用缓存（仅用于 Enable 幂等短路；业务判据统一用 Item_IsArmed(ITEM_M3_DECAY)）
 static bool g_bModule3_Active = false;
 
@@ -61,9 +58,9 @@ static bool g_bModule3_Active = false;
 /**
  * 事项后端：危险度软衰减
  *
- * 只做校验、偏移缓存与 TheNavAreas 解析，不武装事项。
- * 任一后端缺失都返回 false，对应事项由 Init 标记为 FAILED。
- * 失败语义：任一依赖缺失返回 false，对应事项由 Init 标记 FAILED。
+ * 只做校验、偏移缓存与 TheNavAreas 容器就绪门禁，不武装事项。
+ * 任一后端缺失都返回 false，对应事项由 Init / OnMapStart 标记为 FAILED。
+ * 失败语义：任一依赖缺失返回 false，对应事项标记 FAILED。
  *
  * @return              true = 衰减事项后端全部就绪
  */
@@ -75,7 +72,7 @@ static bool PrepModule3_DecayBackend()
         return false;
     }
 
-    // 偏移由 InitNavMeasure 统一解析（含 PtrSize 回退），此处只做门禁
+    // 偏移与 TheNavAreas 容器由 InitNavMeasure / NavAreas_OnMapStart 统一解析，此处只做门禁
     if (g_iOffset_Danger <= 0 || g_iOffset_DangerTimestamp <= 0)
     {
         LogError("[BotRouteFix] [Module 3] Danger offsets missing (danger=%d, timestamp=%d); decay item FAILED.",
@@ -86,147 +83,12 @@ static bool PrepModule3_DecayBackend()
     LogMessage("[BotRouteFix] [Module 3] Danger offsets verified (danger=%d, timestamp=%d).",
         g_iOffset_Danger, g_iOffset_DangerTimestamp);
 
-    if (!ResolveTheNavAreas())
+    if (!NavAreas_IsReady())
     {
+        LogError("[BotRouteFix] [Module 3] TheNavAreas container unavailable; decay item FAILED.");
         return false;
     }
 
-    return true;
-}
-
-/**
- * 事项 M3 危险度衰减的 NavArea 容器解析
- *
- * 64 位：从 CCSBotManager::GetRandomArea 的 mov ecx, cs:TheNavAreas.m_Size 定位。
- * 32 位：从 HuntState::OnUpdate 的 NavArray 对特征扫描定位。
- * 失败语义：签名缺失或容器不 sane 返回 false，Init 将衰减事项标记 FAILED。
- *
- * @return              true = 容器 base/count 均有效
- */
-static bool ResolveTheNavAreas()
-{
-    if (g_pTheNavAreasCount != Address_Null && g_pTheNavAreasBase != Address_Null)
-    {
-        return true;
-    }
-
-    if (g_bIsWin64)
-    {
-        // -------------------------------------------------------------------------------
-        // 64-bit 实现 (Steam x64)
-        // 通过 CCSBotManager::GetRandomArea 的 64 位特征指令定位 TheNavAreas
-        // 指令序列: mov ecx, cs:TheNavAreas.m_Size (8B 0D <rel32> @ sigAddr + 14)
-        // -------------------------------------------------------------------------------
-        Address sigAddr = GameConfGetAddress(g_hGameConf, "CCSBotManager_GetRandomArea");
-        if (sigAddr == Address_Null)
-        {
-            LogError("[BotRouteFix] [Module 3] Failed to locate signature for CCSBotManager_GetRandomArea!");
-            return false;
-        }
-
-        int relOffset = LoadFromAddress(sigAddr + view_as<Address>(16), NumberType_Int32);
-        g_pTheNavAreasCount = sigAddr + view_as<Address>(20 + relOffset);
-        // CUtlVector 内存布局: m_pMemory 位于 m_Size 前面 16 字节
-        g_pTheNavAreasBase = g_pTheNavAreasCount - view_as<Address>(16);
-
-        int areaCount = LoadFromAddress(g_pTheNavAreasCount, NumberType_Int32);
-        if (areaCount < 0 || areaCount > NAV_AREA_MAX_SANITY)
-        {
-            LogError("[BotRouteFix] [Module 3] 64-bit areaCount (%d) out of reasonable range [0, %d]!",
-                areaCount, NAV_AREA_MAX_SANITY);
-            return false;
-        }
-
-        LogMessage("[BotRouteFix] [Module 3] Resolved 64-bit TheNavAreas (Base: @%X, Count: @%X, Areas: %d)",
-            g_pTheNavAreasBase, g_pTheNavAreasCount, areaCount);
-        return true;
-    }
-
-    // -------------------------------------------------------------------------------
-    // 32-bit 实现 (v91/v92)
-    // 通过 HuntState::OnUpdate 内部稳定的 NavArray 对特征扫描定位:
-    //   mov ecx, [TheNavAreasBase] / mov ecx, [ecx + edx*4] (8B 0D <Base> 8B 0C 91)
-    // 该特征在 CS:S 32 位二进制中全局唯一，Count = Base + 12
-    // -------------------------------------------------------------------------------
-    Address huntAddr = GameConfGetAddress(g_hGameConf, "HuntState_NavArrayAnchor");
-    if (huntAddr == Address_Null)
-    {
-        LogError("[BotRouteFix] [Module 3] Failed to locate signature for HuntState_NavArrayAnchor!");
-        return false;
-    }
-
-    LogMessage("[BotRouteFix] [Module 3] Hunt anchor @ %X, scanning nav-array pairs...", huntAddr);
-
-    Address pairAddr = Address_Null;
-    int seenPairs = 0;
-
-    // 逐个验候选 pair：base 先过邻近性检查（相对 anchor ±8MB，防野地址读崩服；
-    // 不写死 0x10000000 基址——某些加载器会把 server.dll 重定基到 0x65 等他址），
-    // 再验 count 是否 sane；首个全过即用；全灭则报错供诊断。
-    for (int off = 0; off < NAV_AREA_PAIR_SCAN_BYTES; off++)
-    {
-        if (LoadFromAddress(huntAddr + view_as<Address>(off), NumberType_Int8) == 0x8B
-            && LoadFromAddress(huntAddr + view_as<Address>(off + 1), NumberType_Int8) == 0x0D
-            && LoadFromAddress(huntAddr + view_as<Address>(off + 6), NumberType_Int8) == 0x8B
-            && LoadFromAddress(huntAddr + view_as<Address>(off + 7), NumberType_Int8) == 0x0C
-            && LoadFromAddress(huntAddr + view_as<Address>(off + 8), NumberType_Int8) == 0x91)
-        {
-            seenPairs++;
-            Address candAddr = huntAddr + view_as<Address>(off);
-            int candBase = LoadFromAddress(candAddr + view_as<Address>(2), NumberType_Int32);
-
-            int baseDelta = candBase - view_as<int>(huntAddr);
-            if (baseDelta < 0)
-            {
-                baseDelta = -baseDelta;
-            }
-            if (baseDelta > NAV_AREA_PAIR_MAX_DELTA)
-            {
-                LogMessage("[BotRouteFix] [Module 3] Candidate pair @ %X skipped (base %X too far from anchor)",
-                    candAddr, candBase);
-                continue;
-            }
-
-            int candCount = LoadFromAddress(view_as<Address>(candBase + 12), NumberType_Int32);
-            if (candCount < 0 || candCount > NAV_AREA_MAX_SANITY)
-            {
-                LogMessage("[BotRouteFix] [Module 3] Candidate pair @ %X skipped (count %d insane)",
-                    candAddr, candCount);
-                continue;
-            }
-
-            pairAddr = candAddr;
-            break;
-        }
-    }
-
-    if (pairAddr == Address_Null)
-    {
-        if (seenPairs == 0)
-        {
-            LogError("[BotRouteFix] [Module 3] Nav-array pair pattern not found in HuntState::OnUpdate!");
-        }
-        else
-        {
-            LogError("[BotRouteFix] [Module 3] %d nav-array pair(s) seen from anchor @ %X but none validated!",
-                seenPairs, huntAddr);
-        }
-        return false;
-    }
-
-    int baseAddr = LoadFromAddress(pairAddr + view_as<Address>(2), NumberType_Int32);
-    g_pTheNavAreasBase  = view_as<Address>(baseAddr);
-    g_pTheNavAreasCount = view_as<Address>(baseAddr + 12);
-
-    int areaCount = LoadFromAddress(g_pTheNavAreasCount, NumberType_Int32);
-    if (areaCount < 0 || areaCount > NAV_AREA_MAX_SANITY)
-    {
-        LogError("[BotRouteFix] [Module 3] Nav-area count is unreasonable (%d)!", areaCount);
-        return false;
-    }
-
-    LogMessage("[BotRouteFix] [Module 3] Resolved 32-bit TheNavAreas (Base: @%X, Count: @%X, Areas: %d)",
-        g_pTheNavAreasBase, g_pTheNavAreasCount, areaCount);
     return true;
 }
 
@@ -300,20 +162,6 @@ void RestoreModule3_Danger()
 //========================================================================================
 
 /**
- * 查询当前 nav 网格区域总数
- *
- * @return              TheNavAreas 中的区域数量；0 = 容器未解析
- */
-int Module3_GetTotalNavAreaCount()
-{
-    if (g_pTheNavAreasCount == Address_Null)
-    {
-        return 0;
-    }
-    return LoadFromAddress(g_pTheNavAreasCount, NumberType_Int32);
-}
-
-/**
  * 查询指定 CNavArea 的当前有效危险度
  *
  * 读取时先按时间结算，避免把陈旧裸值当成真实危险度。
@@ -356,49 +204,11 @@ bool Module3_GetNavAreaDanger(Address pArea, float &dangerT, float &dangerCT)
 }
 
 /**
- * 事项 M3 decay 容器后端的只读校验出口（M8 排队钉刺 / M11 走廊钉刺写前门禁共用）。
- *
- * 以 TheNavAreas 容器为真值逐一比对；探针尾槽的陈旧野值（非 NULL/-1，哨兵拦不住）
- * 只有这里能认出来。容器未解析/数量非法时返回 false（宁可漏钉，不可错写）。
- *
- * @param pArea         待校验的 CNavArea 指针
- * @return              true = 容器内已知区域，可安全读写 danger
- */
-bool Module3_IsKnownNavArea(Address pArea)
-{
-    if (!IsValidAddress(pArea) || g_pTheNavAreasCount == Address_Null || g_pTheNavAreasBase == Address_Null)
-    {
-        return false;
-    }
-
-    int count = LoadFromAddress(g_pTheNavAreasCount, NumberType_Int32);
-    if (count <= 0 || count > NAV_AREA_MAX_SANITY)
-    {
-        return false;
-    }
-
-    Address pArray = LoadAddressFromAddress(g_pTheNavAreasBase);
-    if (pArray == Address_Null)
-    {
-        return false;
-    }
-
-    for (int i = 0; i < count; i++)
-    {
-        if (LoadAddressFromAddress(pArray + view_as<Address>(i * g_iPtrSize)) == pArea)
-        {
-            return true;
-        }
-    }
-    return false;
-}
-
-/**
  * 遍历 TheNavAreas，逐 area 读沉降后双阵营 danger，写 CSV；摘要同时进
  * 服务端日志（LogMessage）与调用者回显（ReplyToCommand）。
  *
  * 事项 M3 高危可视化与手动落盘的落盘入口（跨模块只读观测 + 文件输出）。
- * 失败语义：容器未解析/数量非法/数组基址空/文件打不开，一律 LogError 并返回（无文件或空文件）。
+ * 失败语义：容器未解析/空或异常/文件打不开，一律 LogError 并返回（无文件或空文件）。
  * 门禁：无（命令即授权；与 M3 事项启停解耦）。
  *
  * @param tag           文件名标签（data/botroutefix_danger_<tag>.csv）
@@ -406,21 +216,15 @@ bool Module3_IsKnownNavArea(Address pArea)
  */
 void Module3_DumpDangerDist(const char[] tag, int client = 0)
 {
-    if (g_pTheNavAreasCount == Address_Null || g_pTheNavAreasBase == Address_Null)
+    if (!NavAreas_IsReady())
     {
         LogError("[BotRouteFix] [Module 3] Dump aborted: TheNavAreas unresolved.");
         return;
     }
-    int count = LoadFromAddress(g_pTheNavAreasCount, NumberType_Int32);
-    if (count <= 0 || count > NAV_AREA_MAX_SANITY)
+    int count = NavAreas_GetCount();
+    if (count <= 0)
     {
-        LogError("[BotRouteFix] [Module 3] Dump aborted: bad area count %d.", count);
-        return;
-    }
-    Address pArray = LoadAddressFromAddress(g_pTheNavAreasBase);
-    if (pArray == Address_Null)
-    {
-        LogError("[BotRouteFix] [Module 3] Dump aborted: null area array.");
+        LogError("[BotRouteFix] [Module 3] Dump aborted: TheNavAreas empty or invalid.");
         return;
     }
 
@@ -442,7 +246,7 @@ void Module3_DumpDangerDist(const char[] tag, int client = 0)
 
     for (int i = 0; i < count; i++)
     {
-        Address pArea = LoadAddressFromAddress(pArray + view_as<Address>(i * g_iPtrSize));
+        Address pArea = NavAreas_GetAt(i);
         if (!IsValidAddress(pArea))
         {
             continue;
@@ -492,24 +296,17 @@ void Module3_OnRoundStart()
 }
 
 /**
- * 地图加载 (OnMapStart)：nav 网格重建地址全变，必须重解 TheNavAreas 容器
- * （拿旧指针 decay 等于往释放过的内存写；不清零只重解，danger 本就全零无需衰减）
- *
- * 【例外：不随业务态守卫】对应 events.inc 契约 (c)。
- *   模块关闭时若不重建，g_pTheNavAreas* 会停留在已释放的旧网格上，下次启用即野指针写。
+ * 地图加载 (OnMapStart)：TheNavAreas 容器已由 botroutefix.sp 首步调 NavAreas_OnMapStart() 无条件重解，
+ * 此处同步刷新 M3 自身的 Ready / Armed 事项态（规则关闭态亦同步 Ready，避免后续启用残留旧态）。
  */
 void Module3_OnMapStart()
 {
-    g_pTheNavAreasCount = Address_Null;
-    g_pTheNavAreasBase = Address_Null;
-
     bool resolved = PrepModule3_DecayBackend();
     Item_SetReady(ITEM_M3_DECAY, resolved);
 
     if (!resolved)
     {
         EnableModule3_Danger(false);
-        LogError("[BotRouteFix] [Module 3] Failed to re-resolve TheNavAreas on map start; decay item FAILED.");
         return;
     }
 
@@ -527,19 +324,13 @@ void Module3_OnMapStart()
  */
 static void DecayAllNavAreaDanger()
 {
-    if (g_pTheNavAreasCount == Address_Null || g_pTheNavAreasBase == Address_Null)
+    if (!NavAreas_IsReady())
     {
         return;
     }
 
-    int count = LoadFromAddress(g_pTheNavAreasCount, NumberType_Int32);
+    int count = NavAreas_GetCount();
     if (count <= 0)
-    {
-        return;
-    }
-
-    Address pArray = LoadAddressFromAddress(g_pTheNavAreasBase);
-    if (pArray == Address_Null)
     {
         return;
     }
@@ -549,7 +340,7 @@ static void DecayAllNavAreaDanger()
 
     for (int i = 0; i < count; i++)
     {
-        Address pArea = LoadAddressFromAddress(pArray + view_as<Address>(i * g_iPtrSize));
+        Address pArea = NavAreas_GetAt(i);
         if (!IsValidAddress(pArea))
         {
             continue;
