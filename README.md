@@ -132,7 +132,7 @@
   - 原生 `CCSBot::NoticeLooseBomb()` 仅在拆弹场景且存在无主 C4 时返回 true（`cs_bot.cpp:428`），全库仅 `HuntState::OnUpdate`（`cs_bot_hunt.cpp:58,74`）与 `IdleState::OnUpdate`（`cs_bot_idle.cpp:116,228`）调用，且外层均有 `TEAM_TERRORIST` 包裹；掉包即全员哄抢送死。
 - **750 码距离门控 + 事件花名册 (750u Distance Gate & Event Roster)**：
   - 本模块 Pre 钩 `CCSBot::NoticeLooseBomb()`：非存活 T、名册成员及空名册均直通原生 `MRES_Ignored`（无冗余 CT 拦截补丁）；非名册存活 T 若距无主 `weapon_c4` `> 750.0` 码则放行靠近（途中若不被交敌打断顺手捡起亦无妨），若进入 `<= 750.0` 码后因交战/避险/换弹退回 `Hunt` / `Idle`，则截断为 false 并计入 `gated`，令其延续正常搜敌状态机。
-  - **冻结期对称性与 `ROUTE_FASTEST` 选举**：`bomb_dropped` 在冻结期内跳过并由 `round_freeze_end` 对地上遗留 `weapon_c4` 补选；`Apply` 尾补选同样在冻结期内跳过；`item_pickup` 只要当前名册有效即直接解散（无冻结期过滤，`!g_bFetchHasRoster` 已短路开局发包）。选举与减员回补均基于无主 `weapon_c4` 实时引用坐标（缓存 `g_fDropPos` 兜底），以 `BotNavWalkDistance(..., ROUTE_FASTEST)` 忽略掉包点刚钉刺的危险度取最近 3 存活可达 T；全灭或不可达则解散回原生。
+  - **冻结期对称性与 `ROUTE_FASTEST` 选举**：`bomb_dropped` 在冻结期内跳过并由 `round_freeze_end` 对地上遗留 `weapon_c4` 补选；`Apply` 尾补选同样在冻结期内跳过；`item_pickup` 只要当前名册有效即直接解散（无冻结期过滤，`!g_bFetchHasRoster` 已短路开局发包）。选举与减员回补均基于无主 `weapon_c4` 实时引用坐标（缓存 `g_fDropPos` 兜底），以 `NavMeasure_WalkDistance(..., ROUTE_FASTEST)` 忽略掉包点刚钉刺的危险度取最近 3 存活可达 T；全灭或不可达则解散回原生。
 - **选举解蹲与 M15 协同 (Election Unstick & M15 Hide Cooperation)**：
   - **选举/回补瞬间**：对当选的 `task == 19`（`MOVE_TO_SNIPER_SPOT`）或正处 `HideState`（调用 `Module15_IsBotHiding` 比对 `m_state` 虚表指纹）成员直调 `BotHunt()` 踢出；`HuntState::OnUpdate` 首行即检查 `NoticeLooseBomb()`（优于被狙击手 camp 前置截胡的 `IdleState::OnUpdate`）。
   - **在途反蹲交由 M15**：名册成员在途的 `Hide(-1)` 短蹲与 `Ambush Hide` 踢出（`BotHunt`）统一由模块 15 在 `HideState::OnEnter` 集中处置，本模块只保留 `%d/%d roster | total %d elected, %d gated` 进 status M09 行。
@@ -161,7 +161,7 @@
   - **路径 2（瞬时感知队列回溯）**：若目击 Bot 尚未进入交火态（`m_enemy == 0xFFFFFFFF`），直接深入引擎内部感知队列 `m_enemyQueue`（由 `CCSBot::FindMostDangerousThreat` 每帧感知刷新），从 `m_enemyQueueIndex` 逆序回溯最近 20 帧的历史威胁实体，提取瞬间闪现的狙击手。
   - **狙击手身份判定（引擎真值优先）**：以 `CCSBot::IsSniper` SDKCall 为准（主武器槽 + `WEAPONTYPE_SNIPER_RIFLE` 类型判定，自定义狙击枪只要类型正确即被识别）；签名缺失时回退名册硬编码（AWP/Scout/G3SG1/SG550，手持 + Slot 0 双重校验，防切枪漏判）。找"哪个狙击手"仍走双轨（`m_enemy` 优先 + 威胁队列逆序回溯），判定"是不是狙击手"才走本条。
 - **走廊加压 (Corridor Danger)**：
-  - 定位到狙击手后，通过 `BotNavProbePathAreas()` 临时探测目击者直面狙击手的视线走廊：内部仍是 `CCSBot::ComputePath`，但先快照路径数组、路径下标、梯子指针、阻挡旗、当前/最后已知区域、目标坐标、repath 时间戳与区域进入时间，读取走廊 NavArea 后还原；**爬梯中直接跳过探测**（梯子子状态不在快照范围）。spot 遭遇点、初始遭遇区等次级状态未纳入快照，属低频可自愈的残留。
+  - 定位到狙击手后，通过 `NavMeasure_ProbePathAreas()` 临时探测目击者直面狙击手的视线走廊：内部仍是 `CCSBot::ComputePath`，但先快照路径数组、路径下标、梯子指针、阻挡旗、当前/最后已知区域、目标坐标、repath 时间戳与区域进入时间，读取走廊 NavArea 后还原；**爬梯中直接跳过探测**（梯子子状态不在快照范围）。spot 遭遇点、初始遭遇区等次级状态未纳入快照，属低频可自愈的残留。
   - 该设计是必需而非优化：`CCSBot::ComputePath` 本体先 `DestroyPath()` 再写入新路径（`cs_bot_pathfind.cpp:1877-1891`），直接调用会当场篡改 spotter 当前行进路径；硬豁免目标（包匪下包临界、CT 拆包任务）不会经 M5 后撤重建路径，会被带向狙击手。
   - 遍历沿途最多前 64 步 (SNIPER_MAX_STEPS) NavArea 节点（从 Bot 当前/最后已知 NavArea 起步），严格遵守 `1.0 / 120.0s` 自然衰减沉降契约，各钉刺 `+0.8f` 危险度（封顶 `2.5f`）并同步刷新时间戳，迫使后续全队寻路 A* 天然规避该交火走廊。
 - **撤退请求 (Retreat Request)**：
@@ -457,7 +457,7 @@ addons\sourcemod\
         ├── helpers.inc               Bot 实体判定、Morale 属性与通用内存数据读取
         ├── items.inc                 22 件事项能力表与四态计算（唯一状态源）
         ├── sdkcalls.inc              引擎级虚函数/静态函数底层调用封装 (SDKCall Hub)
-        ├── nav_measure.inc           真实地面行走距离无损测量与 TheNavAreas 容器基建 (NavMeasure & NavAreas，第 0 层共用)
+        ├── nav_measure.inc           真实地面行走距离无损测量与 TheNavAreas 容器基建 (NavMeasure_* & NavAreas_*，第 0 层共用)
         ├── events.inc                游戏事件监听与多模块生命周期同步分发 (Events Hub)
         ├── commands.inc              控制台指令、在线遥测与模块调试工具
         ├── module_manager.inc        模块规则解析与动态通断调度系统 (Module Rules)

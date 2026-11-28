@@ -419,7 +419,7 @@ bool Module2_GetNativeClosestBombsitePosition(int client, float pos[3], const fl
     float bestDist = -1.0;
 
     // 1. 首选：若 client 为有效存活 Bot 且无损测距就绪，严格走 SAFEST_ROUTE 实测（贴近原生包匪选点）
-    if (IsBot(client, true) && BotNavReady())
+    if (IsBot(client, true) && NavMeasure_IsReady())
     {
         for (int i = 0; i < zoneCount; i++)
         {
@@ -430,7 +430,7 @@ bool Module2_GetNativeClosestBombsitePosition(int client, float pos[3], const fl
             center[2] = view_as<float>(LoadFromAddress(pZone + view_as<Address>(offsetCenter + 8), NumberType_Int32));
 
             // 实测 SAFEST_ROUTE 路线步长（带 NavArea 危险度避险惩罚）
-            float dist = BotNavWalkDistance(client, center, ROUTE_SAFEST);
+            float dist = NavMeasure_WalkDistance(client, center, ROUTE_SAFEST);
             if (dist >= 0.0)
             {
                 if (bestZone < 0 || dist < bestDist)

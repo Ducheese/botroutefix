@@ -34,7 +34,7 @@
 // 事项契约:
 //   - 唯一事项 = corridor danger（走廊钉刺）。撤退由 M5 执行 → 撤退归 M5；
 //     本模块只发跨模块通知，不计事项（items.inc:21 归属原则）。
-//   - 后端涵盖 SpottedSniper 载体、偏移、BotNavReady 与第 0 层 TheNavAreas 容器；
+//   - 后端涵盖 SpottedSniper 载体、偏移、NavMeasure 与第 0 层 TheNavAreas 容器；
 //     换图随 NavAreas_OnMapStart() 重解后无条件刷新 Ready / Armed 态。
 //   - SpottedSniper Detour 是通知载体（模块级资源），不是事项后端：
 //     规则开启且签名可用即挂载，保证 nav 缺失 / TheNavAreas 不可用、走廊事项 FAILED 时
@@ -168,7 +168,7 @@ static bool PrepModule11_CorridorBackend()
     }
 
     // 走廊钉刺依赖 NavMeasure 的临时探测（快照-计算-还原），测距待机时事项不可用
-    if (!BotNavReady())
+    if (!NavMeasure_IsReady())
     {
         LogError("[BotRouteFix] [Module 11] NavMeasure unavailable; corridor item FAILED (retreat requests still forwarded).");
         return false;
@@ -706,18 +706,18 @@ public MRESReturn Hook_SpottedSniper_Post(Address pThis)
     }
 
     // 4. 走廊事项：临时探测到狙击手的走廊路径，并为沿途 NavArea 钉上 +0.8f 危险度
-    //    ★ 必须走 BotNavProbePathAreas（快照-计算-还原）：CCSBot::ComputePath 会先 DestroyPath()
+    //    ★ 必须走 NavMeasure_ProbePathAreas（快照-计算-还原）：CCSBot::ComputePath 会先 DestroyPath()
     //      再写入新路径（cs_bot_pathfind.cpp:1877-1891），直接调用会篡改 spotter 当前行进路径，
     //      硬豁免目标（包匪下包临界、CT 拆包任务）不会被 M5 后撤，也就没人帮它重建路径。
     int corridorSteps = 0;
     int nailedAreas = 0;
     if (Item_IsArmed(ITEM_M11_CORRIDOR))
     {
-        int corridorCount = BotNavProbePathAreas(spotter, sniperPos);
+        int corridorCount = NavMeasure_ProbePathAreas(spotter, sniperPos);
         corridorSteps = (corridorCount > SNIPER_MAX_STEPS) ? SNIPER_MAX_STEPS : corridorCount;
         for (int i = 0; i < corridorSteps; i++)
         {
-            Address pArea = BotNavProbeAreaAt(i);
+            Address pArea = NavMeasure_ProbeAreaAt(i);
             if (Sniper_NailDanger(pArea, teamIdx, curtime))
             {
                 nailedAreas++;

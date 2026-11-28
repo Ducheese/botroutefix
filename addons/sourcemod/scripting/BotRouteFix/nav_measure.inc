@@ -17,17 +17,13 @@
 // 不是 SDKCall 包裹，是独立测量子系统（借用 ComputePath 句柄做实测引擎）。
 // 软加载：偏移缺失只记日志，测距整体待机，不杀插件。
 //
-// 本文件的第二职责：导航/计时器级共享偏移的唯一家（InitNavMeasure 一次解析，
-// 事项 Prep 只做 > 0 门禁，不再各自私下 GameConfGetOffset）：
-//   g_iOffset_TimerDuration / g_iOffset_TimerTimestamp → M5 后撤计时器、M8 排队 polite 计时器
-//   g_iOffset_Danger / g_iOffset_DangerTimestamp       → M3 软衰减、M8 排队钉刺、M11 走廊钉刺
-//   g_iPtrSize                                         → TheNavAreas 容器读取、M8 排队（缺失回退 g_bIsWin64 ? 8 : 4）
-//   g_iOffset_Task 由 global.inc 提供（OnPluginStart 解析），此处只用不存。
-//
-// 本文件的第三职责：TheNavAreas 全局导航网格容器（第 0 层无票基建，与测距就绪解耦）：
-//   InitNavMeasure() 首装解析 + NavAreas_OnMapStart() 换图无条件重解；
-//   M3/M4/M8/M11 统一消费 NavAreas_IsReady / NavAreas_GetCount / NavAreas_GetAt / NavAreas_IsKnown；
-//   NavAreas_IsKnown 未命中时一律静默返回 false。
+// 命名规范（第 0 层三组职责分前缀；历史散称 BotNav* 已统一收敛为 NavMeasure_*）：
+//   - InitNavMeasure()   : 文件级总初始化（由 botroutefix.sp 调用，顺序加载 B/C/A）
+//   - NavMeasure_*       : 职责 A — Bot 路径快照探测与无损测距（[NavMeasure] 日志）
+//       NavMeasure_IsReady / NavMeasure_WalkDistance / NavMeasure_ProbePathAreas / NavMeasure_ProbeAreaAt
+//   - g_iOffset_*        : 职责 B — 跨模块共享导航/计时器偏移（g_iNav_* 仅供本文件测距私用）
+//   - NavAreas_*         : 职责 C — TheNavAreas 全局导航网格容器（[NavAreas] 日志）
+//       NavAreas_OnMapStart / NavAreas_IsReady / NavAreas_GetCount / NavAreas_GetAt / NavAreas_IsKnown
 //
 // 待定：M8 的 Path/PathLength/PathStride/PathLadder/IsStopping 与本文件同 key 私有并存
 // （变量名不同：g_iOffset_* vs g_iNav_*），收敛与否等拍板后再动。
@@ -104,7 +100,7 @@ bool InitNavMeasure()
     }
 
     // C 组：TheNavAreas 全局导航容器（独立就绪态 NavAreas_IsReady，不进下方测距待机门）
-    ResolveTheNavAreas();
+    NavAreas_Resolve();
 
     if (g_hSDKCall_ComputePath == null || g_iNav_Path <= 0 || g_iNav_PathStride <= 0 ||
         g_iNav_PathLength <= 0 || g_iNav_PathLadder <= 0 || g_iNav_IsStopping <= 0 ||
@@ -120,9 +116,9 @@ bool InitNavMeasure()
 }
 
 /**
- * 无损测距是否就绪
+ * 职责 A（NavMeasure）就绪态查询：无损测距与走廊路径探测是否可用（与 NavAreas_IsReady 独立）
  */
-stock bool BotNavReady()
+stock bool NavMeasure_IsReady()
 {
     return g_bNavMeasureReady;
 }
@@ -295,7 +291,7 @@ static int NavMeasure_ProbePath(int client, const float target[3], int maxAreas,
     StoreToAddress(pBot + view_as<Address>(repathOffset + g_iOffset_TimerDuration), oldRepathDuration, NumberType_Int32);
     StoreToAddress(pBot + view_as<Address>(repathOffset + g_iOffset_TimerTimestamp), oldRepathTimestamp, NumberType_Int32);
 
-    // 探针 scratch 的游标必须与本次实际采集数同步：BotNavProbeAreaAt 用它判越界，
+    // 探针 scratch 的游标必须与本次实际采集数同步：NavMeasure_ProbeAreaAt 用它判越界，
     // 不赋值会让所有读者永远拿到 Address_Null（走廊钉刺会静默空转）。
     g_iNavProbeCount = writtenAreas;
 
@@ -304,7 +300,7 @@ static int NavMeasure_ProbePath(int client, const float target[3], int maxAreas,
 }
 
 //========================================================================================
-// PUBLIC API（跨模块调用点：BotNavReady 门禁 + 测距/走廊探测 + 采集读取）
+// NAV MEASURE PUBLIC API（职责 A：NavMeasure_IsReady + 测距/走廊探测 + 采集读取）
 //========================================================================================
 
 /**
@@ -315,7 +311,7 @@ static int NavMeasure_ProbePath(int client, const float target[3], int maxAreas,
  * @param route     路由类型 (ROUTE_DEFAULT=0, ROUTE_FASTEST=1, ROUTE_SAFEST=2, ROUTE_RETREAT=3)
  * @return          行走距离 units（失败 -1.0）
  */
-stock float BotNavWalkDistance(int client, const float target[3], int route = ROUTE_DEFAULT)
+stock float NavMeasure_WalkDistance(int client, const float target[3], int route = ROUTE_DEFAULT)
 {
     float dist;
     NavMeasure_ProbePath(client, target, 0, dist, route);
@@ -328,7 +324,7 @@ stock float BotNavWalkDistance(int client, const float target[3], int route = RO
  * 用于模块 11 钉走廊 danger，避免 ComputePath 篡改 Bot 当前行进路径。
  * 默认使用 ROUTE_FASTEST：无视危险度惩罚直指对峙走廊，防止走廊已有危险度时绕道侧翼误伤其他路网。
  * 爬梯中返回 0（跳过探测）；spot 遭遇点等次级状态可能短暂受影响，下一拍自愈。
- * 结果存放在内部 scratch，调用后立即用 BotNavProbeAreaAt(index) 读取；
+ * 结果存放在内部 scratch，调用后立即用 NavMeasure_ProbeAreaAt(index) 读取；
  * 多次探测之间不保留（下一次探测会覆盖）。
  *
  * @param client    Bot 客户端索引 (必须为存活有效 Bot)
@@ -336,19 +332,19 @@ stock float BotNavWalkDistance(int client, const float target[3], int route = RO
  * @param route     路由类型 (默认 ROUTE_FASTEST 保证直击走廊，绝不绕行)
  * @return          采集到的 NavArea 数量（0 = 失败/无路径）
  */
-stock int BotNavProbePathAreas(int client, const float target[3], int route = ROUTE_FASTEST)
+stock int NavMeasure_ProbePathAreas(int client, const float target[3], int route = ROUTE_FASTEST)
 {
     float dist;
     return NavMeasure_ProbePath(client, target, NAV_MEASURE_MAX_PATH_NODES, dist, route);
 }
 
 /**
- * 读取最近一次 BotNavProbePathAreas 采集到的 NavArea 指针
+ * 读取最近一次 NavMeasure_ProbePathAreas 采集到的 NavArea 指针
  *
  * @param index     0-based 下标
  * @return          NavArea 指针；越界返回 Address_Null
  */
-stock Address BotNavProbeAreaAt(int index)
+stock Address NavMeasure_ProbeAreaAt(int index)
 {
     if (index < 0 || index >= g_iNavProbeCount)
     {
@@ -370,7 +366,7 @@ stock Address BotNavProbeAreaAt(int index)
  *
  * @return              true = 容器 Base/Count 均已验证有效
  */
-static bool ResolveTheNavAreas()
+static bool NavAreas_Resolve()
 {
     if (g_pTheNavAreasCount != Address_Null && g_pTheNavAreasBase != Address_Null)
     {
@@ -392,7 +388,7 @@ static bool ResolveTheNavAreas()
         Address sigAddr = GameConfGetAddress(g_hGameConf, "CCSBotManager_GetRandomArea");
         if (sigAddr == Address_Null)
         {
-            LogError("[BotRouteFix] [NavMeasure] Failed to locate signature for CCSBotManager_GetRandomArea!");
+            LogError("[BotRouteFix] [NavAreas] Failed to locate signature for CCSBotManager_GetRandomArea!");
             return false;
         }
 
@@ -404,7 +400,7 @@ static bool ResolveTheNavAreas()
         int areaCount = LoadFromAddress(candCount, NumberType_Int32);
         if (areaCount < 0 || areaCount > NAV_AREA_MAX_SANITY)
         {
-            LogError("[BotRouteFix] [NavMeasure] 64-bit areaCount (%d) out of reasonable range [0, %d]!",
+            LogError("[BotRouteFix] [NavAreas] 64-bit areaCount (%d) out of reasonable range [0, %d]!",
                 areaCount, NAV_AREA_MAX_SANITY);
             return false;
         }
@@ -412,7 +408,7 @@ static bool ResolveTheNavAreas()
         g_pTheNavAreasCount = candCount;
         g_pTheNavAreasBase  = candBase;
 
-        LogMessage("[BotRouteFix] [NavMeasure] Resolved 64-bit TheNavAreas (Base: @%X, Count: @%X, Areas: %d)",
+        LogMessage("[BotRouteFix] [NavAreas] Resolved 64-bit TheNavAreas (Base: @%X, Count: @%X, Areas: %d)",
             g_pTheNavAreasBase, g_pTheNavAreasCount, areaCount);
         return true;
     }
@@ -426,11 +422,11 @@ static bool ResolveTheNavAreas()
     Address huntAddr = GameConfGetAddress(g_hGameConf, "HuntState_NavArrayAnchor");
     if (huntAddr == Address_Null)
     {
-        LogError("[BotRouteFix] [NavMeasure] Failed to locate signature for HuntState_NavArrayAnchor!");
+        LogError("[BotRouteFix] [NavAreas] Failed to locate signature for HuntState_NavArrayAnchor!");
         return false;
     }
 
-    LogMessage("[BotRouteFix] [NavMeasure] Hunt anchor @ %X, scanning nav-array pairs...", huntAddr);
+    LogMessage("[BotRouteFix] [NavAreas] Hunt anchor @ %X, scanning nav-array pairs...", huntAddr);
 
     Address pairAddr = Address_Null;
     int seenPairs = 0;
@@ -457,7 +453,7 @@ static bool ResolveTheNavAreas()
             }
             if (baseDelta > NAV_AREA_PAIR_MAX_DELTA)
             {
-                LogMessage("[BotRouteFix] [NavMeasure] Candidate pair @ %X skipped (base %X too far from anchor)",
+                LogMessage("[BotRouteFix] [NavAreas] Candidate pair @ %X skipped (base %X too far from anchor)",
                     candAddr, candBase);
                 continue;
             }
@@ -465,7 +461,7 @@ static bool ResolveTheNavAreas()
             int candCount = LoadFromAddress(view_as<Address>(candBase + 12), NumberType_Int32);
             if (candCount < 0 || candCount > NAV_AREA_MAX_SANITY)
             {
-                LogMessage("[BotRouteFix] [NavMeasure] Candidate pair @ %X skipped (count %d insane)",
+                LogMessage("[BotRouteFix] [NavAreas] Candidate pair @ %X skipped (count %d insane)",
                     candAddr, candCount);
                 continue;
             }
@@ -479,11 +475,11 @@ static bool ResolveTheNavAreas()
     {
         if (seenPairs == 0)
         {
-            LogError("[BotRouteFix] [NavMeasure] Nav-array pair pattern not found in HuntState::OnUpdate!");
+            LogError("[BotRouteFix] [NavAreas] Nav-array pair pattern not found in HuntState::OnUpdate!");
         }
         else
         {
-            LogError("[BotRouteFix] [NavMeasure] %d nav-array pair(s) seen from anchor @ %X but none validated!",
+            LogError("[BotRouteFix] [NavAreas] %d nav-array pair(s) seen from anchor @ %X but none validated!",
                 seenPairs, huntAddr);
         }
         return false;
@@ -496,14 +492,14 @@ static bool ResolveTheNavAreas()
     int areaCount = LoadFromAddress(candCount, NumberType_Int32);
     if (areaCount < 0 || areaCount > NAV_AREA_MAX_SANITY)
     {
-        LogError("[BotRouteFix] [NavMeasure] Nav-area count is unreasonable (%d)!", areaCount);
+        LogError("[BotRouteFix] [NavAreas] Nav-area count is unreasonable (%d)!", areaCount);
         return false;
     }
 
     g_pTheNavAreasBase  = candBase;
     g_pTheNavAreasCount = candCount;
 
-    LogMessage("[BotRouteFix] [NavMeasure] Resolved 32-bit TheNavAreas (Base: @%X, Count: @%X, Areas: %d)",
+    LogMessage("[BotRouteFix] [NavAreas] Resolved 32-bit TheNavAreas (Base: @%X, Count: @%X, Areas: %d)",
         g_pTheNavAreasBase, g_pTheNavAreasCount, areaCount);
     return true;
 }
@@ -549,11 +545,11 @@ bool NavAreas_OnMapStart()
 {
     g_pTheNavAreasCount = Address_Null;
     g_pTheNavAreasBase  = Address_Null;
-    return ResolveTheNavAreas();
+    return NavAreas_Resolve();
 }
 
 /**
- * 查询 TheNavAreas 全局容器地址是否已解析就绪（与测距 BotNavReady 独立）
+ * 职责 C（NavAreas）就绪态查询：TheNavAreas 全局容器地址是否已解析就绪（与 NavMeasure_IsReady 独立）
  */
 stock bool NavAreas_IsReady()
 {

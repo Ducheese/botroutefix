@@ -381,7 +381,7 @@ stock bool BotIdle(int bot)
 //
 // 裸调 CCSBot::ComputePath 会先 DestroyPath() 再重写 m_path（cs_bot_pathfind.cpp:1877-1997），
 // 且绕过 repath 节流与状态快照，调用即持久篡改 Bot 当前行进路径（M11 旧版踩过此坑）。
-// 需要走廊/距离一律走 nav_measure.inc 的 BotNavWalkDistance / BotNavProbePathAreas
+// 需要走廊/距离一律走 nav_measure.inc 的 NavMeasure_WalkDistance / NavMeasure_ProbePathAreas
 // （内部快照-计算-还原），不要恢复此封装。
 //--------------------------------------------------------------------------------------------------------------
 

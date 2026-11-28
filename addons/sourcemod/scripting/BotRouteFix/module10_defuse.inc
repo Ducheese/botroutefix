@@ -26,7 +26,7 @@
 //      （Hide 包点 750 码物理半径内真掩体 + OPPORTUNITY_FIRE），并回落 M5 软豁免。
 // 3. 名册自愈与空名册放行（全事件驱动，无 timer）：
 //    - bomb_planted：planted_c4 在事件触发前已生成落位（weapon_c4.cpp:1070-1114），同步以 C4 坐标
-//      无损实测（BotNavWalkDistance, ROUTE_FASTEST）取评分最低的前 3 名存活可达 CT；
+//      无损实测（NavMeasure_WalkDistance, ROUTE_FASTEST）取评分最低的前 3 名存活可达 CT；
 //      选举失败 / 无候选 / 测距未就绪 → 空名册 = 全员放行回原生；
 //    - player_death / client_disconnect：名册减员立即按缓存包坐标就近递补下一顺位；
 //      刚递补进名册的原 GUARD_BOMB_ZONE 队友会在下一帧由 HideState:147 原生唤醒切入 Idle()->DEFUSE_BOMB
@@ -91,7 +91,7 @@ static bool PrepModule10_DefuseBackend()
         return false;
     }
 
-    if (!BotNavReady())
+    if (!NavMeasure_IsReady())
     {
         LogError("[BotRouteFix] [Module 10] NavMeasure unavailable; defuse item FAILED (no empty-roster fail-open).");
         delete g_hScenarioDetour;
@@ -434,7 +434,7 @@ static bool Defuse_TryScoreCandidate(int client, float &score)
     }
 
     // 真实地面行走距离选人（ROUTE_FASTEST 纯拼最快直达路线；持钳加分，避免到不了的人靠钳当选）
-    float walk = BotNavWalkDistance(client, g_fBombPos, ROUTE_FASTEST);
+    float walk = NavMeasure_WalkDistance(client, g_fBombPos, ROUTE_FASTEST);
     if (walk < 0.0)
     {
         return false;
@@ -463,7 +463,7 @@ static void Defuse_ElectRoster()
         return;
     }
 
-    if (!BotNavReady())
+    if (!NavMeasure_IsReady())
     {
         Defuse_ClearRoster();
         DebugLog("[BotRouteFix] [Module 10] NavMeasure standby, no-op to native");
@@ -537,7 +537,7 @@ static void Defuse_RemoveAndBackfill(int client, const char[] reason)
         }
     }
 
-    if (BotNavReady())
+    if (NavMeasure_IsReady())
     {
         int best = -1;
         bool hasBest = false;

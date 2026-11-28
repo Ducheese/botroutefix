@@ -87,7 +87,7 @@ static bool PrepModule9_FetchBackend()
     }
     // NoticeLooseBomb(void)：无参数，this 即 bot 本体
 
-    if (!BotNavReady())
+    if (!NavMeasure_IsReady())
     {
         LogError("[BotRouteFix] [Module 9] NavMeasure unavailable; M9 fetch roster item FAILED.");
         delete g_hLooseDetour;
@@ -569,7 +569,7 @@ static void Fetch_ElectRoster()
     g_fDropPos = dropPos;
 
     // 测距未就绪：无名单，全员放行回原生（不拿欧氏混分）
-    if (!BotNavReady())
+    if (!NavMeasure_IsReady())
     {
         Fetch_ClearRoster();
         DebugLog("[BotRouteFix] [Module 9] NavMeasure standby, no-op to native");
@@ -590,7 +590,7 @@ static void Fetch_ElectRoster()
         }
 
         // ROUTE_FASTEST 实测地面直达距离，避开掉包交火处刚钉刺的危险度扭曲排序；不可达跳过
-        float dist = BotNavWalkDistance(i, dropPos, ROUTE_FASTEST);
+        float dist = NavMeasure_WalkDistance(i, dropPos, ROUTE_FASTEST);
         if (dist < 0.0)
         {
             continue;
@@ -670,7 +670,7 @@ static void Fetch_RemoveAndBackfill(int client, const char[] reason)
             continue;
         }
 
-        float dist = BotNavWalkDistance(i, dropPos, ROUTE_FASTEST);
+        float dist = NavMeasure_WalkDistance(i, dropPos, ROUTE_FASTEST);
         if (dist < 0.0)
         {
             continue;
